@@ -327,7 +327,7 @@ diff -y <(binfiddle -i v1.bin read 0..) <(binfiddle -i v2.bin read 0..)
 
 ---
 
-💡 **Pro Tip**: Combine with `radare2` for full analysis workflow:
+💡 **Pro Tip**: Combine with [radare2](https://www.radare.org) for full analysis workflow:
 ```bash
 binfiddle -i binary read $(rabin2 -S binary | grep .text | awk '{print $2,$3}') -o text.bin
 ```
