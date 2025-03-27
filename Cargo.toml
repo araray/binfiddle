@@ -1,0 +1,17 @@
+[package]
+name = "binfiddle"
+version = "0.1.0"
+edition = "2021"
+authors = ["Araray Velho <araray@gmail.com"]
+description = "A powerful binary file manipulation tool"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/araray/binfiddle"
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+anyhow = "1.0"
+thiserror = "1.0"
+hex = "0.4"
+byteorder = "1.4"
+memmap2 = "0.5" # For memory-mapped file support
+regex = "1.7"   # For pattern matching
