@@ -7,6 +7,7 @@ use std::io::Read;
 pub use commands::{Command, EditCommand, EditOperation, ReadCommand, WriteCommand};
 pub use error::{BinfiddleError, Result};
 pub use utils::{display, parsing};
+pub use utils::{display_bytes, parse_bit_input, parse_input, parse_range};
 
 /// Represents the input source for binary data
 pub enum BinarySource {
@@ -80,7 +81,15 @@ impl BinaryData {
             )));
         }
 
-        Chunk::new(self.data[start..end].to_vec(), self.chunk_size)
+        // Calculate how many full chunks we can get from this range
+        let bit_length = (end - start) * 8;
+        let effective_chunk_size = if self.chunk_size > bit_length {
+            bit_length // Return all available bits if chunk size is larger than available data
+        } else {
+            self.chunk_size
+        };
+
+        Chunk::new(self.data[start..end].to_vec(), effective_chunk_size)
     }
 
     pub fn write_range(&mut self, start: usize, data: &[u8]) -> Result<()> {
