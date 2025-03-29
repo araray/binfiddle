@@ -1,8 +1,9 @@
-# 📜 Binfiddle - The Ultimate Binary Manipulation Toolkit
+# 📜 **Binfiddle** — Binary Utilities for Developers and Hackers
 
-*Version 0.1 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.2 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
 ## 🔍 Table of Contents
+
 1. [Overview](#-overview)
 2. [Core Features](#-core-features)
 3. [Installation](#-installation)
@@ -22,9 +23,9 @@ Binfiddle is a low-level binary manipulation tool designed for:
 - Data recovery specialists
 - Security researchers
 
+It is a practical, modular toolkit for developers, hackers, and engineers working with binary data. Whether you're inspecting, patching, decoding, or just fiddling with bits and bytes, Binfiddle provides flexible tools to explore and manipulate binary files with precision. Designed to be both approachable and powerful, it’s the tinkerer’s toolbox for low-level data work — no frills, just what you need to get under the hood and get things done.
+
 Built in Rust, it combines the precision of hex editors with the flexibility of command-line tools.
-
-
 
 > Personal note: This is a reimplementation of a very old, with poor command line, version in C (and - believe it or not - plain Bash) I created for my own needs. I have been trying to renovate my personal tooling and making them publicly available. Nowadays we have LLMs that help a lot on crafting nice documentation and assisting on converting my tools. For this reason, I greatly appreciate any feedback, bug reports, issues, feature requests and fixes and improvements.
 >
