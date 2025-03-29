@@ -1,8 +1,10 @@
 # Feature Proposal: `search` Subcommand for Pattern Matching in Binary Data
 
 **Author:** Araray Velho
- **Date:** 2025-03-28
- **Status:** Draft / Proposal (Open for review)
+
+**Date:** 2025-03-28
+
+**Status:** Draft / Proposal (Open for review)
 
 ---
 
