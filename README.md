@@ -1,6 +1,6 @@
-# 📜 **Binfiddle** — Binary Utilities for Developers and Hackers
+# 📜 **Binfiddle** — Binary utilities for developers and hackers
 
-*Version 0.2 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.3 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
 ## 🔍 Table of Contents
 
@@ -222,7 +222,7 @@ binfiddle -i file.bin --chunk-size 1 write 0x10:3 1
 
 # Flip nibbles
 binfiddle -i firmware.hex edit replace 0x100..0x101 $(
-    binfiddle -i firmware.hex read 0x100..0x101 --format hex | 
+    binfiddle -i firmware.hex read 0x100..0x101 --format hex |
     rev
 )
 ```
@@ -250,10 +250,10 @@ binfiddle -i mem:$(pidof target) read 0x400000..0x401000 -o dump.bin
 pub enum BinfiddleError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("Range error: {0}")]
     Range(String),
-    
+
     #[error("Parse error at {position}: {details}")]
     Parse {
         position: usize,

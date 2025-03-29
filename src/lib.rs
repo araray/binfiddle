@@ -45,10 +45,11 @@ impl Chunk {
 pub struct BinaryData {
     data: Vec<u8>,
     chunk_size: usize, // in bits
+    width: usize,      // chunks per line
 }
 
 impl BinaryData {
-    pub fn new(source: BinarySource, chunk_size: usize) -> Result<Self> {
+    pub fn new(source: BinarySource, chunk_size: usize, width: usize) -> Result<Self> {
         let data = match source {
             BinarySource::File(path) => std::fs::read(path)?,
             BinarySource::Stdin => {
@@ -69,7 +70,15 @@ impl BinaryData {
             return Err(BinfiddleError::InvalidChunkSize(chunk_size));
         }
 
-        Ok(Self { data, chunk_size })
+        Ok(Self {
+            data,
+            chunk_size,
+            width,
+        })
+    }
+
+    pub fn get_width(&self) -> usize {
+        self.width
     }
 
     pub fn read_range(&self, start: usize, end: Option<usize>) -> Result<Chunk> {

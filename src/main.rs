@@ -36,6 +36,10 @@ struct Cli {
     /// Chunk size in bits (default: 8)
     #[arg(short, long, default_value = "8")]
     chunk_size: usize,
+
+    /// Number of chunks per line (default: 16)
+    #[arg(long, default_value = "16")]
+    width: usize,
 }
 
 #[derive(Subcommand)]
@@ -81,9 +85,10 @@ fn main() -> Result<()> {
         Some("-") | None => {
             let mut data = Vec::new();
             io::stdin().read_to_end(&mut data)?;
-            BinaryData::new(BinarySource::RawData(data), cli.chunk_size)? // Wrapped in BinarySource
+            BinaryData::new(BinarySource::RawData(data), cli.chunk_size, cli.width)?
+            // Wrapped in BinarySource
         }
-        Some(path) => BinaryData::new(BinarySource::File(path.into()), cli.chunk_size)?,
+        Some(path) => BinaryData::new(BinarySource::File(path.into()), cli.chunk_size, cli.width)?,
     };
 
     // Execute command
@@ -95,6 +100,7 @@ fn main() -> Result<()> {
                 chunk.get_bytes(),
                 &cli.format,
                 binary_data.get_chunk_size(),
+                cli.width,
             )?;
             println!("{}", output);
             false

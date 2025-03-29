@@ -19,8 +19,12 @@ impl Command for ReadCommand {
         let end = end.unwrap_or(data.len());
 
         let chunk = data.read_range(start, Some(end))?;
-        let output =
-            display::display_bytes(chunk.get_bytes(), &self.format, data.get_chunk_size())?;
+        let output = display::display_bytes(
+            chunk.get_bytes(),
+            &self.format,
+            data.get_chunk_size(),
+            data.get_width(),
+        )?;
 
         println!("{}", output);
         Ok(())
