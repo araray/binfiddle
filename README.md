@@ -43,6 +43,7 @@ Built in Rust, it combines the precision of hex editors with the flexibility of 
 - Mixed-endian support
 
 ### Smart I/O System
+
 - Multiple input sources:
   ```rust
   pub enum BinarySource {
@@ -54,10 +55,12 @@ Built in Rust, it combines the precision of hex editors with the flexibility of 
   ```
 - Adaptive memory handling (mmap for large files)
 
-### Safety Features
-- Atomic writes
-- Automatic backups (`--backup` option)
-- Change confirmation prompts
+### Configurable output formatting:
+
+- Multiple numeric bases (hex/dec/oct/bin)
+- ASCII display mode
+- Adjustable line width
+- Bit-level precision
 
 ## 🛠️ Installation
 
@@ -185,6 +188,32 @@ impl BinaryData {
    - CRC32 verification
    - Temp file rotation (safe saves)
    - Permission preservation
+
+---
+
+## Output Formatting Options
+
+Control output display with these additional flags:
+
+- `--width <N>`: Set number of chunks per line (default: 16, 0 for no wrapping)
+- `--format <fmt>`: Output format (hex|dec|oct|bin|ascii, default: hex)
+
+Examples:
+```bash
+# Default hex output (16 bytes per line)
+binfiddle -i file.bin read 0..64
+
+# Decimal output, 8 values per line
+binfiddle -i file.bin read 0..64 --format dec --width 8
+
+# Binary output, no line wrapping
+binfiddle -i file.bin read 0..64 --format bin --width 0
+
+# ASCII output, 32 characters per line
+binfiddle -i file.bin read 0..64 --format ascii --width 32
+```
+
+---
 
 ## 💾 File Handling
 
