@@ -1,5 +1,7 @@
 # 📜 **Binfiddle** — Binary utilities for developers and hackers
 
+
+
 *Version 0.3 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
 ## 🔍 Table of Contents
