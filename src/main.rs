@@ -1,4 +1,5 @@
-use binfiddle::{BinaryData, BinarySource, Result};
+use binfiddle::utils::parsing::parse_search_pattern;
+use binfiddle::{BinaryData, BinarySource, Result, SearchConfig};
 use clap::{Parser, Subcommand};
 use std::io::{self, Read, Write};
 
@@ -74,6 +75,32 @@ enum Commands {
             required_if_eq("operation", "replace")
         )]
         data: Option<String>,
+    },
+
+    /// Search for patterns in binary data
+    Search {
+        /// Pattern to search for (interpreted per --input-format)
+        pattern: String,
+
+        /// Find all matches (default: first match only)
+        #[arg(long)]
+        all: bool,
+
+        /// Only output the count of matches
+        #[arg(long)]
+        count: bool,
+
+        /// Only output match offsets (hex)
+        #[arg(long)]
+        offsets_only: bool,
+
+        /// Show N bytes of context before and after each match
+        #[arg(long, default_value = "0")]
+        context: usize,
+
+        /// Prevent overlapping matches
+        #[arg(long)]
+        no_overlap: bool,
     },
 }
 
@@ -171,6 +198,51 @@ fn main() -> Result<()> {
                 }
             }
             true
+        }
+        Commands::Search {
+            pattern,
+            all,
+            count,
+            offsets_only,
+            context,
+            no_overlap,
+        } => {
+            // Parse the search pattern based on input format
+            let search_pattern = parse_search_pattern(pattern, &cli.input_format)?;
+
+            // Build search configuration
+            let config = SearchConfig {
+                pattern: search_pattern,
+                format: cli.format.clone(),
+                chunk_size: cli.chunk_size,
+                find_all: *all,
+                count_only: *count,
+                offsets_only: *offsets_only,
+                context: *context,
+                no_overlap: *no_overlap,
+            };
+
+            // Create and execute search command
+            let search_cmd = binfiddle::SearchCommand::new(config);
+
+            // Read all data for searching
+            let chunk = binary_data.read_range(0, None)?;
+            let bytes = chunk.get_bytes();
+
+            // Perform search
+            let matches = search_cmd.search(bytes)?;
+
+            // Report results
+            if matches.is_empty() {
+                if !cli.silent {
+                    eprintln!("No matches found");
+                }
+            } else {
+                let output = search_cmd.format_results(bytes, &matches)?;
+                println!("{}", output);
+            }
+
+            false // Search doesn't modify data
         }
     };
 

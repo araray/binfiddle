@@ -4,8 +4,11 @@ pub mod utils;
 
 use std::io::Read;
 
-pub use commands::{Command, EditCommand, EditOperation, ReadCommand, WriteCommand};
+pub use commands::{
+    Command, EditCommand, EditOperation, ReadCommand, SearchCommand, SearchConfig, WriteCommand,
+};
 pub use error::{BinfiddleError, Result};
+pub use utils::parsing::SearchPattern;
 pub use utils::{display, parsing};
 pub use utils::{display_bytes, parse_bit_input, parse_input, parse_range};
 
