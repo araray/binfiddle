@@ -1,3 +1,4 @@
+# src/commands/write.rs
 use super::Command;
 use crate::{error::Result, BinaryData};
 
