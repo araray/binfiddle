@@ -1,365 +1,389 @@
-# 📜 **Binfiddle** — Binary utilities for developers and hackers
+# Binfiddle
 
+**Binary utilities for developers and hackers**
 
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.3 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.4 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
-## 🔍 Table of Contents
+Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, and custom exploration of binary data across a variety of formats.
 
-1. [Overview](#-overview)
-2. [Core Features](#-core-features)
-3. [Installation](#-installation)
-4. [Command Reference](#-command-reference)
-5. [Internal Architecture](#-internal-architecture)
-6. [File Handling](#-file-handling)
-7. [Advanced Usage](#-advanced-usage)
-8. [Error Handling](#-error-handling)
-9. [Development Guide](#-development-guide)
-10. [Examples](#-examples)
+Whether you're reverse-engineering firmware, debugging binary protocols, or building custom workflows for binary files, Binfiddle provides essential tools without the bloat.
 
 ## 🌐 Overview
 
-Binfiddle is a low-level binary manipulation tool designed for:
-- Reverse engineers
-- Firmware developers
-- Data recovery specialists
-- Security researchers
+- [Features](#features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Command Reference](#command-reference)
+- [Examples](#examples)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [License](#license)
 
-It is a practical, modular toolkit for developers, hackers, and engineers working with binary data. Whether you're inspecting, patching, decoding, or just fiddling with bits and bytes, Binfiddle provides flexible tools to explore and manipulate binary files with precision. Designed to be both approachable and powerful, it’s the tinkerer’s toolbox for low-level data work — no frills, just what you need to get under the hood and get things done.
+## Features
 
-Built in Rust, it combines the precision of hex editors with the flexibility of command-line tools.
+### Core Capabilities
 
-> Personal note: This is a reimplementation of a very old, with poor command line, version in C (and - believe it or not - plain Bash) I created for my own needs. I have been trying to renovate my personal tooling and making them publicly available. Nowadays we have LLMs that help a lot on crafting nice documentation and assisting on converting my tools. For this reason, I greatly appreciate any feedback, bug reports, issues, feature requests and fixes and improvements.
->
-> I'm also taking the opportunity to learn Rust as this is my very first Rust project.
->
-> Any help is welcome and, in general, it is just a PR away ;-p
+> Personal note: This is a reimplementation of a very old, with poor command line, version in C (and - believe it or not - plain Bash) I created for my own needs. I have been trying to renovate my personal tooling and making them publicly available. Nowadays we have LLMs that help a lot on crafting nice documentation and assisting on converting my tools. For this reason, I greatly appreciate any feedback, bug reports, issues, feature requests, fixes and improvements.
 
+| Feature | Description |
+|---------|-------------|
+| **Read** | Extract and display byte ranges in multiple formats |
+| **Write** | Overwrite bytes at specified positions |
+| **Edit** | Insert, remove, or replace byte sequences |
+| **Search** | Find patterns using exact match, regex, or wildcards |
 
+### Key Differentiators
 
-## ⚡ Core Features
+| Feature | Binfiddle | Traditional Tools |
+|---------|-----------|-------------------|
+| **Pipeline Integration** | First-class stdin/stdout support | Often interactive-only |
+| **Unified Operations** | Read/Write/Edit/Search in single tool | Separate tools per operation |
+| **Configurable Chunking** | 1-64 bit granularity | Fixed 8-bit (byte) chunks |
+| **Multi-Format I/O** | hex/dec/oct/bin/ascii | Usually hex-only |
+| **Script Friendly** | Deterministic, non-interactive | Often requires user interaction |
 
-### Bit-Level Precision
-- Edit individual bits or byte ranges
-- Custom chunk sizes (1-64 bits)
-- Mixed-endian support
+### Design Principles
 
-### Smart I/O System
+- **Unix Philosophy**: Composable, pipeline-friendly, text streams as interface
+- **Safety by Default**: No silent data loss, explicit modification flags required
+- **Determinism**: Identical inputs produce byte-identical outputs
+- **Memory Safety**: Built in Rust with no buffer overflows or data races
 
-- Multiple input sources:
-  ```rust
-  pub enum BinarySource {
-      File(PathBuf),
-      Stdin,
-      MemoryAddress(usize), // Platform-specific
-      RawData(Vec<u8>),
-  }
-  ```
-- Adaptive memory handling (mmap for large files)
+## Installation
 
-### Configurable output formatting:
+### From Source (Recommended)
 
-- Multiple numeric bases (hex/dec/oct/bin)
-- ASCII display mode
-- Adjustable line width
-- Bit-level precision
-
-## 🛠️ Installation
-
-### From Source
 ```bash
-# Install Rust toolchain
+# Install Rust toolchain (if not already installed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Clone this git repo
+# Clone and build
 git clone https://github.com/araray/binfiddle.git
 cd binfiddle
-
-# Build with optimizations
 cargo build --release
+
+# Binary is at target/release/binfiddle
+sudo cp target/release/binfiddle /usr/local/bin/
 ```
 
-### Cross-Compilation
+### From Releases
+
+Download pre-built binaries from the [Releases](https://github.com/araray/binfiddle/releases) page.
+
+Available targets:
+- `x86_64-unknown-linux-gnu` (Linux x64)
+- `x86_64-unknown-linux-musl` (Linux x64, static)
+- `x86_64-pc-windows-gnu` (Windows x64)
+- `x86_64-apple-darwin` (macOS Intel)
+- `aarch64-apple-darwin` (macOS Apple Silicon)
+
+### Build for Other Platforms
+
 ```bash
-# Windows target
+# Use the build script
+./build_releases.sh --native    # Current platform only
+./build_releases.sh --help      # See all options
+
+# Or manually with cargo
 rustup target add x86_64-pc-windows-gnu
 cargo build --release --target x86_64-pc-windows-gnu
-
-# ARM Linux
-rustup target add aarch64-unknown-linux-gnu
-cargo build --release --target aarch64-unknown-linux-gnu
 ```
 
-## 📖 Command Reference
+## Quick Start
 
-### Global Options
-| Option         | Description                           |
-| -------------- | ------------------------------------- |
-| `-i, --input`  | Input source (file/stdin)             |
-| `--in-file`    | Enable in-place modification          |
-| `-o, --output` | Output destination                    |
-| `-f, --format` | Output format (hex/dec/oct/bin/ascii) |
-| `--chunk-size` | Bits per chunk (default: 8)           |
-| `--silent`     | Suppress diff output                  |
-
-### Core Commands
-
-#### Read Operation
-```rust
-struct ReadCommand {
-    range: String,  // Format: "start..end" or "index"
-}
-```
-Usage:
 ```bash
-# Read header (hex)
+# Read first 16 bytes as hex
 binfiddle -i file.bin read 0..16
 
-# Inspect as ASCII
-binfiddle -i file.bin read 0x100..0x120 --format ascii
+# Read entire file as ASCII
+binfiddle -i file.bin read .. --format ascii
+
+# Write bytes at offset 0x100
+binfiddle -i file.bin write 0x100 DEADBEEF -o modified.bin
+
+# Search for a pattern
+binfiddle -i file.bin search "7F 45 4C 46" --all
+
+# Insert bytes at position
+binfiddle -i file.bin edit insert 0x200 CAFEBABE -o modified.bin
+
+# Pipeline usage
+cat data.bin | binfiddle read 0..32 | grep "7f 45"
 ```
 
-#### Write Operation
-```rust
-struct WriteCommand {
-    position: usize,
-    value: String,  // Format-aware
-}
-```
-Usage:
+## Command Reference
+
+### Global Options
+
+| Option | Short | Description | Default |
+|--------|-------|-------------|---------|
+| `--input <FILE>` | `-i` | Input file (use `-` for stdin) | stdin |
+| `--output <FILE>` | `-o` | Output file (use `-` for stdout) | — |
+| `--in-file` | — | Modify input file in-place | false |
+| `--format <FMT>` | `-f` | Output format: hex, dec, oct, bin, ascii | hex |
+| `--input-format <FMT>` | — | Input value format | hex |
+| `--chunk-size <BITS>` | `-c` | Bits per display chunk (1-64) | 8 |
+| `--width <N>` | — | Chunks per output line (0=no wrap) | 16 |
+| `--silent` | — | Suppress change diff output | false |
+
+### Commands
+
+#### `read <RANGE>` — Read bytes from binary data
+
 ```bash
-# Patch single byte
-binfiddle -i firmware.bin write 0x1FE 90
-
-# Bulk write from file
-binfiddle -i base.bin write 0x1000 $(cat patch.bin | hexdump -v -e '/1 "%02X"')
+binfiddle -i file.bin read 0..64              # Bytes 0-63
+binfiddle -i file.bin read 0x100..0x200       # Hex offsets
+binfiddle -i file.bin read 10..               # Byte 10 to end
+binfiddle -i file.bin read ..100              # First 100 bytes
+binfiddle -i file.bin read ..                 # Entire file
+binfiddle -i file.bin read 42                 # Single byte at index 42
 ```
 
-#### Edit Operation
-```rust
-enum EditOperation {
-    Insert { position: usize, data: Vec<u8> },
-    Remove { start: usize, end: usize },
-    Replace { start: usize, end: usize, data: Vec<u8> },
-}
-```
-Usage:
+#### `write <POSITION> <VALUE>` — Write bytes to binary data
+
 ```bash
-# Insert new section
-binfiddle -i rom.bin edit insert 0x8000 A1B2C3D4
-
-# Remove corrupted data
-binfiddle -i damaged.zip edit remove 0x500..0x600
-
-# Replace checksum
-binfiddle -i app.exe edit replace 0xFC..0x100 $(calc_checksum)
+binfiddle -i file.bin write 0x100 DEADBEEF -o out.bin
+binfiddle -i file.bin write 0 "127 69 76 70" --input-format dec -o out.bin
+binfiddle -i file.bin --in-file write 16 FF   # In-place modification
 ```
 
-## 🏗️ Internal Architecture
+#### `edit <OPERATION> <RANGE> [DATA]` — Structural modifications
 
-### Core Data Structure
-```rust
-pub struct BinaryData {
-    data: Vec<u8>,           // Underlying storage
-    chunk_size: usize,       // Current bit granularity
-    modified: bool,          // Dirty flag
-    source: BinarySource,    // Origin tracking
-}
-
-impl BinaryData {
-    // Critical methods
-    pub fn read_range(&self, start: usize, end: Option<usize>) -> Result<Chunk>;
-    pub fn write_range(&mut self, pos: usize, data: &[u8]) -> Result<()>;
-    pub fn insert_data(&mut self, pos: usize, data: &[u8]) -> Result<()>;
-    pub fn remove_range(&mut self, start: usize, end: usize) -> Result<()>;
-}
-```
-
-### Processing Pipeline
-1. **Input Phase**:
-   - File memory mapping (files > 1MB)
-   - Stream buffering (stdin)
-   - Address space validation (memory mode)
-
-2. **Operation Phase**:
-   - Range validation
-   - Endianness conversion
-   - Atomic operation grouping
-
-3. **Output Phase**:
-   - CRC32 verification
-   - Temp file rotation (safe saves)
-   - Permission preservation
-
----
-
-## Output Formatting Options
-
-Control output display with these additional flags:
-
-- `--width <N>`: Set number of chunks per line (default: 16, 0 for no wrapping)
-- `--format <fmt>`: Output format (hex|dec|oct|bin|ascii, default: hex)
-
-Examples:
+**Insert** — Add bytes at position (data shifts right):
 ```bash
-# Default hex output (16 bytes per line)
-binfiddle -i file.bin read 0..64
-
-# Decimal output, 8 values per line
-binfiddle -i file.bin read 0..64 --format dec --width 8
-
-# Binary output, no line wrapping
-binfiddle -i file.bin read 0..64 --format bin --width 0
-
-# ASCII output, 32 characters per line
-binfiddle -i file.bin read 0..64 --format ascii --width 32
+binfiddle -i file.bin edit insert 0x100 DEADBEEF -o out.bin
 ```
 
----
-
-## 💾 File Handling
-
-### Modes of Operation
-| Mode          | Command     | Safety Level |
-| ------------- | ----------- | ------------ |
-| Read-only     | `read`      | Safe         |
-| Copy-on-write | `write -o`  | Safe         |
-| In-place      | `--in-file` | Dangerous    |
-| Stream        | Pipeline    | Medium       |
-
-### Example Workflows
-
-**Safe Modification:**
+**Remove** — Delete byte range (data shifts left):
 ```bash
-binfiddle -i original.bin edit replace 0..4 7F454C46 -o modified.bin
+binfiddle -i file.bin edit remove 0x500..0x600 -o out.bin
 ```
 
-**In-Place Editing:**
+**Replace** — Remove range and insert new data:
 ```bash
-binfiddle --in-file -i config.dat write 0x10 FF
+binfiddle -i file.bin edit replace 0..4 7F454C46 -o out.bin
 ```
 
-**Recovery Operation:**
+#### `search <PATTERN>` — Find patterns in binary data
+
 ```bash
-dd if=/dev/sdb | binfiddle edit remove 0xBAD..0xBAD+100 -o recovered.img
+# Exact hex pattern
+binfiddle -i file.bin search "DE AD BE EF" --all
+
+# ASCII string
+binfiddle -i file.bin search "PASSWORD" --input-format ascii --all
+
+# Regex pattern
+binfiddle -i file.bin search "[A-Z]{4}" --input-format regex --all
+
+# Wildcard mask (? = any byte)
+binfiddle -i file.bin search "DE ?? BE EF" --input-format mask --all
+
+# Count matches only
+binfiddle -i file.bin search "00 00" --all --count
+
+# Show context around matches
+binfiddle -i file.bin search "CAFE" --all --context 8
+
+# Prevent overlapping matches
+binfiddle -i file.bin search "AA AA" --all --no-overlap
 ```
 
-## 🧠 Advanced Usage
+### Range Syntax
 
-### Bit Manipulation
+| Syntax | Meaning |
+|--------|---------|
+| `10` | Single byte at index 10 |
+| `10..20` | Bytes 10-19 (10 bytes) |
+| `10..` | Byte 10 to end of file |
+| `..20` | Bytes 0-19 |
+| `..` | Entire file |
+| `0x100` | Hex index (256) |
+| `0x100..0x200` | Hex range |
+
+### Output Formats
+
+| Format | Example Output |
+|--------|----------------|
+| `hex` | `de ad be ef` |
+| `dec` | `222 173 190 239` |
+| `oct` | `336 255 276 357` |
+| `bin` | `11011110 10101101 10111110 11101111` |
+| `ascii` | `....` (non-printable shown as `.`) |
+
+## Examples
+
+### Firmware Analysis
+
 ```bash
-# Set bit 3 of byte 0x10
-binfiddle -i file.bin --chunk-size 1 write 0x10:3 1
+# Check ELF magic bytes
+binfiddle -i firmware.bin read 0..4
+# Output: 7f 45 4c 46
 
-# Flip nibbles
-binfiddle -i firmware.hex edit replace 0x100..0x101 $(
-    binfiddle -i firmware.hex read 0x100..0x101 --format hex |
-    rev
-)
+# Extract section as ASCII
+binfiddle -i firmware.bin read 0x1000..0x1100 --format ascii
+
+# Patch version string
+binfiddle -i firmware.bin edit replace 0x200..0x210 "v2.0.0" \
+    --input-format ascii -o patched.bin
 ```
 
-### Scripting Integration
+### Binary Diffing
+
 ```bash
-# Automated patching
-for offset in $(find_offsets "magic_value"); do
-    binfiddle -i target.bin write $offset 00 -o temp.bin
+# Compare two files byte-by-byte
+diff <(binfiddle -i v1.bin read ..) <(binfiddle -i v2.bin read ..)
+
+# Find specific patterns in both
+for f in v1.bin v2.bin; do
+    echo "=== $f ==="
+    binfiddle -i "$f" search "DEADBEEF" --all --offsets-only
+done
+```
+
+### Data Recovery
+
+```bash
+# Search for JPEG headers
+binfiddle -i disk.img search "FF D8 FF" --all --offsets-only
+
+# Extract data at found offset
+binfiddle -i disk.img read 0x15000..0x20000 -o recovered.jpg
+```
+
+### Pipeline Integration
+
+```bash
+# Read from stdin
+cat data.bin | binfiddle read 0..16
+
+# Chain with other tools
+binfiddle -i binary read 0..100 | xxd -r -p > raw.bin
+
+# Use in scripts
+MAGIC=$(binfiddle -i file.bin read 0..4)
+if [ "$MAGIC" = "7f 45 4c 46" ]; then
+    echo "ELF file detected"
+fi
+```
+
+### Scripted Patching
+
+```bash
+#!/bin/bash
+# Patch multiple offsets
+OFFSETS=(0x100 0x200 0x300)
+for offset in "${OFFSETS[@]}"; do
+    binfiddle -i target.bin write "$offset" 90 -o temp.bin
     mv temp.bin target.bin
 done
 ```
 
-### Memory Analysis
-```bash
-# Live process inspection (Linux)
-binfiddle -i mem:$(pidof target) read 0x400000..0x401000 -o dump.bin
+## Architecture
+
+### Module Structure
+
+```
+src/
+├── main.rs          # CLI entry point and argument parsing
+├── lib.rs           # Library exports
+├── error.rs         # Error types (BinfiddleError)
+├── commands/
+│   ├── mod.rs       # Command trait and exports
+│   ├── read.rs      # Read command
+│   ├── write.rs     # Write command
+│   ├── edit.rs      # Edit command (insert/remove/replace)
+│   └── search.rs    # Search command
+└── utils/
+    ├── mod.rs       # Utility exports
+    ├── parsing.rs   # Range and format parsing
+    └── display.rs   # Output formatting
 ```
 
-## 🚨 Error Handling
+### Core Data Model
 
-### Error Types
 ```rust
-#[derive(Error, Debug)]
-pub enum BinfiddleError {
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+pub struct BinaryData {
+    data: Vec<u8>,       // Underlying byte storage
+    chunk_size: usize,   // Display chunk size in bits (1-64)
+    width: usize,        // Chunks per output line
+}
 
-    #[error("Range error: {0}")]
-    Range(String),
-
-    #[error("Parse error at {position}: {details}")]
-    Parse {
-        position: usize,
-        details: String,
-    },
-    // ... 8 more variants
+pub enum BinarySource {
+    File(PathBuf),       // Read from file
+    Stdin,               // Read from stdin
+    RawData(Vec<u8>),    // In-memory data
 }
 ```
 
-### Recovery Strategies
-1. **Automatic Rollback** - Failed writes restore backups
-2. **Range Validation** - Prevents out-of-bounds access
-3. **Format Detection** - Warns about binary type mismatches
+### Error Handling
 
-## 🛠️ Development Guide
+All operations return `Result<T, BinfiddleError>` with specific error types:
+- `Io` — File not found, permission denied, etc.
+- `Parse` — Invalid hex, decimal, or format strings
+- `InvalidRange` — Out of bounds or invalid range specification
+- `InvalidChunkSize` — Chunk size is 0 or exceeds data
+- `InvalidInput` — Unknown format or invalid input
 
-### Building Components
-```mermaid
-graph TD
-    A[CLI Parser] --> B[Command Factory]
-    B --> C[BinaryData]
-    C --> D[Operations]
-    D --> E[Display Formatters]
-    E --> F[Output Handlers]
-```
+## Contributing
 
-### Testing Strategy
+Contributions are welcome! Please see the [development plan](docs/devplan.md) for roadmap items.
+
+### Building and Testing
+
 ```bash
-# Unit tests
-cargo test --lib
+# Run tests
+cargo test
 
-# Integration tests
-./test_harness.sh
+# Run with verbose output
+cargo test -- --nocapture
 
-# Fuzzing
-cargo fuzz run binary_ops
+# Build release
+cargo build --release
+
+# Build for all platforms
+./build_releases.sh
 ```
 
-### Performance Tips
-- Use `--chunk-size 64` for bulk operations
-- Prefer memory maps for files >10MB (`MmapBytes` feature)
-- Chain operations to minimize I/O:
-  ```bash
-  binfiddle -i file.bin \
-    edit replace 0..4 7F454C46 \
-    write 0x100 $(generate_data) \
-    -o modified.bin
-  ```
+### Code Style
 
-## 🧩 Examples
+- Follow Rust standard formatting (`cargo fmt`)
+- Run clippy for lints (`cargo clippy`)
+- Add tests for new functionality
+- Document public APIs with doc comments
 
-### Firmware Analysis
-```bash
-# Extract headers
-binfiddle -i firmware.img read 0..16 --format hex
+## Roadmap
 
-# Patch version string
-binfiddle -i firmware.img edit replace 0x100..0x110 "v2.1.0" --format ascii -o patched.img
-```
+See [devplan.md](docs/devplan.md) for detailed feature plans.
 
-### Data Carving
-```bash
-# Extract JPEG from dump
-binfiddle -i memory.dmp read $(($(grep -oba "FFD8" memory.dmp | cut -d: -f1)-2))..$(($(grep -oba "FFD9" memory.dmp | cut -d: -f1)+2)) -o image.jpg
-```
+### Planned Features
 
-### Binary Diffing
-```bash
-# Create visual diff
-diff -y <(binfiddle -i v1.bin read 0..) <(binfiddle -i v2.bin read 0..)
-```
+- **Convert** — Encoding and line ending conversion
+- **Diff** — Binary diffing with multiple output formats
+- **Patch** — Apply binary patches
+- **Struct** — Structure-aware parsing with templates
+- **Analyze** — Entropy and statistical analysis
+- **Memory** — Live process memory inspection
+
+## License
+
+This project is licensed under the BSD-3-Clause License. See [LICENSE](LICENSE) for details.
+
+## Acknowledgments
+
+- Built with [Rust](https://www.rust-lang.org/)
+- CLI parsing by [clap](https://github.com/clap-rs/clap)
+- Pattern matching by [memchr](https://github.com/BurntSushi/memchr) and [regex](https://github.com/rust-lang/regex)
 
 ---
 
-💡 **Pro Tip**: Combine with [radare2](https://www.radare.org) for full analysis workflow:
+**Pro Tip**: Combine with [radare2](https://www.radare.org) for full analysis workflows:
+
 ```bash
-binfiddle -i binary read $(rabin2 -S binary | grep .text | awk '{print $2,$3}') -o text.bin
+# Extract .text section using radare2 section info
+RANGE=$(rabin2 -S binary | awk '/\.text/{print $2".."$3}')
+binfiddle -i binary read "$RANGE" -o text.bin
 ```
