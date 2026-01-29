@@ -107,6 +107,25 @@ enum Commands {
         #[arg(long, default_value = "auto", value_parser = ["always", "auto", "never"])]
         color: String,
     },
+
+    /// Analyze binary data (entropy, histogram, index of coincidence)
+    Analyze {
+        /// Analysis type: entropy, histogram, ic
+        #[arg(value_parser = ["entropy", "histogram", "hist", "ic", "ioc"])]
+        analysis_type: String,
+
+        /// Block size for block-based analysis (0 = entire file)
+        #[arg(long, default_value = "256")]
+        block_size: usize,
+
+        /// Output format: human, csv, json
+        #[arg(long, default_value = "human", value_parser = ["human", "csv", "json"])]
+        output_format: String,
+
+        /// Range to analyze (format: 'start..end')
+        #[arg(long)]
+        range: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -257,6 +276,47 @@ fn main() -> Result<()> {
             }
 
             false // Search doesn't modify data
+        }
+        Commands::Analyze {
+            analysis_type,
+            block_size,
+            output_format,
+            range,
+        } => {
+            // Parse analysis type
+            let analysis = binfiddle::AnalysisType::from_str(analysis_type)?;
+
+            // Parse output format
+            let format = binfiddle::AnalyzeOutputFormat::from_str(output_format)?;
+
+            // Parse optional range
+            let range_bounds = if let Some(range_str) = range {
+                let (start, end) = binfiddle::utils::parsing::parse_range(range_str, binary_data.len())?;
+                Some((start, end.unwrap_or(binary_data.len())))
+            } else {
+                None
+            };
+
+            // Build analyze configuration
+            let config = binfiddle::AnalyzeConfig {
+                analysis_type: analysis,
+                block_size: *block_size,
+                format,
+                range: range_bounds,
+            };
+
+            // Create and execute analyze command
+            let analyze_cmd = binfiddle::AnalyzeCommand::new(config);
+
+            // Read all data for analysis
+            let chunk = binary_data.read_range(0, None)?;
+            let bytes = chunk.get_bytes();
+
+            // Perform analysis and print results
+            let output = analyze_cmd.analyze(bytes)?;
+            println!("{}", output);
+
+            false // Analyze doesn't modify data
         }
     };
 

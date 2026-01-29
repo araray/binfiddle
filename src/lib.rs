@@ -6,6 +6,7 @@ pub mod utils;
 use std::io::Read;
 
 pub use commands::{
+    AnalyzeCommand, AnalyzeConfig, AnalysisType, AnalyzeOutputFormat,
     Command, EditCommand, EditOperation, ReadCommand, SearchCommand, SearchConfig, WriteCommand,
 };
 pub use error::{BinfiddleError, Result};

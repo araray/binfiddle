@@ -10,6 +10,7 @@ This guide provides detailed usage instructions, examples, and common workflows 
   - [Writing Data](#writing-data)
   - [Editing Data](#editing-data)
   - [Searching Data](#searching-data)
+  - [Analyzing Data](#analyzing-data)
 - [Input and Output](#input-and-output)
   - [File I/O](#file-io)
   - [Pipeline Usage](#pipeline-usage)
@@ -38,6 +39,7 @@ binfiddle [OPTIONS] <COMMAND> [COMMAND_OPTIONS]
 binfiddle --help              # General help
 binfiddle read --help         # Command-specific help
 binfiddle search --help       # Search command help
+binfiddle analyze --help      # Analyze command help
 binfiddle --version           # Version information
 ```
 
@@ -285,6 +287,136 @@ binfiddle -i file.bin search "AA AA" --all --no-overlap
 **With context (`--context 4`):**
 ```
 0x00000100: 11 22 33 44 [de ad be ef] 55 66 77 88
+```
+
+---
+
+### Analyzing Data
+
+The `analyze` command provides statistical analysis of binary data.
+
+#### Syntax
+
+```bash
+binfiddle -i <FILE> analyze <ANALYSIS_TYPE> [OPTIONS]
+```
+
+#### Analysis Types
+
+| Type | Description |
+|------|-------------|
+| `entropy` | Shannon entropy (0-8 bits/byte, measures randomness) |
+| `histogram` | Byte frequency distribution |
+| `ic` | Index of Coincidence (cryptanalysis metric) |
+
+#### Analyze Options
+
+| Option | Description |
+|--------|-------------|
+| `--block-size <N>` | Analyze in blocks of N bytes (0 = entire file) [default: 256] |
+| `--output-format <FMT>` | Output format: human, csv, json [default: human] |
+| `--range <RANGE>` | Only analyze specified range |
+
+#### Entropy Analysis
+
+Entropy measures the randomness/disorder in data:
+
+| Entropy Range | Typical Content |
+|---------------|-----------------|
+| 0.0 - 1.0 | Highly repetitive (null bytes, single value) |
+| 1.0 - 4.0 | Text, code, structured data |
+| 4.0 - 6.0 | Mixed content, some patterns |
+| 6.0 - 7.5 | Compressed data |
+| 7.5 - 8.0 | Encrypted or highly random data |
+
+```bash
+# Analyze entire file entropy
+binfiddle -i file.bin analyze entropy --block-size 0
+
+# Block-based entropy (useful for finding encrypted sections)
+binfiddle -i firmware.bin analyze entropy --block-size 4096
+
+# Output as CSV for graphing
+binfiddle -i file.bin analyze entropy --block-size 1024 --output-format csv > entropy.csv
+
+# Output as JSON
+binfiddle -i file.bin analyze entropy --output-format json
+```
+
+**Sample Output (Human):**
+```
+=== Entropy Analysis ===
+Blocks: 4
+Block size: 1024 bytes
+Min entropy: 0.0000 bits/byte
+Max entropy: 7.8034 bits/byte
+Avg entropy: 4.5000 bits/byte
+
+--- Block Details ---
+Offset 0x00000000: 0.0000 bits/byte (highly repetitive/uniform)
+Offset 0x00000400: 4.2000 bits/byte (mixed content)
+Offset 0x00000800: 7.8034 bits/byte (encrypted or random)
+Offset 0x00000c00: 5.8000 bits/byte (mixed content)
+```
+
+#### Histogram Analysis
+
+Byte frequency distribution shows which byte values appear most often:
+
+```bash
+# Full histogram
+binfiddle -i file.bin analyze histogram
+
+# Histogram for specific range
+binfiddle -i file.bin analyze histogram --range 0x100..0x200
+
+# CSV output for spreadsheet analysis
+binfiddle -i file.bin analyze histogram --output-format csv > histogram.csv
+```
+
+**Sample Output (Human):**
+```
+=== Byte Frequency Histogram ===
+Total bytes: 1024
+Unique byte values: 42
+
+Top 20 most frequent bytes:
+Byte   Hex   Count      Percentage  Bar
+─────────────────────────────────────────
+' '  0x20        128   12.50%     ██████
+'e'  0x65         89    8.69%     ████
+'t'  0x74         72    7.03%     ████
+...
+```
+
+#### Index of Coincidence (IC)
+
+IC is useful for cryptanalysis - it measures the probability that two randomly selected bytes are the same:
+
+| IC Value | Interpretation |
+|----------|----------------|
+| ~0.0039 | Random/encrypted data (1/256) |
+| ~0.0667 | English text |
+| >0.05 | Text-like patterns |
+
+```bash
+# Calculate IC for entire file
+binfiddle -i file.bin analyze ic --block-size 0
+
+# Block-based IC
+binfiddle -i file.bin analyze ic --block-size 512
+```
+
+**Sample Output:**
+```
+=== Index of Coincidence Analysis ===
+Size: 1024 bytes
+IC: 0.058100
+Interpretation: text-like patterns
+
+Reference values:
+  Random data:  ~0.0039 (1/256)
+  English text: ~0.0667
 ```
 
 ---

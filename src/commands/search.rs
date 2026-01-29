@@ -2,6 +2,11 @@
 //!
 //! This module provides pattern matching capabilities for binary data,
 //! supporting exact byte sequences, regular expressions, and mask patterns.
+//!
+//! # Performance
+//!
+//! For large files (>1MB), the search operations can use parallel processing
+//! via rayon to improve throughput on multi-core systems.
 /// src/commands/search.rs
 use super::Command;
 use crate::error::{BinfiddleError, Result};
@@ -10,7 +15,16 @@ use crate::utils::parsing::SearchPattern;
 use crate::{BinaryData, ColorMode};
 
 use memchr::memmem;
+use rayon::prelude::*;
 use regex::bytes::Regex;
+
+/// Minimum file size (in bytes) to trigger parallel search.
+/// Below this threshold, sequential search is typically faster due to parallelization overhead.
+const PARALLEL_THRESHOLD: usize = 1024 * 1024; // 1 MB
+
+/// Chunk size for parallel search operations.
+/// Each worker processes chunks of this size.
+const PARALLEL_CHUNK_SIZE: usize = 256 * 1024; // 256 KB
 
 /// Configuration for search operations.
 #[derive(Debug, Clone)]
@@ -210,6 +224,198 @@ impl SearchCommand {
         }
 
         true
+    }
+
+    /// Performs parallel search on large data sets.
+    ///
+    /// This method automatically uses parallel processing for data larger than
+    /// `PARALLEL_THRESHOLD` (1MB). For smaller data, it falls back to sequential search.
+    ///
+    /// # Arguments
+    /// * `data` - The binary data to search
+    ///
+    /// # Returns
+    /// A vector of SearchMatch results, sorted by offset.
+    pub fn search_parallel(&self, data: &[u8]) -> Result<Vec<SearchMatch>> {
+        // Fall back to sequential for small data or when not finding all matches
+        if data.len() < PARALLEL_THRESHOLD || !self.config.find_all {
+            return self.search(data);
+        }
+
+        match &self.config.pattern {
+            SearchPattern::Exact(needle) => self.search_exact_parallel(data, needle),
+            SearchPattern::Mask(mask) => self.search_mask_parallel(data, mask),
+            // Regex doesn't parallelize well due to internal state
+            SearchPattern::Regex(pattern) => self.search_regex(data, pattern),
+        }
+    }
+
+    /// Parallel exact byte sequence search.
+    ///
+    /// Splits the data into chunks and searches each chunk in parallel.
+    /// Handles boundary matches by including overlap regions between chunks.
+    fn search_exact_parallel(&self, haystack: &[u8], needle: &[u8]) -> Result<Vec<SearchMatch>> {
+        if needle.is_empty() {
+            return Err(BinfiddleError::InvalidInput(
+                "Search pattern cannot be empty".to_string(),
+            ));
+        }
+
+        let needle_len = needle.len();
+        let overlap = needle_len.saturating_sub(1);
+
+        // Create chunk boundaries with overlap to catch matches spanning chunks
+        let chunks: Vec<(usize, usize)> = (0..haystack.len())
+            .step_by(PARALLEL_CHUNK_SIZE)
+            .map(|start| {
+                let end = (start + PARALLEL_CHUNK_SIZE + overlap).min(haystack.len());
+                (start, end)
+            })
+            .collect();
+
+        // Search chunks in parallel
+        let finder = memmem::Finder::new(needle);
+        let all_matches: Vec<Vec<SearchMatch>> = chunks
+            .par_iter()
+            .map(|(chunk_start, chunk_end)| {
+                let chunk = &haystack[*chunk_start..*chunk_end];
+                let mut chunk_matches = Vec::new();
+                let mut search_start = 0;
+
+                while search_start < chunk.len() {
+                    match finder.find(&chunk[search_start..]) {
+                        Some(relative_offset) => {
+                            let absolute_offset = chunk_start + search_start + relative_offset;
+
+                            // Only include if this match starts within our primary chunk region
+                            // (not in the overlap region that belongs to the next chunk)
+                            let primary_end = (*chunk_start + PARALLEL_CHUNK_SIZE).min(haystack.len());
+                            if absolute_offset < primary_end || *chunk_end == haystack.len() {
+                                chunk_matches.push(SearchMatch {
+                                    offset: absolute_offset,
+                                    data: needle.to_vec(),
+                                });
+                            }
+
+                            search_start = if self.config.no_overlap {
+                                search_start + relative_offset + needle_len
+                            } else {
+                                search_start + relative_offset + 1
+                            };
+                        }
+                        None => break,
+                    }
+                }
+
+                chunk_matches
+            })
+            .collect();
+
+        // Merge and sort results
+        let mut matches: Vec<SearchMatch> = all_matches.into_iter().flatten().collect();
+        matches.sort_by_key(|m| m.offset);
+
+        // Remove duplicates (from overlap regions)
+        matches.dedup_by_key(|m| m.offset);
+
+        // Apply no_overlap filter if needed (post-merge)
+        if self.config.no_overlap {
+            let mut filtered = Vec::with_capacity(matches.len());
+            let mut last_end = 0usize;
+            for m in matches {
+                if m.offset >= last_end {
+                    last_end = m.offset + m.data.len();
+                    filtered.push(m);
+                }
+            }
+            matches = filtered;
+        }
+
+        Ok(matches)
+    }
+
+    /// Parallel mask-based search with wildcard support.
+    fn search_mask_parallel(&self, haystack: &[u8], mask: &[Option<u8>]) -> Result<Vec<SearchMatch>> {
+        if mask.is_empty() {
+            return Err(BinfiddleError::InvalidInput(
+                "Mask pattern cannot be empty".to_string(),
+            ));
+        }
+
+        let mask_len = mask.len();
+        if haystack.len() < mask_len {
+            return Ok(Vec::new());
+        }
+
+        let overlap = mask_len.saturating_sub(1);
+
+        // Create chunk boundaries with overlap
+        let chunks: Vec<(usize, usize)> = (0..haystack.len())
+            .step_by(PARALLEL_CHUNK_SIZE)
+            .map(|start| {
+                let end = (start + PARALLEL_CHUNK_SIZE + overlap).min(haystack.len());
+                (start, end)
+            })
+            .collect();
+
+        // Search chunks in parallel
+        let all_matches: Vec<Vec<SearchMatch>> = chunks
+            .par_iter()
+            .map(|(chunk_start, chunk_end)| {
+                let chunk = &haystack[*chunk_start..*chunk_end];
+                let mut chunk_matches = Vec::new();
+
+                if chunk.len() < mask_len {
+                    return chunk_matches;
+                }
+
+                let mut pos = 0;
+                while pos <= chunk.len() - mask_len {
+                    if self.matches_mask(&chunk[pos..pos + mask_len], mask) {
+                        let absolute_offset = chunk_start + pos;
+
+                        // Only include if within primary chunk region
+                        let primary_end = (*chunk_start + PARALLEL_CHUNK_SIZE).min(haystack.len());
+                        if absolute_offset < primary_end || *chunk_end == haystack.len() {
+                            chunk_matches.push(SearchMatch {
+                                offset: absolute_offset,
+                                data: chunk[pos..pos + mask_len].to_vec(),
+                            });
+                        }
+
+                        pos = if self.config.no_overlap {
+                            pos + mask_len
+                        } else {
+                            pos + 1
+                        };
+                    } else {
+                        pos += 1;
+                    }
+                }
+
+                chunk_matches
+            })
+            .collect();
+
+        // Merge and sort results
+        let mut matches: Vec<SearchMatch> = all_matches.into_iter().flatten().collect();
+        matches.sort_by_key(|m| m.offset);
+        matches.dedup_by_key(|m| m.offset);
+
+        // Apply no_overlap filter if needed
+        if self.config.no_overlap {
+            let mut filtered = Vec::with_capacity(matches.len());
+            let mut last_end = 0usize;
+            for m in matches {
+                if m.offset >= last_end {
+                    last_end = m.offset + m.data.len();
+                    filtered.push(m);
+                }
+            }
+            matches = filtered;
+        }
+
+        Ok(matches)
     }
 
     /// Formats and outputs search results.
@@ -489,5 +695,143 @@ mod tests {
         assert!(!output.contains("\x1b["), "No-color output should not contain ANSI codes");
         // Should still contain the actual data
         assert!(output.contains("be ef"), "Output should contain match data");
+    }
+
+    // ===== Parallel Search Tests =====
+
+    #[test]
+    fn test_parallel_exact_search_small_data() {
+        // Small data should still work with parallel interface (falls back to sequential)
+        let config = make_config(SearchPattern::Exact(vec![0xDE, 0xAD]));
+        let cmd = SearchCommand::new(config);
+        let data = vec![0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD];
+
+        let matches = cmd.search_parallel(&data).unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].offset, 0);
+        assert_eq!(matches[1].offset, 4);
+    }
+
+    #[test]
+    fn test_parallel_exact_search_large_data() {
+        // Create data larger than PARALLEL_THRESHOLD
+        let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
+        // Insert pattern at known locations
+        let pattern = [0xDE, 0xAD, 0xBE, 0xEF];
+        for offset in [0, 100_000, 500_000, 1_000_000, 1_500_000, 2_097_148] {
+            if offset + pattern.len() <= data.len() {
+                data[offset..offset + pattern.len()].copy_from_slice(&pattern);
+            }
+        }
+
+        let config = make_config(SearchPattern::Exact(pattern.to_vec()));
+        let cmd = SearchCommand::new(config);
+
+        let matches = cmd.search_parallel(&data).unwrap();
+        assert_eq!(matches.len(), 6);
+        assert_eq!(matches[0].offset, 0);
+        assert_eq!(matches[1].offset, 100_000);
+        assert_eq!(matches[2].offset, 500_000);
+        assert_eq!(matches[3].offset, 1_000_000);
+        assert_eq!(matches[4].offset, 1_500_000);
+        assert_eq!(matches[5].offset, 2_097_148);
+    }
+
+    #[test]
+    fn test_parallel_mask_search_large_data() {
+        // Create data larger than PARALLEL_THRESHOLD
+        let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
+        // Insert pattern at known locations
+        let pattern = [0xDE, 0xAD, 0xBE, 0xEF];
+        for offset in [0, 256_000, 512_000, 1_024_000] {
+            if offset + pattern.len() <= data.len() {
+                data[offset..offset + pattern.len()].copy_from_slice(&pattern);
+            }
+        }
+
+        // Mask: DE ?? BE EF
+        let mask = vec![Some(0xDE), None, Some(0xBE), Some(0xEF)];
+        let config = make_config(SearchPattern::Mask(mask));
+        let cmd = SearchCommand::new(config);
+
+        let matches = cmd.search_parallel(&data).unwrap();
+        assert_eq!(matches.len(), 4);
+        assert_eq!(matches[0].offset, 0);
+        assert_eq!(matches[1].offset, 256_000);
+        assert_eq!(matches[2].offset, 512_000);
+        assert_eq!(matches[3].offset, 1_024_000);
+    }
+
+    #[test]
+    fn test_parallel_boundary_match() {
+        // Test pattern that spans chunk boundaries
+        // PARALLEL_CHUNK_SIZE is 256KB, so put pattern at boundary
+        let chunk_boundary = 256 * 1024;
+        let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
+        
+        // Pattern spanning the chunk boundary
+        let pattern = [0xDE, 0xAD, 0xBE, 0xEF];
+        let boundary_offset = chunk_boundary - 2; // Pattern starts 2 bytes before boundary
+        data[boundary_offset..boundary_offset + pattern.len()].copy_from_slice(&pattern);
+
+        let config = make_config(SearchPattern::Exact(pattern.to_vec()));
+        let cmd = SearchCommand::new(config);
+
+        let matches = cmd.search_parallel(&data).unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset, boundary_offset);
+    }
+
+    #[test]
+    fn test_parallel_no_overlap() {
+        // Test no_overlap with parallel search
+        let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
+        // Create overlapping patterns: 00 00 00 00 at multiple locations
+        let overlapping_start = 1_000_000;
+        for i in 0..8 {
+            data[overlapping_start + i] = 0x00;
+        }
+
+        let mut config = make_config(SearchPattern::Exact(vec![0x00, 0x00]));
+        config.no_overlap = true;
+        let cmd = SearchCommand::new(config);
+
+        let matches = cmd.search_parallel(&data).unwrap();
+        
+        // With no_overlap, consecutive 00 00 patterns should not overlap
+        // Check that matches don't overlap
+        for i in 1..matches.len() {
+            assert!(
+                matches[i].offset >= matches[i-1].offset + matches[i-1].data.len(),
+                "Matches should not overlap"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parallel_consistency_with_sequential() {
+        // Verify parallel and sequential produce same results
+        let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
+        let pattern = [0xCA, 0xFE, 0xBA, 0xBE];
+        
+        // Insert patterns at various locations
+        for i in 0..100 {
+            let offset = i * 20_000;
+            if offset + pattern.len() <= data.len() {
+                data[offset..offset + pattern.len()].copy_from_slice(&pattern);
+            }
+        }
+
+        let config = make_config(SearchPattern::Exact(pattern.to_vec()));
+        let cmd = SearchCommand::new(config);
+
+        let sequential = cmd.search(&data).unwrap();
+        let parallel = cmd.search_parallel(&data).unwrap();
+
+        assert_eq!(sequential.len(), parallel.len(), "Match count should be equal");
+        for (seq, par) in sequential.iter().zip(parallel.iter()) {
+            assert_eq!(seq.offset, par.offset, "Offsets should match");
+            assert_eq!(seq.data, par.data, "Data should match");
+        }
     }
 }
