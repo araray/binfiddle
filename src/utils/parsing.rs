@@ -1,11 +1,10 @@
-/// src/utils/parsing.rs
 //! Parsing utilities for binfiddle.
 //!
 //! This module provides functions for parsing:
 //! - Range specifications (e.g., "10..20", "0x100..", "..0xFF")
 //! - Input data in various formats (hex, dec, oct, bin, ascii)
 //! - Search patterns for the search command
-
+/// src/utils/parsing.rs
 use crate::error::{BinfiddleError, Result};
 
 /// Parses a range specification string into start and optional end indices.

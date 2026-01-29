@@ -1,9 +1,8 @@
-/// src/utils/display.rs
 //! Display utilities for binfiddle.
 //!
 //! This module provides functions for formatting binary data into
 //! human-readable representations in various formats.
-
+/// src/utils/display.rs
 use crate::error::{BinfiddleError, Result};
 
 /// Formats bytes for display in the specified format.

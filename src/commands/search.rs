@@ -1,9 +1,8 @@
-/// src/commands/search.rs
 //! Search command implementation for binfiddle.
 //!
 //! This module provides pattern matching capabilities for binary data,
 //! supporting exact byte sequences, regular expressions, and mask patterns.
-
+/// src/commands/search.rs
 use super::Command;
 use crate::error::{BinfiddleError, Result};
 use crate::utils::display::{format_match, format_match_with_context};
