@@ -1,4 +1,3 @@
-# src/commands/edit.rs
 use super::Command;
 use crate::{error::Result, BinaryData};
 

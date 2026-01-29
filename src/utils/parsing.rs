@@ -1,4 +1,3 @@
-# src/utils/parsing.rs
 //! Parsing utilities for binfiddle.
 //!
 //! This module provides functions for parsing:

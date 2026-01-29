@@ -1,4 +1,3 @@
-# src/commands/mod.rs
 use crate::{BinaryData, Result};
 
 pub mod edit;

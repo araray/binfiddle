@@ -1,4 +1,3 @@
-# src/utils/mod.rs
 //! Utility modules for binfiddle.
 //!
 //! This module provides parsing and display utilities for binary data manipulation.

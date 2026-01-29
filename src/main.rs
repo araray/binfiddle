@@ -1,4 +1,3 @@
-# src/main.rs
 use binfiddle::utils::parsing::parse_search_pattern;
 use binfiddle::{BinaryData, BinarySource, Result, SearchConfig};
 use clap::{Parser, Subcommand};

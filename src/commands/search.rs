@@ -1,4 +1,3 @@
-# src/commands/search.rs
 //! Search command implementation for binfiddle.
 //!
 //! This module provides pattern matching capabilities for binary data,
