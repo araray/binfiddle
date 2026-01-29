@@ -13,6 +13,23 @@ pub use utils::parsing::SearchPattern;
 pub use utils::{display, parsing};
 pub use utils::{display_bytes, parse_bit_input, parse_input, parse_range};
 
+/// Color output mode for terminal display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorMode {
+    /// Always use colors, even if output is not a terminal
+    Always,
+    /// Automatically detect if terminal supports colors
+    Auto,
+    /// Never use colors
+    Never,
+}
+
+impl Default for ColorMode {
+    fn default() -> Self {
+        ColorMode::Auto
+    }
+}
+
 /// Represents the input source for binary data
 pub enum BinarySource {
     File(std::path::PathBuf),

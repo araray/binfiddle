@@ -242,6 +242,91 @@ pub fn format_match_with_context(
     Ok(output)
 }
 
+// ANSI color codes for terminal output
+const ANSI_RESET: &str = "\x1b[0m";
+const ANSI_BOLD_RED: &str = "\x1b[1;31m";
+const ANSI_BOLD_GREEN: &str = "\x1b[1;32m";
+const ANSI_CYAN: &str = "\x1b[36m";
+const ANSI_DIM: &str = "\x1b[2m";
+
+/// Formats a single match result with color highlighting.
+///
+/// # Arguments
+/// * `offset` - The byte offset where the match was found
+/// * `data` - The matched data
+/// * `format` - The output format
+/// * `chunk_size` - Bits per display chunk
+///
+/// # Returns
+/// A formatted string with ANSI color codes showing offset and matched data.
+pub fn format_match_colored(
+    offset: usize,
+    data: &[u8],
+    format: &str,
+    chunk_size: usize,
+) -> Result<String> {
+    let formatted_data = display_bytes(data, format, chunk_size, 0)?;
+    Ok(format!(
+        "{}0x{:08x}{}: {}{}{}",
+        ANSI_CYAN, offset, ANSI_RESET,
+        ANSI_BOLD_RED, formatted_data, ANSI_RESET
+    ))
+}
+
+/// Formats a match with context bytes, using color to highlight the match.
+///
+/// The output shows the match in red/bold, with context bytes in dim.
+///
+/// # Arguments
+/// * `offset` - The byte offset where the match was found
+/// * `match_data` - The matched data
+/// * `before_context` - Bytes before the match (may be empty)
+/// * `after_context` - Bytes after the match (may be empty)
+/// * `format` - The output format
+/// * `chunk_size` - Bits per display chunk
+///
+/// # Returns
+/// A formatted string with ANSI color codes for terminal display.
+pub fn format_match_with_context_colored(
+    offset: usize,
+    match_data: &[u8],
+    before_context: &[u8],
+    after_context: &[u8],
+    format: &str,
+    chunk_size: usize,
+) -> Result<String> {
+    let mut output = String::new();
+
+    output.push_str(&format!(
+        "{}Match at 0x{:08x}{}:\n",
+        ANSI_BOLD_GREEN, offset, ANSI_RESET
+    ));
+
+    if !before_context.is_empty() {
+        let before_fmt = display_bytes(before_context, format, chunk_size, 0)?;
+        output.push_str(&format!(
+            "  Before: {}{}{}\n",
+            ANSI_DIM, before_fmt, ANSI_RESET
+        ));
+    }
+
+    let match_fmt = display_bytes(match_data, format, chunk_size, 0)?;
+    output.push_str(&format!(
+        "  Match:  {}{}{}\n",
+        ANSI_BOLD_RED, match_fmt, ANSI_RESET
+    ));
+
+    if !after_context.is_empty() {
+        let after_fmt = display_bytes(after_context, format, chunk_size, 0)?;
+        output.push_str(&format!(
+            "  After:  {}{}{}",
+            ANSI_DIM, after_fmt, ANSI_RESET
+        ));
+    }
+
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,5 +406,56 @@ mod tests {
         let data = vec![0xDE, 0xAD];
         let output = format_match(256, &data, "hex", 8).unwrap();
         assert_eq!(output, "0x00000100: de ad");
+    }
+
+    #[test]
+    fn test_format_match_colored_contains_ansi() {
+        let data = vec![0xDE, 0xAD];
+        let output = format_match_colored(256, &data, "hex", 8).unwrap();
+        
+        // Should contain ANSI escape codes
+        assert!(output.contains("\x1b["), "Output should contain ANSI codes");
+        assert!(output.contains(ANSI_RESET), "Output should contain reset code");
+        assert!(output.contains(ANSI_CYAN), "Output should contain cyan for offset");
+        assert!(output.contains(ANSI_BOLD_RED), "Output should contain red for match");
+        
+        // Should still contain the actual data
+        assert!(output.contains("00000100"), "Output should contain offset");
+        assert!(output.contains("de ad"), "Output should contain match data");
+    }
+
+    #[test]
+    fn test_format_match_with_context_colored() {
+        let match_data = vec![0xBE, 0xEF];
+        let before = vec![0xDE, 0xAD];
+        let after = vec![0xCA, 0xFE];
+        
+        let output = format_match_with_context_colored(
+            2, &match_data, &before, &after, "hex", 8
+        ).unwrap();
+        
+        // Should contain ANSI codes
+        assert!(output.contains(ANSI_BOLD_GREEN), "Should have green for header");
+        assert!(output.contains(ANSI_DIM), "Should have dim for context");
+        assert!(output.contains(ANSI_BOLD_RED), "Should have red for match");
+        assert!(output.contains(ANSI_RESET), "Should have reset codes");
+        
+        // Should contain the data
+        assert!(output.contains("Match at"));
+        assert!(output.contains("Before:"));
+        assert!(output.contains("Match:"));
+        assert!(output.contains("After:"));
+        assert!(output.contains("de ad")); // before context
+        assert!(output.contains("be ef")); // match
+        assert!(output.contains("ca fe")); // after context
+    }
+
+    #[test]
+    fn test_format_match_no_color_no_ansi() {
+        let data = vec![0xDE, 0xAD];
+        let output = format_match(256, &data, "hex", 8).unwrap();
+        
+        // Non-colored version should NOT contain ANSI escape codes
+        assert!(!output.contains("\x1b["), "Non-colored output should not contain ANSI codes");
     }
 }

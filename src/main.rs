@@ -102,6 +102,10 @@ enum Commands {
         /// Prevent overlapping matches
         #[arg(long)]
         no_overlap: bool,
+
+        /// Colorize output (always, auto, never)
+        #[arg(long, default_value = "auto", value_parser = ["always", "auto", "never"])]
+        color: String,
     },
 }
 
@@ -207,9 +211,17 @@ fn main() -> Result<()> {
             offsets_only,
             context,
             no_overlap,
+            color,
         } => {
             // Parse the search pattern based on input format
             let search_pattern = parse_search_pattern(pattern, &cli.input_format)?;
+
+            // Determine color mode
+            let color_mode = match color.as_str() {
+                "always" => binfiddle::ColorMode::Always,
+                "never" => binfiddle::ColorMode::Never,
+                _ => binfiddle::ColorMode::Auto,
+            };
 
             // Build search configuration
             let config = SearchConfig {
@@ -221,6 +233,7 @@ fn main() -> Result<()> {
                 offsets_only: *offsets_only,
                 context: *context,
                 no_overlap: *no_overlap,
+                color: color_mode,
             };
 
             // Create and execute search command

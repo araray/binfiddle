@@ -5,9 +5,9 @@
 /// src/commands/search.rs
 use super::Command;
 use crate::error::{BinfiddleError, Result};
-use crate::utils::display::{format_match, format_match_with_context};
+use crate::utils::display::{format_match, format_match_with_context, format_match_colored, format_match_with_context_colored};
 use crate::utils::parsing::SearchPattern;
-use crate::BinaryData;
+use crate::{BinaryData, ColorMode};
 
 use memchr::memmem;
 use regex::bytes::Regex;
@@ -31,6 +31,8 @@ pub struct SearchConfig {
     pub context: usize,
     /// Prevent overlapping matches
     pub no_overlap: bool,
+    /// Color output mode
+    pub color: ColorMode,
 }
 
 impl Default for SearchConfig {
@@ -44,6 +46,7 @@ impl Default for SearchConfig {
             offsets_only: false,
             context: 0,
             no_overlap: false,
+            color: ColorMode::Auto,
         }
     }
 }
@@ -215,6 +218,13 @@ impl SearchCommand {
             return Ok(format!("{}", matches.len()));
         }
 
+        // Determine if we should use color
+        let use_color = match self.config.color {
+            ColorMode::Always => true,
+            ColorMode::Never => false,
+            ColorMode::Auto => atty::is(atty::Stream::Stdout),
+        };
+
         let mut output = String::new();
 
         for (i, m) in matches.iter().enumerate() {
@@ -232,22 +242,42 @@ impl SearchCommand {
                 let before = &data[before_start..m.offset];
                 let after = &data[m.offset + m.data.len()..after_end];
 
-                let formatted = format_match_with_context(
-                    m.offset,
-                    &m.data,
-                    before,
-                    after,
-                    &self.config.format,
-                    self.config.chunk_size,
-                )?;
+                let formatted = if use_color {
+                    format_match_with_context_colored(
+                        m.offset,
+                        &m.data,
+                        before,
+                        after,
+                        &self.config.format,
+                        self.config.chunk_size,
+                    )?
+                } else {
+                    format_match_with_context(
+                        m.offset,
+                        &m.data,
+                        before,
+                        after,
+                        &self.config.format,
+                        self.config.chunk_size,
+                    )?
+                };
                 output.push_str(&formatted);
             } else {
-                let formatted = format_match(
-                    m.offset,
-                    &m.data,
-                    &self.config.format,
-                    self.config.chunk_size,
-                )?;
+                let formatted = if use_color {
+                    format_match_colored(
+                        m.offset,
+                        &m.data,
+                        &self.config.format,
+                        self.config.chunk_size,
+                    )?
+                } else {
+                    format_match(
+                        m.offset,
+                        &m.data,
+                        &self.config.format,
+                        self.config.chunk_size,
+                    )?
+                };
                 output.push_str(&formatted);
             }
         }
@@ -291,6 +321,7 @@ mod tests {
             offsets_only: false,
             context: 0,
             no_overlap: false,
+            color: ColorMode::Never, // Disable color in tests for predictable output
         }
     }
 
@@ -407,5 +438,56 @@ mod tests {
         let output = cmd.format_results(&data, &matches).unwrap();
         assert!(output.contains("0x00000000"));
         assert!(output.contains("0x00000002"));
+    }
+
+    #[test]
+    fn test_colored_output() {
+        let mut config = make_config(SearchPattern::Exact(vec![0xBE, 0xEF]));
+        config.color = ColorMode::Always;
+        let cmd = SearchCommand::new(config);
+        let data = vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE];
+
+        let matches = cmd.search(&data).unwrap();
+        let output = cmd.format_results(&data, &matches).unwrap();
+        
+        // Should contain ANSI escape codes when color is Always
+        assert!(output.contains("\x1b["), "Colored output should contain ANSI codes");
+        // Should still contain the actual data
+        assert!(output.contains("be ef"), "Output should contain match data");
+    }
+
+    #[test]
+    fn test_colored_output_with_context() {
+        let mut config = make_config(SearchPattern::Exact(vec![0xBE, 0xEF]));
+        config.color = ColorMode::Always;
+        config.context = 2;
+        let cmd = SearchCommand::new(config);
+        let data = vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE];
+
+        let matches = cmd.search(&data).unwrap();
+        let output = cmd.format_results(&data, &matches).unwrap();
+        
+        // Should contain ANSI escape codes
+        assert!(output.contains("\x1b["), "Colored context output should contain ANSI codes");
+        // Should contain context labels
+        assert!(output.contains("Before:"), "Should show before context");
+        assert!(output.contains("Match:"), "Should show match");
+        assert!(output.contains("After:"), "Should show after context");
+    }
+
+    #[test]
+    fn test_no_color_output() {
+        let mut config = make_config(SearchPattern::Exact(vec![0xBE, 0xEF]));
+        config.color = ColorMode::Never;
+        let cmd = SearchCommand::new(config);
+        let data = vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE];
+
+        let matches = cmd.search(&data).unwrap();
+        let output = cmd.format_results(&data, &matches).unwrap();
+        
+        // Should NOT contain ANSI escape codes when color is Never
+        assert!(!output.contains("\x1b["), "No-color output should not contain ANSI codes");
+        // Should still contain the actual data
+        assert!(output.contains("be ef"), "Output should contain match data");
     }
 }
