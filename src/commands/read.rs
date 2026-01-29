@@ -1,3 +1,4 @@
+/// src/commands/read.rs
 use super::Command;
 use crate::utils::display;
 use crate::{error::Result, BinaryData};

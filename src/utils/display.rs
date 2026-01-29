@@ -1,3 +1,4 @@
+/// src/utils/display.rs
 //! Display utilities for binfiddle.
 //!
 //! This module provides functions for formatting binary data into
