@@ -126,6 +126,39 @@ enum Commands {
         #[arg(long)]
         range: Option<String>,
     },
+
+    /// Compare two binary files and show differences
+    Diff {
+        /// First file to compare
+        file1: String,
+
+        /// Second file to compare
+        file2: String,
+
+        /// Output format: simple, unified, side-by-side, patch
+        #[arg(long, default_value = "simple", value_parser = ["simple", "unified", "side-by-side", "sidebyside", "patch"])]
+        diff_format: String,
+
+        /// Number of context bytes around differences (for unified format)
+        #[arg(long, default_value = "3")]
+        context: usize,
+
+        /// Colorize output (always, auto, never)
+        #[arg(long, default_value = "auto", value_parser = ["always", "auto", "never"])]
+        color: String,
+
+        /// Ranges to ignore during comparison (e.g., "0x0..0x10,0x100..0x200")
+        #[arg(long, default_value = "")]
+        ignore_offsets: String,
+
+        /// Bytes per line in output
+        #[arg(long, default_value = "16")]
+        diff_width: usize,
+
+        /// Print summary of differences
+        #[arg(long)]
+        summary: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -291,7 +324,8 @@ fn main() -> Result<()> {
 
             // Parse optional range
             let range_bounds = if let Some(range_str) = range {
-                let (start, end) = binfiddle::utils::parsing::parse_range(range_str, binary_data.len())?;
+                let (start, end) =
+                    binfiddle::utils::parsing::parse_range(range_str, binary_data.len())?;
                 Some((start, end.unwrap_or(binary_data.len())))
             } else {
                 None
@@ -317,6 +351,68 @@ fn main() -> Result<()> {
             println!("{}", output);
 
             false // Analyze doesn't modify data
+        }
+        Commands::Diff {
+            file1,
+            file2,
+            diff_format,
+            context,
+            color,
+            ignore_offsets,
+            diff_width,
+            summary,
+        } => {
+            // Load both files
+            let data1 = std::fs::read(file1)?;
+            let data2 = std::fs::read(file2)?;
+
+            // Parse diff format
+            let format = binfiddle::DiffFormat::from_str(diff_format)?;
+
+            // Determine color mode
+            let color_mode = match color.as_str() {
+                "always" => binfiddle::ColorMode::Always,
+                "never" => binfiddle::ColorMode::Never,
+                _ => binfiddle::ColorMode::Auto,
+            };
+
+            // Parse ignore ranges
+            let ignore_ranges = binfiddle::parse_ignore_ranges(ignore_offsets)?;
+
+            // Build diff configuration
+            let config = binfiddle::DiffConfig {
+                format,
+                context: *context,
+                color: color_mode,
+                ignore_ranges,
+                width: *diff_width,
+            };
+
+            // Create and execute diff command
+            let diff_cmd = binfiddle::DiffCommand::new(config);
+
+            // Compare files
+            let differences = diff_cmd.compare(&data1, &data2);
+
+            // Report results
+            if differences.is_empty() {
+                if !cli.silent {
+                    eprintln!("Files are identical");
+                }
+            } else {
+                let output = diff_cmd.format_diff(&data1, &data2, &differences, file1, file2)?;
+                println!("{}", output);
+
+                if *summary {
+                    println!();
+                    println!(
+                        "{}",
+                        diff_cmd.summary(&differences, data1.len(), data2.len())
+                    );
+                }
+            }
+
+            false // Diff doesn't modify data
         }
     };
 
