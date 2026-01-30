@@ -11,6 +11,7 @@ This guide provides detailed usage instructions, examples, and common workflows 
   - [Editing Data](#editing-data)
   - [Searching Data](#searching-data)
   - [Analyzing Data](#analyzing-data)
+  - [Comparing Files (Diff)](#comparing-files-diff)
 - [Input and Output](#input-and-output)
   - [File I/O](#file-io)
   - [Pipeline Usage](#pipeline-usage)
@@ -40,6 +41,7 @@ binfiddle --help              # General help
 binfiddle read --help         # Command-specific help
 binfiddle search --help       # Search command help
 binfiddle analyze --help      # Analyze command help
+binfiddle diff --help         # Diff command help
 binfiddle --version           # Version information
 ```
 
@@ -233,6 +235,7 @@ binfiddle -i <FILE> search <PATTERN> [OPTIONS]
 | `--offsets-only` | Output only match offsets |
 | `--context <N>` | Show N bytes before/after each match |
 | `--no-overlap` | Prevent overlapping matches |
+| `--color <MODE>` | Color output: always, auto, never |
 
 #### Examples
 
@@ -417,6 +420,142 @@ Interpretation: text-like patterns
 Reference values:
   Random data:  ~0.0039 (1/256)
   English text: ~0.0667
+```
+
+---
+
+### Comparing Files (Diff)
+
+The `diff` command compares two binary files byte-by-byte and displays their differences.
+
+#### Syntax
+
+```bash
+binfiddle diff <FILE1> <FILE2> [OPTIONS]
+```
+
+#### Diff Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--diff-format <FMT>` | Output format: simple, unified, side-by-side, patch | simple |
+| `--context <N>` | Context bytes around differences (unified/side-by-side) | 3 |
+| `--color <MODE>` | Color output: always, auto, never | auto |
+| `--ignore-offsets <RANGES>` | Comma-separated ranges to ignore | (none) |
+| `--diff-width <N>` | Bytes per line in output | 16 |
+| `--summary` | Print summary of differences | false |
+
+#### Output Formats
+
+| Format | Description |
+|--------|-------------|
+| `simple` | One line per difference: `Offset: 0xXX != 0xYY` |
+| `unified` | Unified diff with context lines, similar to text diff |
+| `side-by-side` | Two-column parallel comparison |
+| `patch` | Machine-readable format for `binfiddle patch` command |
+
+#### Examples
+
+```bash
+# Simple format (default) - one line per byte difference
+binfiddle diff original.bin modified.bin
+
+# Unified format with 5 lines of context
+binfiddle diff original.bin modified.bin --diff-format unified --context 5
+
+# Side-by-side comparison
+binfiddle diff v1.bin v2.bin --diff-format side-by-side
+
+# Generate patch file
+binfiddle diff original.bin modified.bin --diff-format patch > changes.patch
+
+# Ignore timestamp bytes at offset 0x10-0x18
+binfiddle diff v1.bin v2.bin --ignore-offsets "0x10..0x18"
+
+# Ignore multiple ranges
+binfiddle diff v1.bin v2.bin --ignore-offsets "0x0..0x10,0x100..0x110,0x200..0x210"
+
+# Force color output (useful for piping to less -R)
+binfiddle diff file1.bin file2.bin --color always | less -R
+
+# Show summary statistics
+binfiddle diff file1.bin file2.bin --summary
+```
+
+#### Sample Output
+
+**Simple Format:**
+```
+0x00000001: 0xad != 0xca
+0x00000010: 0xde != 0xff
+0x00000020: 0xbe != EOF
+```
+
+**Unified Format:**
+```
+--- file1.bin
++++ file2.bin
+@@ -0x0,0x10 +0x0,0x10 @@
+ 0x00000000: de ad be ef ca fe ba be 00 11 22 33 44 55 66 77  |................|
+-0x00000010: 88 99 aa bb cc dd ee ff 00 11 22 33 44 55 66 77  |................|
++0x00000010: 88 99 aa bb cc dd ee 00 00 11 22 33 44 55 66 77  |................|
+ 0x00000020: 00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff  |................|
+```
+
+**Side-by-Side Format:**
+```
+file1.bin                                    | file2.bin
+---------------------------------------------+---------------------------------------------
+0x00000000: de ad be ef ca fe ba be          | 0x00000000: de ad be ef ca fe ba be
+0x00000008: 00 11 22 33 44 55 66 77          ! 0x00000008: 00 11 22 33 44 55 66 00
+```
+
+**Patch Format:**
+```
+# binfiddle patch file
+# source: original.bin
+# target: modified.bin
+# format: OFFSET:OLD_HEX:NEW_HEX
+# differences: 3
+#
+0x00000001:ad:ca
+0x00000010:de:ff
+0x00000020:be:
+```
+
+**Summary Output:**
+```
+42 difference(s): 38 changed, 2 deleted, 2 added (file1: 1024 bytes, file2: 1026 bytes)
+```
+
+#### Use Cases
+
+**Firmware Version Comparison:**
+```bash
+# Compare firmware versions, ignoring build timestamps
+binfiddle diff firmware_v1.bin firmware_v2.bin \
+    --diff-format unified \
+    --ignore-offsets "0x10..0x18" \
+    --context 5
+
+# Generate a patch for the update
+binfiddle diff firmware_v1.bin firmware_v2.bin --diff-format patch > update.patch
+```
+
+**Binary Patch Development:**
+```bash
+# Compare original and cracked binary
+binfiddle diff original.exe cracked.exe --diff-format simple
+
+# Find exact bytes to patch
+binfiddle diff original.exe cracked.exe --summary
+# Output: 3 difference(s): 3 changed, 0 deleted, 0 added
+```
+
+**Security Analysis:**
+```bash
+# Compare malware variants
+binfiddle diff sample_a.bin sample_b.bin --diff-format side-by-side --diff-width 8
 ```
 
 ---
@@ -626,22 +765,28 @@ binfiddle -i firmware.bin read 0x1000..0x2000 -o section.bin
 
 # Patch a byte
 binfiddle -i firmware.bin write 0x5000 90 -o patched.bin
+
+# Analyze entropy to find encrypted sections
+binfiddle -i firmware.bin analyze entropy --block-size 4096
 ```
 
 ### Binary Comparison
 
 ```bash
-# Simple diff
-diff <(binfiddle -i v1.bin read ..) <(binfiddle -i v2.bin read ..)
+# Compare two firmware versions
+binfiddle diff v1.bin v2.bin --diff-format unified --context 5
 
-# Side-by-side comparison
-paste <(binfiddle -i v1.bin read 0..64) <(binfiddle -i v2.bin read 0..64)
+# Generate a patch file
+binfiddle diff original.bin modified.bin --diff-format patch > changes.patch
 
-# Find patterns in both files
-for f in old.bin new.bin; do
-    echo "=== $f ==="
-    binfiddle -i "$f" search "CONFIG" --input-format ascii --all
-done
+# Quick summary of differences
+binfiddle diff v1.bin v2.bin --summary
+
+# Compare ignoring timestamp at offset 0x10-0x18
+binfiddle diff v1.bin v2.bin --ignore-offsets "0x10..0x18"
+
+# Side-by-side comparison with color
+binfiddle diff v1.bin v2.bin --diff-format side-by-side --color always | less -R
 ```
 
 ### Data Extraction
@@ -656,6 +801,22 @@ binfiddle -i disk.img read 0x1000..0x5000 -o extracted.jpg
 # Search and extract
 OFFSET=$(binfiddle -i data.bin search "PNG" --input-format ascii --offsets-only | head -1)
 binfiddle -i data.bin read ${OFFSET}.. -o image.png
+```
+
+### Security Analysis
+
+```bash
+# Find high-entropy (encrypted/packed) sections
+binfiddle -i suspicious.exe analyze entropy --block-size 4096 --output-format csv > entropy.csv
+
+# Analyze byte distribution
+binfiddle -i malware.bin analyze histogram --output-format json
+
+# Search for shellcode patterns
+binfiddle -i dump.bin search "31 c0 50 68" --all --context 16
+
+# Compare malware samples
+binfiddle diff sample_a.bin sample_b.bin --diff-format side-by-side
 ```
 
 ### Automated Patching
@@ -752,8 +913,10 @@ binfiddle -i file.bin read 50..100
 ### Performance Tips
 
 - For large files (>100MB), operations may be slower due to in-memory processing
+- Search uses parallel processing automatically for files >1MB
 - Use specific ranges instead of `..` for large files
 - Combine operations in scripts to minimize repeated file I/O
+- Use `--output-format csv` or `--output-format json` for analyze when processing with other tools
 
 ### Getting Help
 
@@ -766,6 +929,8 @@ binfiddle read --help
 binfiddle write --help
 binfiddle edit --help
 binfiddle search --help
+binfiddle analyze --help
+binfiddle diff --help
 
 # Check version
 binfiddle --version
@@ -799,6 +964,17 @@ binfiddle --version
 │   binfiddle -i FILE search "DE ?? EF" --input-format mask       │
 │   binfiddle -i FILE search "text" --input-format ascii --count  │
 ├─────────────────────────────────────────────────────────────────┤
+│ ANALYZE                                                         │
+│   binfiddle -i FILE analyze entropy --block-size 4096           │
+│   binfiddle -i FILE analyze histogram --output-format csv       │
+│   binfiddle -i FILE analyze ic --block-size 0                   │
+├─────────────────────────────────────────────────────────────────┤
+│ DIFF                                                            │
+│   binfiddle diff FILE1 FILE2 --diff-format simple               │
+│   binfiddle diff FILE1 FILE2 --diff-format unified --context 5  │
+│   binfiddle diff FILE1 FILE2 --diff-format patch > changes.patch│
+│   binfiddle diff FILE1 FILE2 --ignore-offsets "0x0..0x10"       │
+├─────────────────────────────────────────────────────────────────┤
 │ RANGE SYNTAX                                                    │
 │   10        Single byte at index 10                             │
 │   10..20    Bytes 10-19 (10 bytes)                              │
@@ -827,6 +1003,7 @@ binfiddle --version
 │   --silent        Suppress diff output                          │
 │   --all           Find all matches (search)                     │
 │   --count         Count matches only (search)                   │
-│   --context N     Show N bytes context (search)                 │
+│   --context N     Show N bytes context (search/diff)            │
+│   --color MODE    Color output: always, auto, never             │
 └─────────────────────────────────────────────────────────────────┘
 ```

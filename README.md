@@ -5,11 +5,11 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.4 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.6.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
-Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, and custom exploration of binary data across a variety of formats.
+Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, and custom exploration of binary data across a variety of formats.
 
-Whether you're reverse-engineering firmware, debugging binary protocols, or building custom workflows for binary files, Binfiddle provides essential tools without the bloat.
+Whether you're reverse-engineering firmware, debugging binary protocols, analyzing malware samples, or building custom workflows for binary files, Binfiddle provides essential tools without the bloat.
 
 ## 🌐 Overview
 
@@ -34,16 +34,19 @@ Whether you're reverse-engineering firmware, debugging binary protocols, or buil
 | **Write** | Overwrite bytes at specified positions |
 | **Edit** | Insert, remove, or replace byte sequences |
 | **Search** | Find patterns using exact match, regex, or wildcards |
+| **Analyze** | Statistical analysis: entropy, histograms, Index of Coincidence |
+| **Diff** | Compare binary files with multiple output formats |
 
 ### Key Differentiators
 
 | Feature | Binfiddle | Traditional Tools |
 |---------|-----------|-------------------|
 | **Pipeline Integration** | First-class stdin/stdout support | Often interactive-only |
-| **Unified Operations** | Read/Write/Edit/Search in single tool | Separate tools per operation |
+| **Unified Operations** | Read/Write/Edit/Search/Analyze/Diff in single tool | Separate tools per operation |
 | **Configurable Chunking** | 1-64 bit granularity | Fixed 8-bit (byte) chunks |
 | **Multi-Format I/O** | hex/dec/oct/bin/ascii | Usually hex-only |
 | **Script Friendly** | Deterministic, non-interactive | Often requires user interaction |
+| **Built-in Analysis** | Entropy, histograms, IC analysis | Requires external tools |
 
 ### Design Principles
 
@@ -109,6 +112,12 @@ binfiddle -i file.bin search "7F 45 4C 46" --all
 
 # Insert bytes at position
 binfiddle -i file.bin edit insert 0x200 CAFEBABE -o modified.bin
+
+# Analyze entropy (find encrypted/compressed sections)
+binfiddle -i firmware.bin analyze entropy --block-size 4096
+
+# Compare two binary files
+binfiddle diff original.bin modified.bin --diff-format unified
 
 # Pipeline usage
 cat data.bin | binfiddle read 0..32 | grep "7f 45"
@@ -192,6 +201,81 @@ binfiddle -i file.bin search "CAFE" --all --context 8
 binfiddle -i file.bin search "AA AA" --all --no-overlap
 ```
 
+#### `analyze <TYPE>` — Statistical analysis of binary data
+
+Analyze binary data for entropy, byte distribution, and cryptanalysis metrics.
+
+```bash
+# Entropy analysis (find encrypted/compressed sections)
+binfiddle -i firmware.bin analyze entropy --block-size 4096
+
+# Byte frequency histogram
+binfiddle -i file.bin analyze histogram
+
+# Index of Coincidence (cryptanalysis)
+binfiddle -i file.bin analyze ic --block-size 0
+
+# Output as CSV for graphing
+binfiddle -i file.bin analyze entropy --output-format csv > entropy.csv
+
+# Output as JSON
+binfiddle -i file.bin analyze histogram --output-format json
+```
+
+**Analysis Types:**
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `entropy` | Shannon entropy (0-8 bits/byte) | Find encrypted/compressed sections |
+| `histogram` | Byte frequency distribution | Identify file types, encoding |
+| `ic` | Index of Coincidence | Cryptanalysis, detect encryption |
+
+**Entropy Interpretation:**
+
+| Range | Meaning |
+|-------|---------|
+| 0.0 - 1.0 | Highly repetitive (null bytes, single value) |
+| 1.0 - 4.0 | Text, code, structured data |
+| 4.0 - 6.0 | Mixed content |
+| 6.0 - 7.5 | Compressed data |
+| 7.5 - 8.0 | Encrypted or random data |
+
+#### `diff <FILE1> <FILE2>` — Compare two binary files
+
+Compare binary files byte-by-byte and display differences in various formats.
+
+```bash
+# Simple format (one line per difference)
+binfiddle diff original.bin modified.bin
+
+# Unified format (like text diff, with context)
+binfiddle diff original.bin modified.bin --diff-format unified --context 3
+
+# Side-by-side comparison
+binfiddle diff original.bin modified.bin --diff-format side-by-side
+
+# Generate patch file (for use with binfiddle patch)
+binfiddle diff original.bin modified.bin --diff-format patch > changes.patch
+
+# Ignore specific ranges (e.g., timestamps)
+binfiddle diff v1.bin v2.bin --ignore-offsets "0x0..0x10,0x100..0x110"
+
+# With color output
+binfiddle diff file1.bin file2.bin --color always
+
+# Show summary statistics
+binfiddle diff file1.bin file2.bin --summary
+```
+
+**Diff Output Formats:**
+
+| Format | Description |
+|--------|-------------|
+| `simple` | One line per difference: `Offset: 0xXX != 0xYY` |
+| `unified` | Unified diff with context lines and hex dump |
+| `side-by-side` | Two-column parallel comparison |
+| `patch` | Machine-readable format for `binfiddle patch` |
+
 ### Range Syntax
 
 | Syntax | Meaning |
@@ -229,19 +313,38 @@ binfiddle -i firmware.bin read 0x1000..0x1100 --format ascii
 # Patch version string
 binfiddle -i firmware.bin edit replace 0x200..0x210 "v2.0.0" \
     --input-format ascii -o patched.bin
+
+# Find encrypted sections via entropy
+binfiddle -i firmware.bin analyze entropy --block-size 4096
 ```
 
 ### Binary Diffing
 
 ```bash
-# Compare two files byte-by-byte
-diff <(binfiddle -i v1.bin read ..) <(binfiddle -i v2.bin read ..)
+# Compare two firmware versions
+binfiddle diff v1.bin v2.bin --diff-format unified --context 5
 
-# Find specific patterns in both
-for f in v1.bin v2.bin; do
-    echo "=== $f ==="
-    binfiddle -i "$f" search "DEADBEEF" --all --offsets-only
-done
+# Generate a patch file
+binfiddle diff original.bin modified.bin --diff-format patch > changes.patch
+
+# Quick comparison with summary
+binfiddle diff v1.bin v2.bin --summary
+
+# Compare ignoring timestamps at offset 0x10
+binfiddle diff v1.bin v2.bin --ignore-offsets "0x10..0x18"
+```
+
+### Security Analysis
+
+```bash
+# Check for high-entropy (encrypted/packed) sections
+binfiddle -i suspicious.exe analyze entropy --block-size 4096 --output-format csv > entropy.csv
+
+# Analyze byte distribution for anomalies
+binfiddle -i malware.bin analyze histogram --output-format json
+
+# Search for shellcode patterns
+binfiddle -i dump.bin search "31 c0 50 68" --all --context 16
 ```
 
 ### Data Recovery
@@ -296,7 +399,9 @@ src/
 │   ├── read.rs      # Read command
 │   ├── write.rs     # Write command
 │   ├── edit.rs      # Edit command (insert/remove/replace)
-│   └── search.rs    # Search command
+│   ├── search.rs    # Search command (exact/regex/mask/parallel)
+│   ├── analyze.rs   # Analyze command (entropy/histogram/IC)
+│   └── diff.rs      # Diff command (simple/unified/side-by-side/patch)
 └── utils/
     ├── mod.rs       # Utility exports
     ├── parsing.rs   # Range and format parsing
@@ -359,13 +464,18 @@ cargo build --release
 
 See [devplan.md](docs/devplan.md) for detailed feature plans.
 
+### Completed Features
+
+- ✅ **Read/Write/Edit** — Core binary manipulation
+- ✅ **Search** — Exact, regex, and wildcard pattern matching with parallel processing
+- ✅ **Analyze** — Entropy, histogram, and Index of Coincidence analysis
+- ✅ **Diff** — Binary comparison with multiple output formats
+
 ### Planned Features
 
+- **Patch** — Apply binary patches from diff output
 - **Convert** — Encoding and line ending conversion
-- **Diff** — Binary diffing with multiple output formats
-- **Patch** — Apply binary patches
 - **Struct** — Structure-aware parsing with templates
-- **Analyze** — Entropy and statistical analysis
 - **Memory** — Live process memory inspection
 
 ## License
@@ -377,6 +487,7 @@ This project is licensed under the BSD-3-Clause License. See [LICENSE](LICENSE) 
 - Built with [Rust](https://www.rust-lang.org/)
 - CLI parsing by [clap](https://github.com/clap-rs/clap)
 - Pattern matching by [memchr](https://github.com/BurntSushi/memchr) and [regex](https://github.com/rust-lang/regex)
+- Parallel processing by [rayon](https://github.com/rayon-rs/rayon)
 
 ---
 
@@ -386,4 +497,7 @@ This project is licensed under the BSD-3-Clause License. See [LICENSE](LICENSE) 
 # Extract .text section using radare2 section info
 RANGE=$(rabin2 -S binary | awk '/\.text/{print $2".."$3}')
 binfiddle -i binary read "$RANGE" -o text.bin
+
+# Analyze entropy of extracted section
+binfiddle -i text.bin analyze entropy --block-size 256
 ```
