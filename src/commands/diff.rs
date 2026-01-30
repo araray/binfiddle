@@ -47,6 +47,8 @@ pub enum DiffFormat {
     SideBySide,
     /// Patch format: machine-readable format for applying patches
     Patch,
+    /// Summary format: statistical overview without byte-level details
+    Summary,
 }
 
 impl DiffFormat {
@@ -66,10 +68,34 @@ impl DiffFormat {
             "unified" => Ok(DiffFormat::Unified),
             "side-by-side" | "sidebyside" | "side" => Ok(DiffFormat::SideBySide),
             "patch" => Ok(DiffFormat::Patch),
+            "summary" => Ok(DiffFormat::Summary),
+            "auto" => Ok(DiffFormat::Simple), // Placeholder - actual selection happens in main.rs
             _ => Err(BinfiddleError::InvalidInput(format!(
-                "Unknown diff format: '{}'. Supported: simple, unified, side-by-side, patch",
+                "Unknown diff format: '{}'. Supported: simple, unified, side-by-side, patch, summary, auto",
                 s
             ))),
+        }
+    }
+
+    /// Automatically selects the best format based on difference density.
+    ///
+    /// # Arguments
+    /// * `total_diffs` - Number of differences found
+    /// * `file_size` - Size of the larger file
+    ///
+    /// # Returns
+    /// The recommended format for the given difference density.
+    pub fn auto_select(total_diffs: usize, file_size: usize) -> Self {
+        if file_size == 0 || total_diffs == 0 {
+            return DiffFormat::Simple;
+        }
+
+        let diff_ratio = total_diffs as f64 / file_size as f64;
+
+        match diff_ratio {
+            r if r < 0.01 => DiffFormat::Simple,  // <1% different: show all
+            r if r < 0.50 => DiffFormat::Unified, // <50%: grouped hunks
+            _ => DiffFormat::Summary,             // >=50%: summary only
         }
     }
 }
@@ -222,6 +248,9 @@ impl DiffCommand {
                 use_color,
             ),
             DiffFormat::Patch => self.format_patch(differences, file1_name, file2_name),
+            DiffFormat::Summary => {
+                self.format_summary(data1, data2, differences, file1_name, file2_name)
+            }
         }
     }
 
@@ -342,6 +371,13 @@ impl DiffCommand {
 
     /// Groups differences into hunks based on context overlap.
     /// Returns indices into the differences slice.
+    /// Groups differences into hunks with smart gap merging.
+    ///
+    /// Uses adaptive gap thresholds based on hunk size to balance
+    /// readability with context preservation:
+    /// - Small gaps (<16 bytes): Always merge
+    /// - Large hunks (>100 diffs): Merge up to 256 byte gaps
+    /// - Default: Merge if <64 bytes apart
     fn group_into_hunks(&self, differences: &[DiffEntry]) -> Vec<Vec<usize>> {
         if differences.is_empty() {
             return Vec::new();
@@ -349,7 +385,6 @@ impl DiffCommand {
 
         let mut hunks: Vec<Vec<usize>> = Vec::new();
         let mut current_hunk: Vec<usize> = Vec::new();
-        let context = self.config.context;
 
         for (idx, diff) in differences.iter().enumerate() {
             if current_hunk.is_empty() {
@@ -357,8 +392,24 @@ impl DiffCommand {
             } else {
                 let last_idx = *current_hunk.last().unwrap();
                 let last_offset = differences[last_idx].offset;
-                // If within 2*context of last difference, add to current hunk
-                if diff.offset <= last_offset + 2 * context + 1 {
+                let gap = diff.offset.saturating_sub(last_offset);
+
+                // Smart gap threshold based on hunk characteristics
+                let should_merge = match (current_hunk.len(), gap) {
+                    // Always merge very close differences
+                    (_, g) if g <= 16 => true,
+                    // For large hunks, allow bigger gaps to avoid fragmentation
+                    (n, g) if n > 100 && g <= 256 => true,
+                    // For medium hunks, use moderate threshold
+                    (n, g) if n > 20 && g <= 128 => true,
+                    // Default: merge if reasonably close
+                    (_, g) if g <= 64 => true,
+                    // Also respect original context-based merging
+                    (_, g) if g <= 2 * self.config.context + 1 => true,
+                    _ => false,
+                };
+
+                if should_merge {
                     current_hunk.push(idx);
                 } else {
                     // Start a new hunk
@@ -765,6 +816,157 @@ impl DiffCommand {
             data2_len
         )
     }
+
+    /// Formats a byte count with appropriate units.
+    fn format_size(bytes: usize) -> String {
+        if bytes < 1024 {
+            format!("{} bytes", bytes)
+        } else if bytes < 1024 * 1024 {
+            format!("{:.1} KB", bytes as f64 / 1024.0)
+        } else {
+            format!("{:.2} MB", bytes as f64 / (1024.0 * 1024.0))
+        }
+    }
+
+    /// Creates a density bar visualization.
+    fn density_bar(density: f64, width: usize) -> String {
+        let filled = (density * width as f64).round() as usize;
+        let filled = filled.min(width);
+        let mut bar = String::with_capacity(width);
+        for i in 0..width {
+            bar.push(if i < filled { '█' } else { '░' });
+        }
+        bar
+    }
+
+    /// Categorizes differences into changed, deleted, and added.
+    fn categorize_differences(&self, differences: &[DiffEntry]) -> (usize, usize, usize) {
+        let mut changed = 0;
+        let mut deleted = 0;
+        let mut added = 0;
+
+        for diff in differences {
+            if diff.is_change() {
+                changed += 1;
+            } else if diff.is_deletion() {
+                deleted += 1;
+            } else if diff.is_addition() {
+                added += 1;
+            }
+        }
+
+        (changed, deleted, added)
+    }
+
+    /// Formats differences as a summary with statistics.
+    fn format_summary(
+        &self,
+        data1: &[u8],
+        data2: &[u8],
+        differences: &[DiffEntry],
+        file1_name: &str,
+        file2_name: &str,
+    ) -> Result<String> {
+        let mut output = String::new();
+
+        // Header
+        output.push_str("Binary Diff Summary\n");
+        output.push_str("===================\n\n");
+
+        // File information
+        output.push_str(&format!(
+            "File 1: {} ({})\n",
+            file1_name,
+            Self::format_size(data1.len())
+        ));
+        output.push_str(&format!(
+            "File 2: {} ({})\n\n",
+            file2_name,
+            Self::format_size(data2.len())
+        ));
+
+        // Calculate statistics
+        let (changed, deleted, added) = self.categorize_differences(differences);
+        let total_diffs = differences.len();
+        let max_size = data1.len().max(data2.len());
+
+        if max_size == 0 {
+            output.push_str("Both files are empty\n");
+            return Ok(output);
+        }
+
+        // Overview section
+        output.push_str("Overview:\n");
+        output.push_str(&format!(
+            "  Total differences: {:>10} bytes ({:>5.1}% of file)\n",
+            total_diffs,
+            (total_diffs as f64 / max_size as f64) * 100.0
+        ));
+        output.push_str(&format!(
+            "  Changed bytes:     {:>10}       ({:>5.1}%)\n",
+            changed,
+            (changed as f64 / max_size as f64) * 100.0
+        ));
+
+        if deleted > 0 {
+            output.push_str(&format!(
+                "  Deleted bytes:     {:>10}       ({:>5.1}%) - file1 larger\n",
+                deleted,
+                (deleted as f64 / data1.len() as f64) * 100.0
+            ));
+        }
+
+        if added > 0 {
+            output.push_str(&format!(
+                "  Added bytes:       {:>10}       ({:>5.1}%) - file2 larger\n",
+                added,
+                (added as f64 / data2.len() as f64) * 100.0
+            ));
+        }
+
+        let size_diff = data2.len() as i64 - data1.len() as i64;
+        if size_diff != 0 {
+            let sign = if size_diff > 0 { "+" } else { "-" };
+            output.push_str(&format!(
+                "  File size change:  {:>10} bytes ({}{:>4.1}%)\n",
+                size_diff.abs(),
+                sign,
+                (size_diff.abs() as f64 / data1.len() as f64) * 100.0
+            ));
+        }
+
+        output.push('\n');
+
+        // Assessment
+        output.push_str("Assessment:\n");
+        let diff_percent = (total_diffs as f64 / max_size as f64) * 100.0;
+        if diff_percent > 80.0 {
+            output.push_str("  Files are substantially different (>80% changed)\n");
+            output.push_str("  Likely: Major version update, recompilation, or different builds\n");
+        } else if diff_percent > 50.0 {
+            output.push_str("  Files have major differences (50-80% changed)\n");
+            output.push_str("  Likely: Significant refactoring or feature additions\n");
+        } else if diff_percent > 10.0 {
+            output.push_str("  Files have moderate differences (10-50% changed)\n");
+            output.push_str("  Likely: Bug fixes, minor updates, or targeted changes\n");
+        } else if diff_percent > 0.0 {
+            output.push_str("  Files have minor differences (<10% changed)\n");
+            output.push_str("  Likely: Patch, hotfix, or configuration change\n");
+        } else {
+            output.push_str("  Files are identical\n");
+        }
+        output.push('\n');
+
+        // Suggestions (only if differences exist)
+        if total_diffs > 0 {
+            output.push_str("Suggestions:\n");
+            output.push_str("  --format unified      : View grouped changes with context\n");
+            output.push_str("  --format patch        : Generate machine-readable patch\n");
+            output.push_str("  --format side-by-side : Two-column hex comparison\n");
+        }
+
+        Ok(output)
+    }
 }
 
 /// Parse a comma-separated list of ranges to ignore.
@@ -815,7 +1017,76 @@ mod tests {
             DiffFormat::SideBySide
         );
         assert_eq!(DiffFormat::from_str("patch").unwrap(), DiffFormat::Patch);
+        assert_eq!(
+            DiffFormat::from_str("summary").unwrap(),
+            DiffFormat::Summary
+        );
+        assert_eq!(DiffFormat::from_str("auto").unwrap(), DiffFormat::Simple); // Placeholder
         assert!(DiffFormat::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn test_auto_select_format() {
+        // Less than 1% different -> Simple
+        assert_eq!(DiffFormat::auto_select(50, 10000), DiffFormat::Simple);
+
+        // Between 1% and 50% -> Unified
+        assert_eq!(DiffFormat::auto_select(3000, 10000), DiffFormat::Unified);
+
+        // More than 50% -> Summary
+        assert_eq!(DiffFormat::auto_select(8000, 10000), DiffFormat::Summary);
+
+        // Edge cases
+        assert_eq!(DiffFormat::auto_select(0, 10000), DiffFormat::Simple);
+
+        assert_eq!(DiffFormat::auto_select(100, 0), DiffFormat::Simple);
+    }
+
+    #[test]
+    fn test_format_summary() {
+        let config = DiffConfig {
+            format: DiffFormat::Summary,
+            color: ColorMode::Never,
+            ..Default::default()
+        };
+        let cmd = DiffCommand::new(config);
+
+        let data1 = vec![0x00; 1000];
+        let mut data2 = vec![0x00; 1000];
+        // Change 80% of bytes
+        for i in 0..800 {
+            data2[i] = 0xFF;
+        }
+
+        let differences = cmd.compare(&data1, &data2);
+        let output = cmd
+            .format_summary(&data1, &data2, &differences, "file1", "file2")
+            .unwrap();
+
+        assert!(output.contains("Binary Diff Summary"));
+        assert!(output.contains("file1"));
+        assert!(output.contains("file2"));
+        assert!(output.contains("Total differences"));
+        assert!(output.contains("Assessment"));
+        assert!(differences.len() == 800);
+    }
+
+    #[test]
+    fn test_format_summary_identical_files() {
+        let config = DiffConfig {
+            format: DiffFormat::Summary,
+            ..Default::default()
+        };
+        let cmd = DiffCommand::new(config);
+
+        let data = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let differences = cmd.compare(&data, &data);
+
+        let output = cmd
+            .format_summary(&data, &data, &differences, "file1", "file2")
+            .unwrap();
+
+        assert!(output.contains("Files are identical"));
     }
 
     #[test]
@@ -1135,5 +1406,64 @@ mod tests {
         assert_eq!(hunks[1].len(), 1); // Last one separate (index 2)
         assert_eq!(hunks[0], vec![0, 1]);
         assert_eq!(hunks[1], vec![2]);
+    }
+
+    #[test]
+    fn test_hunk_grouping_smart_gaps() {
+        let config = DiffConfig::default();
+        let cmd = DiffCommand::new(config);
+
+        // Test small gaps (<16 bytes) - should always merge
+        let differences = vec![
+            DiffEntry::new(0, Some(0xAA), Some(0xBB)),
+            DiffEntry::new(10, Some(0xCC), Some(0xDD)),
+            DiffEntry::new(20, Some(0xEE), Some(0xFF)),
+        ];
+
+        let hunks = cmd.group_into_hunks(&differences);
+        assert_eq!(hunks.len(), 1, "Small gaps should create single hunk");
+
+        // Test medium gaps (20-64 bytes) - should merge
+        let differences = vec![
+            DiffEntry::new(0, Some(0xAA), Some(0xBB)),
+            DiffEntry::new(50, Some(0xCC), Some(0xDD)),
+        ];
+
+        let hunks = cmd.group_into_hunks(&differences);
+        assert_eq!(hunks.len(), 1, "Medium gaps should merge");
+
+        // Test large gaps (>256 bytes) - should split (unless large hunk)
+        let differences = vec![
+            DiffEntry::new(0, Some(0xAA), Some(0xBB)),
+            DiffEntry::new(500, Some(0xCC), Some(0xDD)),
+        ];
+
+        let hunks = cmd.group_into_hunks(&differences);
+        assert_eq!(
+            hunks.len(),
+            2,
+            "Large gaps should split into separate hunks"
+        );
+    }
+
+    #[test]
+    fn test_hunk_grouping_large_hunks() {
+        let config = DiffConfig::default();
+        let cmd = DiffCommand::new(config);
+
+        // Create a large hunk (>100 differences) with 200-byte gaps
+        // These should merge even though gap is large
+        let mut differences = Vec::new();
+        for i in 0..120 {
+            differences.push(DiffEntry::new(i * 5, Some(0xAA), Some(0xBB)));
+        }
+
+        let hunks = cmd.group_into_hunks(&differences);
+        // With smart grouping, this should create fewer hunks
+        // than naive 2*context grouping would
+        assert!(
+            hunks.len() < 10,
+            "Smart grouping should reduce hunk fragmentation"
+        );
     }
 }

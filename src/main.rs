@@ -135,8 +135,8 @@ enum Commands {
         /// Second file to compare
         file2: String,
 
-        /// Output format: simple, unified, side-by-side, patch
-        #[arg(long, default_value = "simple", value_parser = ["simple", "unified", "side-by-side", "sidebyside", "patch"])]
+        /// Output format: simple, unified, side-by-side, patch, summary, auto
+        #[arg(long, default_value = "auto", value_parser = ["simple", "unified", "side-by-side", "sidebyside", "patch", "summary", "auto"])]
         diff_format: String,
 
         /// Number of context bytes around differences (for unified format)
@@ -381,9 +381,6 @@ fn main() -> Result<()> {
             let data1 = std::fs::read(file1)?;
             let data2 = std::fs::read(file2)?;
 
-            // Parse diff format
-            let format = binfiddle::DiffFormat::from_str(diff_format)?;
-
             // Determine color mode
             let color_mode = match color.as_str() {
                 "always" => binfiddle::ColorMode::Always,
@@ -394,20 +391,57 @@ fn main() -> Result<()> {
             // Parse ignore ranges
             let ignore_ranges = binfiddle::parse_ignore_ranges(ignore_offsets)?;
 
-            // Build diff configuration
-            let config = binfiddle::DiffConfig {
-                format,
+            // Create diff command for comparison (with placeholder format)
+            let temp_config = binfiddle::DiffConfig {
+                format: binfiddle::DiffFormat::Simple,
                 context: *context,
                 color: color_mode,
                 ignore_ranges,
                 width: *diff_width,
             };
+            let diff_cmd = binfiddle::DiffCommand::new(temp_config);
 
-            // Create and execute diff command
-            let diff_cmd = binfiddle::DiffCommand::new(config);
-
-            // Compare files
+            // Compare files FIRST to enable auto-selection
             let differences = diff_cmd.compare(&data1, &data2);
+
+            // Auto-select format if requested
+            let format = if diff_format == "auto" {
+                let max_size = data1.len().max(data2.len());
+                binfiddle::DiffFormat::auto_select(differences.len(), max_size)
+            } else {
+                binfiddle::DiffFormat::from_str(diff_format)?
+            };
+
+            // Warn about large diffs BEFORE outputting
+            if differences.len() > 10000 && !cli.silent {
+                eprintln!();
+                eprintln!(
+                    "⚠️  Large diff detected: {} differences ({:.1}% of file)",
+                    differences.len(),
+                    (differences.len() as f64 / data1.len().max(data2.len()) as f64) * 100.0
+                );
+
+                // Suggest better format if they chose simple for a large diff
+                if matches!(format, binfiddle::DiffFormat::Simple) {
+                    eprintln!("   Output will be very large. Consider:");
+                    eprintln!("   - Use --format summary for overview");
+                    eprintln!("   - Use --format unified for grouped view");
+                    eprintln!();
+                } else if matches!(format, binfiddle::DiffFormat::Summary) {
+                    eprintln!("   Showing summary. Use --format unified for details.");
+                    eprintln!();
+                }
+            }
+
+            // Rebuild config with correct format
+            let config = binfiddle::DiffConfig {
+                format,
+                context: *context,
+                color: color_mode,
+                ignore_ranges: binfiddle::parse_ignore_ranges(ignore_offsets)?,
+                width: *diff_width,
+            };
+            let diff_cmd = binfiddle::DiffCommand::new(config);
 
             // Report results
             if differences.is_empty() {
