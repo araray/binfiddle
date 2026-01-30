@@ -195,6 +195,7 @@ fn main() -> Result<()> {
             | Commands::Edit { .. }
             | Commands::Search { .. }
             | Commands::Convert { .. }
+            | Commands::Analyze { .. }
     );
 
     // Load data only for commands that need it
