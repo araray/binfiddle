@@ -164,15 +164,30 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Load data
-    let mut binary_data = match cli.input.as_deref() {
-        Some("-") | None => {
-            let mut data = Vec::new();
-            io::stdin().read_to_end(&mut data)?;
-            BinaryData::new(BinarySource::RawData(data), cli.chunk_size, cli.width)?
-            // Wrapped in BinarySource
+    // Check if this command needs binary_data loaded
+    let needs_input = matches!(
+        cli.command,
+        Commands::Read { .. }
+            | Commands::Write { .. }
+            | Commands::Edit { .. }
+            | Commands::Search { .. }
+    );
+
+    // Load data only for commands that need it
+    let mut binary_data = if needs_input {
+        match cli.input.as_deref() {
+            Some("-") | None => {
+                let mut data = Vec::new();
+                io::stdin().read_to_end(&mut data)?;
+                BinaryData::new(BinarySource::RawData(data), cli.chunk_size, cli.width)?
+            }
+            Some(path) => {
+                BinaryData::new(BinarySource::File(path.into()), cli.chunk_size, cli.width)?
+            }
         }
-        Some(path) => BinaryData::new(BinarySource::File(path.into()), cli.chunk_size, cli.width)?,
+    } else {
+        // Create a dummy BinaryData for commands that don't need it
+        BinaryData::new(BinarySource::RawData(Vec::new()), cli.chunk_size, cli.width)?
     };
 
     // Execute command
