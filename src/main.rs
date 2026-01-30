@@ -159,6 +159,29 @@ enum Commands {
         #[arg(long)]
         summary: bool,
     },
+
+    /// Convert text encoding and line endings
+    Convert {
+        /// Source encoding (utf-8, utf-16le, utf-16be, latin-1, windows-1252)
+        #[arg(long, default_value = "utf-8")]
+        from: String,
+
+        /// Target encoding (utf-8, utf-16le, utf-16be, latin-1, windows-1252)
+        #[arg(long, default_value = "utf-8")]
+        to: String,
+
+        /// Line ending conversion (unix, windows, mac, keep)
+        #[arg(long, default_value = "keep")]
+        newlines: String,
+
+        /// BOM handling (add, remove, keep)
+        #[arg(long, default_value = "keep")]
+        bom: String,
+
+        /// Error handling (strict, replace, ignore)
+        #[arg(long, default_value = "replace")]
+        on_error: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -171,6 +194,7 @@ fn main() -> Result<()> {
             | Commands::Write { .. }
             | Commands::Edit { .. }
             | Commands::Search { .. }
+            | Commands::Convert { .. }
     );
 
     // Load data only for commands that need it
@@ -462,6 +486,63 @@ fn main() -> Result<()> {
             }
 
             false // Diff doesn't modify data
+        }
+        Commands::Convert {
+            from,
+            to,
+            newlines,
+            bom,
+            on_error,
+        } => {
+            // Parse configuration options
+            let from_encoding = binfiddle::parse_encoding(from)?;
+            let to_encoding = binfiddle::parse_encoding(to)?;
+            let newline_mode = binfiddle::NewlineMode::from_str(newlines)?;
+            let bom_mode = binfiddle::BomMode::from_str(bom)?;
+            let error_mode = binfiddle::ErrorMode::from_str(on_error)?;
+
+            // Build configuration
+            let config = binfiddle::ConvertConfig {
+                from_encoding,
+                to_encoding,
+                newlines: newline_mode,
+                bom: bom_mode,
+                on_error: error_mode,
+            };
+
+            // Create and execute convert command
+            let convert_cmd = binfiddle::ConvertCommand::new(config);
+
+            // Read all data for conversion
+            let chunk = binary_data.read_range(0, None)?;
+            let bytes = chunk.get_bytes();
+
+            // Perform conversion
+            let converted = convert_cmd.convert(bytes)?;
+
+            // Output the converted data
+            // Convert always produces output (doesn't modify in-place via BinaryData)
+            if let Some(output_path) = &cli.output {
+                if output_path == "-" {
+                    io::stdout().write_all(&converted)?;
+                } else {
+                    std::fs::write(output_path, &converted)?;
+                }
+            } else if cli.in_file {
+                if let Some(input_path) = &cli.input {
+                    std::fs::write(input_path, &converted)?;
+                }
+            } else {
+                // Default: write to stdout
+                io::stdout().write_all(&converted)?;
+            }
+
+            if !cli.silent && cli.output.is_none() && !cli.in_file {
+                // If writing to stdout without explicit --output, add a note to stderr
+                // (only if not silent)
+            }
+
+            false // Convert handles its own output, don't use standard mechanism
         }
     };
 

@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.6.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.8.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
 Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, and custom exploration of binary data across a variety of formats.
 
@@ -36,6 +36,7 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 | **Search** | Find patterns using exact match, regex, or wildcards |
 | **Analyze** | Statistical analysis: entropy, histograms, Index of Coincidence |
 | **Diff** | Compare binary files with multiple output formats |
+| **Convert** | Text encoding conversion and line ending normalization |
 
 ### Key Differentiators
 
@@ -275,6 +276,42 @@ binfiddle diff file1.bin file2.bin --summary
 | `unified` | Unified diff with context lines and hex dump |
 | `side-by-side` | Two-column parallel comparison |
 | `patch` | Machine-readable format for `binfiddle patch` |
+
+#### `convert` — Text encoding and line ending conversion
+
+Convert text encodings and normalize line endings for embedded text data.
+
+```bash
+# Convert UTF-8 to UTF-16LE
+binfiddle -i document.txt convert --to utf-16le -o document_utf16.txt
+
+# Convert UTF-16LE to UTF-8
+binfiddle -i windows_file.txt convert --from utf-16le --to utf-8 -o unix_file.txt
+
+# Convert Windows line endings (CRLF) to Unix (LF)
+binfiddle -i script.bat convert --newlines unix -o script.sh
+
+# Add UTF-8 BOM
+binfiddle -i file.txt convert --bom add -o file_with_bom.txt
+
+# Remove BOM from a file
+binfiddle -i file_with_bom.txt convert --bom remove -o file_no_bom.txt
+
+# Full conversion: UTF-16LE → UTF-8, Unix newlines, no BOM
+binfiddle -i windows_doc.txt convert \
+    --from utf-16le --to utf-8 --newlines unix --bom remove \
+    -o unix_doc.txt
+```
+
+**Convert Options:**
+
+| Option | Values | Default | Description |
+|--------|--------|---------|-------------|
+| `--from` | utf-8, utf-16le, utf-16be, latin-1, windows-1252 | utf-8 | Source encoding |
+| `--to` | utf-8, utf-16le, utf-16be, latin-1, windows-1252 | utf-8 | Target encoding |
+| `--newlines` | unix, windows, mac, keep | keep | Line ending conversion |
+| `--bom` | add, remove, keep | keep | BOM handling |
+| `--on-error` | strict, replace, ignore | replace | Error handling mode |
 
 ### Range Syntax
 

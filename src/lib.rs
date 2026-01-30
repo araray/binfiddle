@@ -6,8 +6,9 @@ pub mod utils;
 use std::io::Read;
 
 pub use commands::{
-    parse_ignore_ranges, AnalysisType, AnalyzeCommand, AnalyzeConfig, AnalyzeOutputFormat, Command,
-    DiffCommand, DiffConfig, DiffEntry, DiffFormat, EditCommand, EditOperation, ReadCommand,
+    parse_encoding, parse_ignore_ranges, AnalysisType, AnalyzeCommand, AnalyzeConfig,
+    AnalyzeOutputFormat, BomMode, Command, ConvertCommand, ConvertConfig, DiffCommand, DiffConfig,
+    DiffEntry, DiffFormat, EditCommand, EditOperation, ErrorMode, NewlineMode, ReadCommand,
     SearchCommand, SearchConfig, WriteCommand,
 };
 pub use error::{BinfiddleError, Result};

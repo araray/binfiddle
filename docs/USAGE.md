@@ -12,6 +12,7 @@ This guide provides detailed usage instructions, examples, and common workflows 
   - [Searching Data](#searching-data)
   - [Analyzing Data](#analyzing-data)
   - [Comparing Files (Diff)](#comparing-files-diff)
+  - [Converting Encodings](#converting-encodings)
 - [Input and Output](#input-and-output)
   - [File I/O](#file-io)
   - [Pipeline Usage](#pipeline-usage)
@@ -42,6 +43,7 @@ binfiddle read --help         # Command-specific help
 binfiddle search --help       # Search command help
 binfiddle analyze --help      # Analyze command help
 binfiddle diff --help         # Diff command help
+binfiddle convert --help      # Convert command help
 binfiddle --version           # Version information
 ```
 
@@ -556,6 +558,123 @@ binfiddle diff original.exe cracked.exe --summary
 ```bash
 # Compare malware variants
 binfiddle diff sample_a.bin sample_b.bin --diff-format side-by-side --diff-width 8
+```
+
+### Converting Encodings
+
+The `convert` command transforms text encoding and line endings. It's essential for working with configuration files, string tables, or cross-platform text data embedded in binaries.
+
+#### Syntax
+
+```bash
+binfiddle -i <FILE> convert [OPTIONS]
+```
+
+#### Options
+
+| Option | Values | Default | Description |
+|--------|--------|---------|-------------|
+| `--from` | utf-8, utf-16le, utf-16be, latin-1, windows-1252 | utf-8 | Source encoding |
+| `--to` | utf-8, utf-16le, utf-16be, latin-1, windows-1252 | utf-8 | Target encoding |
+| `--newlines` | unix, windows, mac, keep | keep | Line ending conversion |
+| `--bom` | add, remove, keep | keep | BOM handling |
+| `--on-error` | strict, replace, ignore | replace | Error handling mode |
+
+#### Encoding Conversion
+
+```bash
+# Convert UTF-8 to UTF-16LE
+binfiddle -i document.txt convert --to utf-16le -o document_utf16.txt
+
+# Convert UTF-16LE file (from Windows) to UTF-8
+binfiddle -i windows_file.txt convert --from utf-16le --to utf-8 -o unix_file.txt
+
+# Round-trip test (should produce identical output)
+echo -n "Hello 世界" | binfiddle convert --to utf-16le | \
+    binfiddle convert --from utf-16le --to utf-8
+# Output: Hello 世界
+
+# Convert Windows-1252 (extended ASCII) to UTF-8
+binfiddle -i legacy.txt convert --from windows-1252 --to utf-8 -o modern.txt
+```
+
+#### Line Ending Conversion
+
+```bash
+# Convert Windows line endings (CRLF) to Unix (LF)
+binfiddle -i script.bat convert --newlines unix -o script.sh
+
+# Convert Unix line endings to Windows
+binfiddle -i config.conf convert --newlines windows -o config_win.conf
+
+# Check line endings by viewing as hex
+binfiddle -i file.txt read .. --format hex | grep -E "0d 0a|0a"
+# 0d 0a = CRLF (Windows)
+# 0a alone = LF (Unix)
+```
+
+#### BOM Handling
+
+```bash
+# Add UTF-8 BOM (some Windows apps require this)
+binfiddle -i document.txt convert --bom add -o document_bom.txt
+
+# Remove BOM from a file
+binfiddle -i file_with_bom.txt convert --bom remove -o file_no_bom.txt
+
+# Check for BOM presence
+binfiddle -i file.txt read 0..3 --format hex
+# Output: ef bb bf (if UTF-8 BOM is present)
+```
+
+#### Error Handling
+
+```bash
+# Strict mode: fail on any invalid sequences
+binfiddle -i mixed.bin convert --from utf-8 --on-error strict
+
+# Replace mode (default): replace invalid chars with U+FFFD (�)
+binfiddle -i mixed.bin convert --from utf-8 --on-error replace
+
+# Ignore mode: skip invalid sequences (may lose data)
+binfiddle -i mixed.bin convert --from utf-8 --on-error ignore
+```
+
+#### Combined Operations
+
+```bash
+# Full conversion: UTF-16LE with BOM → UTF-8, Unix newlines, no BOM
+binfiddle -i windows_doc.txt convert \
+    --from utf-16le --to utf-8 \
+    --newlines unix --bom remove \
+    -o unix_doc.txt
+
+# Prepare a file for cross-platform use
+binfiddle -i local.txt convert \
+    --newlines unix --bom remove \
+    -o portable.txt
+```
+
+#### Practical Use Cases
+
+**Converting Legacy Files:**
+```bash
+# Process a batch of legacy Windows-1252 files
+for f in *.txt; do
+    binfiddle -i "$f" convert --from windows-1252 --to utf-8 -o "utf8_$f"
+done
+```
+
+**Preparing Files for Unix Systems:**
+```bash
+# Convert all text files to Unix format
+binfiddle -i config.ini convert --newlines unix --bom remove -o config_unix.ini
+```
+
+**Creating UTF-16 Files for Windows APIs:**
+```bash
+# Some Windows APIs expect UTF-16LE with BOM
+binfiddle -i data.txt convert --to utf-16le --bom add -o data_win.txt
 ```
 
 ---

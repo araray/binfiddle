@@ -1,7 +1,7 @@
 
 [package]
 name = "binfiddle"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 authors = ["Araray Velho <araray@gmail.com"]
 description = "Binfiddle is a developer-focused binary manipulation toolkit designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, and custom exploration of binary data across a variety of formats. Whether you're reverse-engineering, debugging, or building custom workflows for binary files, Binfiddle provides the essential tools without the bloat."
@@ -18,16 +18,17 @@ anyhow = "1.0"
 thiserror = "2.0.18"
 hex = "0.4"
 byteorder = "1.5.0"
+encoding_rs = "0.8"
 memmap2 = "0.9.9"
 regex = "1.12.2"
 memchr = "2.7"
 termcolor = "1.4"
 atty = "0.2"
-rayon = "1.11.0"
+rayon = "1.11"
 
 [dev-dependencies]
-tempfile = "3.24.0"
-criterion = { version = "0.8.1", features = ["html_reports"] }
+tempfile = "3.24"
+criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bin]]
 name = "binfiddle"
