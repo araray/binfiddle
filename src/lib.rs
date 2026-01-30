@@ -89,7 +89,7 @@ impl BinaryData {
             BinarySource::RawData(data) => data,
         };
 
-        if chunk_size == 0 || chunk_size > data.len() * 8 {
+        if chunk_size == 0 || (data.len() > 0 && chunk_size > data.len() * 8) {
             return Err(BinfiddleError::InvalidChunkSize(chunk_size));
         }
 
@@ -163,7 +163,7 @@ impl BinaryData {
     }
 
     pub fn set_chunk_size(&mut self, chunk_size: usize) -> Result<()> {
-        if chunk_size == 0 || chunk_size > self.data.len() * 8 {
+        if chunk_size == 0 || (self.data.len() > 0 && chunk_size > self.data.len() * 8) {
             return Err(BinfiddleError::InvalidChunkSize(chunk_size));
         }
         self.chunk_size = chunk_size;
@@ -176,5 +176,127 @@ impl BinaryData {
 
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_binarydata_with_default_chunk_size() {
+        // This is the exact scenario that was failing
+        let result = BinaryData::new(BinarySource::RawData(Vec::new()), 8, 16);
+        assert!(
+            result.is_ok(),
+            "Empty BinaryData with chunk_size=8 should be valid"
+        );
+
+        let data = result.unwrap();
+        assert_eq!(data.len(), 0);
+        assert_eq!(data.get_chunk_size(), 8);
+        assert_eq!(data.get_width(), 16);
+    }
+
+    #[test]
+    fn test_empty_binarydata_with_various_chunk_sizes() {
+        // Test that empty data works with various chunk sizes
+        for chunk_size in [1, 4, 8, 16, 32, 64] {
+            let result = BinaryData::new(BinarySource::RawData(Vec::new()), chunk_size, 16);
+            assert!(
+                result.is_ok(),
+                "Empty BinaryData should work with chunk_size={}",
+                chunk_size
+            );
+        }
+    }
+
+    #[test]
+    fn test_empty_binarydata_rejects_zero_chunk_size() {
+        // Zero chunk size should still be rejected, even for empty data
+        let result = BinaryData::new(BinarySource::RawData(Vec::new()), 0, 16);
+        assert!(result.is_err(), "chunk_size=0 should always be invalid");
+
+        match result {
+            Err(BinfiddleError::InvalidChunkSize(size)) => {
+                assert_eq!(size, 0);
+            }
+            _ => panic!("Expected InvalidChunkSize error"),
+        }
+    }
+
+    #[test]
+    fn test_non_empty_binarydata_chunk_size_validation() {
+        // For non-empty data, chunk_size should still be limited by data size
+        let data = vec![0xDE, 0xAD]; // 2 bytes = 16 bits
+
+        // Valid: chunk_size <= 16
+        assert!(BinaryData::new(BinarySource::RawData(data.clone()), 8, 16).is_ok());
+        assert!(BinaryData::new(BinarySource::RawData(data.clone()), 16, 16).is_ok());
+
+        // Invalid: chunk_size > 16
+        let result = BinaryData::new(BinarySource::RawData(data.clone()), 17, 16);
+        assert!(
+            result.is_err(),
+            "chunk_size=17 should be invalid for 2-byte data"
+        );
+
+        match result {
+            Err(BinfiddleError::InvalidChunkSize(size)) => {
+                assert_eq!(size, 17);
+            }
+            _ => panic!("Expected InvalidChunkSize error"),
+        }
+    }
+
+    #[test]
+    fn test_set_chunk_size_on_empty_data() {
+        // Test that set_chunk_size also works on empty data
+        let mut data = BinaryData::new(BinarySource::RawData(Vec::new()), 8, 16).unwrap();
+
+        // Should be able to change chunk_size on empty data
+        assert!(data.set_chunk_size(16).is_ok());
+        assert_eq!(data.get_chunk_size(), 16);
+
+        assert!(data.set_chunk_size(32).is_ok());
+        assert_eq!(data.get_chunk_size(), 32);
+
+        // Zero should still be rejected
+        assert!(data.set_chunk_size(0).is_err());
+    }
+
+    #[test]
+    fn test_set_chunk_size_on_non_empty_data() {
+        // Test that set_chunk_size still validates against data size for non-empty data
+        let mut data = BinaryData::new(
+            BinarySource::RawData(vec![0xDE, 0xAD]), // 2 bytes = 16 bits
+            8,
+            16,
+        )
+        .unwrap();
+
+        // Valid sizes
+        assert!(data.set_chunk_size(8).is_ok());
+        assert!(data.set_chunk_size(16).is_ok());
+
+        // Invalid: too large
+        assert!(data.set_chunk_size(17).is_err());
+        assert!(data.set_chunk_size(100).is_err());
+    }
+
+    #[test]
+    fn test_diff_command_scenario() {
+        // Simulate the exact scenario from the diff command
+        // where a dummy BinaryData is created with default settings
+        let dummy_data = BinaryData::new(
+            BinarySource::RawData(Vec::new()),
+            8,  // Default CLI chunk_size
+            16, // Default CLI width
+        );
+
+        assert!(
+            dummy_data.is_ok(),
+            "Diff command's dummy BinaryData creation should succeed"
+        );
     }
 }
