@@ -12,6 +12,7 @@ pub use commands::{
     PatchConfig, PatchEntry, PatchResult, ReadCommand, SearchCommand, SearchConfig, WriteCommand,
 };
 pub use error::{BinfiddleError, Result};
+pub use utils::parsing::validate_search_pattern;
 pub use utils::parsing::SearchPattern;
 pub use utils::{display, parsing};
 pub use utils::{display_bytes, parse_bit_input, parse_input, parse_range};

@@ -1,5 +1,5 @@
 /// src/main.rs
-use binfiddle::utils::parsing::parse_search_pattern;
+use binfiddle::utils::parsing::{parse_search_pattern, validate_search_pattern};
 use binfiddle::{BinaryData, BinarySource, Result, SearchConfig};
 use clap::{Parser, Subcommand};
 use std::io::{self, Read, Write};
@@ -83,8 +83,8 @@ enum Commands {
         /// Pattern to search for (interpreted per --input-format)
         pattern: String,
 
-        /// Input format for pattern: hex, ascii, dec, oct, bin, regex, mask
-        #[arg(long, default_value = "hex", value_parser = ["hex", "ascii", "dec", "oct", "bin", "regex", "mask"])]
+        /// Input format for pattern: hex, ascii, dec, oct, bin, regex, hex-regex, mask
+        #[arg(long, default_value = "hex", value_parser = ["hex", "ascii", "dec", "oct", "bin", "regex", "hex-regex", "hexregex", "mask"])]
         input_format: String,
 
         /// Find all matches (default: first match only)
@@ -331,6 +331,14 @@ fn main() -> Result<()> {
             no_overlap,
             color,
         } => {
+            // Validate pattern and show warnings if format might be incorrect
+            let warnings = validate_search_pattern(pattern, input_format);
+            if !warnings.is_empty() && !cli.silent {
+                for warning in warnings {
+                    eprintln!("{}\n", warning);
+                }
+            }
+
             // Parse the search pattern based on input format
             let search_pattern = parse_search_pattern(pattern, input_format)?;
 
