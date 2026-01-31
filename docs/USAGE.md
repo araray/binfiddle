@@ -14,6 +14,7 @@ This guide provides detailed usage instructions, examples, and common workflows 
   - [Comparing Files (Diff)](#comparing-files-diff)
   - [Converting Encodings](#converting-encodings)
   - [Applying Patches](#applying-patches)
+  - [Parsing Structures](#parsing-structures)
 - [Input and Output](#input-and-output)
   - [File I/O](#file-io)
   - [Pipeline Usage](#pipeline-usage)
@@ -46,6 +47,7 @@ binfiddle analyze --help      # Analyze command help
 binfiddle diff --help         # Diff command help
 binfiddle convert --help      # Convert command help
 binfiddle patch --help        # Patch command help
+binfiddle struct --help       # Struct command help
 binfiddle --version           # Version information
 ```
 
@@ -1071,6 +1073,210 @@ binfiddle --output app_v1.1.exe patch app_v1.0.exe update_1.0_to_1.1.patch
 for file in *.bin; do
     binfiddle --output "patched_$file" patch "$file" fix.patch
 done
+```
+
+---
+
+### Parsing Structures
+
+The `struct` command parses binary data according to YAML structure templates, making it easy to analyze file headers, network protocols, and data structures.
+
+#### Basic Structure Parsing
+
+```bash
+# Parse a binary file using a template
+binfiddle -i firmware.bin struct header_template.yaml
+
+# Example output:
+# Structure: Firmware Header
+# Assertions: ✓ All passed
+#
+# Name         Offset  Size  Value          Status
+# -------  ----------  ----  -------------  ------
+# magic    0x00000000     4  de ad be ef    ✓
+# version  0x00000004     2  2 (v2.0)
+# checksum 0x00000006     4  305419896
+```
+
+#### Creating Structure Templates
+
+Templates are defined in YAML format:
+
+```yaml
+name: MyHeader
+description: Binary header structure
+endian: little  # or 'big' for big-endian
+fields:
+  - name: magic
+    offset: 0x00
+    size: 4
+    type: hex_string
+    assert: "deadbeef"
+    description: "Magic number"
+  
+  - name: version
+    offset: 0x04
+    size: 2
+    type: u16
+    description: "Version number"
+    enum:
+      "1": "v1.0"
+      "2": "v2.0"
+      "3": "v3.0"
+  
+  - name: flags
+    offset: 0x06
+    size: 1
+    type: u8
+    description: "Flags byte"
+  
+  - name: name
+    offset: 0x08
+    size: 32
+    type: string
+    description: "Name string"
+```
+
+#### Template Field Options
+
+| Option | Required | Description |
+|--------|----------|-------------|
+| `name` | Yes | Field identifier |
+| `offset` | Yes | Byte offset (decimal or hex with 0x prefix) |
+| `size` | Yes | Size in bytes |
+| `type` | No | Data type (default: `bytes`) |
+| `assert` | No | Expected hex value for validation |
+| `enum` | No | Map numeric values to names |
+| `description` | No | Field description |
+| `display` | No | Display format override |
+
+#### Supported Field Types
+
+| Type | Size | Description |
+|------|------|-------------|
+| `u8` | 1 byte | Unsigned 8-bit integer |
+| `u16` | 2 bytes | Unsigned 16-bit integer |
+| `u32` | 4 bytes | Unsigned 32-bit integer |
+| `u64` | 8 bytes | Unsigned 64-bit integer |
+| `i8` | 1 byte | Signed 8-bit integer |
+| `i16` | 2 bytes | Signed 16-bit integer |
+| `i32` | 4 bytes | Signed 32-bit integer |
+| `i64` | 8 bytes | Signed 64-bit integer |
+| `hex_string` | Variable | Raw bytes as hex (default display) |
+| `string` | Variable | Null-terminated or fixed-length ASCII/UTF-8 |
+| `bytes` | Variable | Raw byte array |
+
+#### List Template Fields
+
+```bash
+# List all fields without parsing data
+binfiddle struct elf_header.yaml --list-fields
+
+# Output:
+# Template: ELF Header
+# Endianness: Little
+# Total size: 48 bytes
+# Fields: 11
+#
+# Name           Offset  Size  Type        Description
+# -----------  --------  ----  ----------  -----------
+# e_ident      0x000000     4  HexString   Magic number
+# e_class      0x000004     1  U8          32/64-bit flag
+# ...
+```
+
+#### Getting Specific Fields
+
+```bash
+# Get a single field value
+binfiddle -i /bin/ls struct elf_header.yaml --get e_entry
+# Output: 286416
+
+# Get multiple fields
+binfiddle -i /bin/ls struct elf_header.yaml --get e_type --get e_machine
+```
+
+#### Output Formats
+
+```bash
+# Human-readable table (default)
+binfiddle -i data.bin struct template.yaml --output-format human
+
+# JSON output
+binfiddle -i data.bin struct template.yaml --output-format json
+
+# YAML output
+binfiddle -i data.bin struct template.yaml --output-format yaml
+```
+
+#### Assertions and Validation
+
+Templates can include assertions to validate expected values:
+
+```yaml
+fields:
+  - name: magic
+    offset: 0x00
+    size: 4
+    type: hex_string
+    assert: "7f454c46"  # Must match ELF magic
+```
+
+If an assertion fails, it's marked with ✗ in the output:
+```
+magic    0x00000000     4  de ad be ef    ✗ FAIL
+```
+
+The command exits with code 1 if any assertions fail (unless `--silent` is used).
+
+#### Example: ELF Header Template
+
+```yaml
+name: ELF Header
+description: ELF file header (64-bit)
+endian: little
+fields:
+  - name: e_ident_magic
+    offset: 0x00
+    size: 4
+    type: hex_string
+    assert: "7f454c46"
+    description: "ELF magic number"
+  
+  - name: e_ident_class
+    offset: 0x04
+    size: 1
+    type: u8
+    description: "32/64-bit flag"
+    enum:
+      "1": "32-bit"
+      "2": "64-bit"
+  
+  - name: e_ident_data
+    offset: 0x05
+    size: 1
+    type: u8
+    description: "Endianness"
+    enum:
+      "1": "Little Endian"
+      "2": "Big Endian"
+  
+  - name: e_type
+    offset: 0x10
+    size: 2
+    type: u16
+    description: "Object file type"
+    enum:
+      "1": "Relocatable"
+      "2": "Executable"
+      "3": "Shared object"
+      "4": "Core file"
+  
+  - name: e_entry
+    offset: 0x18
+    size: 8
+    type: u64
+    description: "Entry point address"
 ```
 
 ---

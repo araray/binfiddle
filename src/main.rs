@@ -207,6 +207,24 @@ enum Commands {
         #[arg(long)]
         revert: bool,
     },
+
+    /// Parse binary data using a structural template
+    Struct {
+        /// Path to the YAML template file
+        template: String,
+
+        /// List all fields in the template without parsing data
+        #[arg(long)]
+        list_fields: bool,
+
+        /// Get specific field value(s) - can be repeated
+        #[arg(long, value_name = "FIELD")]
+        get: Vec<String>,
+
+        /// Output format: human, json, yaml
+        #[arg(long, default_value = "human", value_parser = ["human", "json", "yaml"])]
+        output_format: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -663,6 +681,65 @@ fn main() -> Result<()> {
             }
 
             false // Patch handles its own output
+        }
+        Commands::Struct {
+            template,
+            list_fields,
+            get,
+            output_format,
+        } => {
+            // Load template
+            let struct_template = binfiddle::StructTemplate::from_file(template)?;
+
+            // Build configuration
+            let config = binfiddle::StructConfig {
+                format: binfiddle::StructOutputFormat::from_str(output_format)?,
+                get_fields: get.clone(),
+                list_fields: *list_fields,
+            };
+
+            let cmd = binfiddle::StructCommand::new(config);
+
+            if *list_fields {
+                // Just list fields, don't need data
+                println!("{}", cmd.list_fields(&struct_template));
+            } else {
+                // Need to load data
+                let data = match cli.input.as_deref() {
+                    Some("-") | None => {
+                        let mut buf = Vec::new();
+                        io::stdin().read_to_end(&mut buf)?;
+                        buf
+                    }
+                    Some(path) => std::fs::read(path)?,
+                };
+
+                // Parse structure
+                let parsed = cmd.parse(&data, &struct_template)?;
+
+                // Output based on format
+                if get.len() == 1 {
+                    // Single field requested - output just the value
+                    if let Some(value) = cmd.get_field_value(&parsed, &get[0]) {
+                        println!("{}", value);
+                    } else {
+                        eprintln!("Field '{}' not found in template", get[0]);
+                        std::process::exit(1);
+                    }
+                } else {
+                    // Full output
+                    let output = cmd.format_output(&parsed)?;
+                    println!("{}", output);
+                }
+
+                // Report assertion failures
+                if !parsed.all_assertions_passed && !cli.silent {
+                    eprintln!("Warning: Some field assertions failed");
+                    std::process::exit(1);
+                }
+            }
+
+            false // Struct handles its own output
         }
     };
 

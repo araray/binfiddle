@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.9.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.10.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
 Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, and custom exploration of binary data across a variety of formats.
 
@@ -38,6 +38,7 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 | **Diff** | Compare binary files with multiple output formats |
 | **Patch** | Apply binary patches (works with diff --format patch output) |
 | **Convert** | Text encoding conversion and line ending normalization |
+| **Struct** | Parse binary data using YAML templates for structure definitions |
 
 ### Key Differentiators
 
@@ -365,6 +366,67 @@ diff modified.bin reconstructed.bin && echo "Perfect match!"
 0x00000000:de:ff
 0x00000002:be:ca
 ```
+
+#### `struct <TEMPLATE>` — Parse binary data using structure templates
+
+Parse and interpret binary data according to YAML structure templates, useful for analyzing file headers, network protocols, and data structures.
+
+```bash
+# Parse an ELF file header
+binfiddle -i /bin/ls struct elf_header.yaml
+
+# List fields in a template without parsing data
+binfiddle struct my_format.yaml --list-fields
+
+# Get a specific field value
+binfiddle -i firmware.bin struct header.yaml --get version
+
+# Output as JSON
+binfiddle -i data.bin struct format.yaml --output-format json
+
+# Output as YAML
+binfiddle -i data.bin struct format.yaml --output-format yaml
+```
+
+**Template Format (YAML):**
+
+```yaml
+name: MyHeader
+description: Binary header structure
+endian: little  # or 'big'
+fields:
+  - name: magic
+    offset: 0x00
+    size: 4
+    type: hex_string
+    assert: "7f454c46"  # Verify magic bytes
+    description: "Magic number"
+  - name: version
+    offset: 0x04
+    size: 2
+    type: u16
+    enum:
+      "1": "v1.0"
+      "2": "v2.0"
+```
+
+**Supported Field Types:**
+
+| Type | Size | Description |
+|------|------|-------------|
+| `u8`, `u16`, `u32`, `u64` | 1/2/4/8 bytes | Unsigned integers |
+| `i8`, `i16`, `i32`, `i64` | 1/2/4/8 bytes | Signed integers |
+| `hex_string` | Variable | Raw bytes as hex |
+| `string` | Variable | ASCII/UTF-8 string |
+| `bytes` | Variable | Raw byte array |
+
+**Struct Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--list-fields` | List template fields without parsing data |
+| `--get <FIELD>` | Get specific field value(s) |
+| `--output-format <FMT>` | Output format: human, json, yaml |
 
 ### Range Syntax
 
