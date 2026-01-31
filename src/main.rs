@@ -83,6 +83,10 @@ enum Commands {
         /// Pattern to search for (interpreted per --input-format)
         pattern: String,
 
+        /// Input format for pattern: hex, ascii, dec, oct, bin, regex, mask
+        #[arg(long, default_value = "hex", value_parser = ["hex", "ascii", "dec", "oct", "bin", "regex", "mask"])]
+        input_format: String,
+
         /// Find all matches (default: first match only)
         #[arg(long)]
         all: bool,
@@ -319,6 +323,7 @@ fn main() -> Result<()> {
         }
         Commands::Search {
             pattern,
+            input_format,
             all,
             count,
             offsets_only,
@@ -327,7 +332,7 @@ fn main() -> Result<()> {
             color,
         } => {
             // Parse the search pattern based on input format
-            let search_pattern = parse_search_pattern(pattern, &cli.input_format)?;
+            let search_pattern = parse_search_pattern(pattern, input_format)?;
 
             // Determine color mode
             let color_mode = match color.as_str() {
