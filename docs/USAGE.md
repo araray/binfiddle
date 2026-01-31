@@ -220,15 +220,263 @@ binfiddle -i <FILE> search <PATTERN> [OPTIONS]
 
 #### Pattern Types
 
-| Format | Description | Example |
-|--------|-------------|---------|
-| `hex` (default) | Hexadecimal bytes | `"DE AD BE EF"` |
-| `ascii` | Literal string | `"PASSWORD"` |
-| `dec` | Decimal bytes | `"222 173 190 239"` |
-| `oct` | Octal bytes | `"336 255 276 357"` |
-| `bin` | Binary bytes | `"11011110 10101101"` |
-| `regex` | Regular expression | `"[A-Z]{4}"` |
-| `mask` | Hex with wildcards | `"DE ?? BE EF"` |
+| Format | Description | Example | Use When |
+|--------|-------------|---------|----------|
+| `hex` (default) | Hexadecimal byte sequence | `"DE AD BE EF"` | You know exact hex bytes to find |
+| `ascii` | Literal ASCII string | `"PASSWORD"` | Searching for readable text strings |
+| `dec` | Decimal byte values (space-separated) | `"222 173 190 239"` | Working with decimal byte values |
+| `oct` | Octal byte values (space-separated) | `"336 255 276 357"` | Working with octal notation |
+| `bin` | Binary strings (space-separated) | `"11011110 10101101"` | Bit-level pattern matching |
+| `regex` | **Byte-pattern** regular expression (operates on raw bytes) | `"[A-Z]{4}"` | Pattern matching on byte values |
+| `mask` | Hex bytes with wildcards (`??` or `XX`) | `"DE ?? BE EF"` | Hex patterns with unknown bytes |
+
+#### ⚠️ Critical: Understanding Regex vs. Hex Patterns
+
+**Regex operates on RAW BYTES, not hex strings!** This is a common source of confusion.
+
+**Example of the confusion:**
+```bash
+# ❌ WRONG ASSUMPTION: "ff" means hex byte 0xFF
+binfiddle -i file.bin search "ff" --input-format regex
+
+# ✅ ACTUAL BEHAVIOR: "ff" matches two ASCII 'f' characters (bytes 0x66 0x66)
+# This would find "fflush", "buffer", "iffe" in strings!
+
+# ✅ TO SEARCH FOR HEX 0xFF: Use hex or mask format instead
+binfiddle -i file.bin search "FF" --input-format hex --all
+binfiddle -i file.bin search "FF ?? ??" --input-format mask --all
+```
+
+**How each format interprets "ff":**
+- `hex`: One byte with value 0xFF
+- `ascii`: Two bytes: 'f' (0x66) and 'f' (0x66)
+- `regex`: Pattern matching two ASCII 'f' characters (bytes 0x66 0x66)
+- `mask`: One byte with value 0xFF
+
+**Regex examples (byte values in hex notation for clarity):**
+
+```bash
+# Find 4+ uppercase ASCII letters (bytes 0x41-0x5A)
+binfiddle -i file.bin search "[A-Z]{4,}" --input-format regex --all
+
+# Find sequences starting with NULL byte (0x00)
+binfiddle -i file.bin search "^\x00.+" --input-format regex --all
+
+# Find printable ASCII sequences (bytes 0x20-0x7E)
+binfiddle -i file.bin search "[ -~]{5,}" --input-format regex --all
+
+# Find bytes in range 0x00-0x0F followed by any byte
+binfiddle -i file.bin search "[\x00-\x0F]." --input-format regex --all
+```
+
+#### Format Selection Guide
+
+**Choose your format based on what you know:**
+
+| You Know | Use Format | Example |
+|----------|------------|---------|
+| Exact hex bytes | `hex` | `"7F454C46"` for ELF magic |
+| Exact text string | `ascii` | `"ERROR"` to find error messages |
+| Hex pattern with gaps | `mask` | `"7F ?? 4C 46"` for ELF-like patterns |
+| Byte value patterns | `regex` | `"[\x00-\xFF]{100,}"` for long sequences |
+| Character patterns | `regex` | `"[A-Z][a-z]{3,}"` for capitalized words |
+
+#### Search Examples (Corrected)
+
+```bash
+# === HEX SEARCHES ===
+
+# Find exact hex sequence
+binfiddle -i file.bin search "DEADBEEF" --all
+
+# Find ELF magic number
+binfiddle -i file.bin search "7F454C46" --all --count
+
+# Find null word (0x0000)
+binfiddle -i file.bin search "0000" --all
+
+# === ASCII SEARCHES ===
+
+# Search for ASCII string
+binfiddle -i file.bin search "ERROR" --input-format ascii --all
+
+# Find password strings
+binfiddle -i file.bin search "password" --input-format ascii --all
+
+# Case-sensitive ASCII search
+binfiddle -i file.bin search "Password" --input-format ascii --all
+
+# === MASK SEARCHES (Wildcards) ===
+
+# Find ELF header with any class/data bytes
+binfiddle -i file.bin search "7F 45 4C 46 ?? ??" --input-format mask --all
+
+# Find jump instructions (0xFF followed by any 2 bytes)
+binfiddle -i file.bin search "FF ?? ??" --input-format mask --all
+
+# Find patterns with specific prefix/suffix
+binfiddle -i file.bin search "DE ?? ?? EF" --input-format mask --all
+
+# === REGEX SEARCHES (Byte Patterns) ===
+
+# Find sequences of 4+ uppercase ASCII letters (function names, constants)
+binfiddle -i file.bin search "[A-Z]{4,}" --input-format regex --all
+
+# Find email-like patterns in memory
+binfiddle -i file.bin search "[a-z0-9]+@[a-z0-9]+\.[a-z]{2,}" --input-format regex --all
+
+# Find printable strings at least 10 chars long
+binfiddle -i file.bin search "[ -~]{10,}" --input-format regex --all
+
+# Find version strings like "v1.2.3" or "2.4.1"
+binfiddle -i file.bin search "[vV]?[0-9]+\.[0-9]+\.[0-9]+" --input-format regex --all
+
+# Find NULL-terminated strings (NULL followed by printable chars)
+binfiddle -i file.bin search "\x00[ -~]{3,}" --input-format regex --all
+
+# === ADVANCED EXAMPLES ===
+
+# Show context around matches
+binfiddle -i file.bin search "7F454C46" --context 16 --all
+
+# Get only offsets (for scripting)
+binfiddle -i file.bin search "CAFE" --all --offsets-only
+
+# Non-overlapping search (e.g., "AA" in "AAAA" = 2 matches, not 3)
+binfiddle -i file.bin search "AAAA" --all --no-overlap
+
+# Count occurrences without displaying matches
+binfiddle -i file.bin search "00" --all --count
+
+# Combined: Find C strings, show context, use color
+binfiddle -i file.bin search "char \*" --input-format ascii --all --context 16 --color always
+```
+
+#### Common Pitfalls and Solutions
+
+**Pitfall 1: Using regex for hex patterns**
+```bash
+# ❌ WRONG: Looking for hex 0xFF but using regex
+binfiddle -i file.bin search "ff" --input-format regex
+# Finds ASCII "ff" (bytes 0x66 0x66) - like in "fflush", "buffer"
+
+# ✅ CORRECT: Use hex or mask format
+binfiddle -i file.bin search "FF" --input-format hex --all
+```
+
+**Pitfall 2: Forgetting spaces in hex input**
+```bash
+# ❌ WRONG: This searches for one byte 0xDE, not four bytes
+binfiddle -i file.bin search "DEADBEEF"  # OK - this works (no spaces needed for hex)
+
+# Both valid hex syntaxes:
+binfiddle -i file.bin search "DEADBEEF"           # Continuous hex
+binfiddle -i file.bin search "DE AD BE EF"        # Spaced hex
+```
+
+**Pitfall 3: Using ASCII format for binary data**
+```bash
+# ❌ WRONG: ASCII strings often contain non-printable bytes
+binfiddle -i file.bin search "\x00\x01\x02" --input-format ascii
+# Won't work as expected
+
+# ✅ CORRECT: Use hex format
+binfiddle -i file.bin search "000102" --input-format hex
+```
+
+**Pitfall 4: Regex special characters**
+```bash
+# ❌ WRONG: Unescaped dots match any character
+binfiddle -i file.bin search "192.168.1.1" --input-format regex
+# Matches "192X168Y1Z1" too!
+
+# ✅ CORRECT: Escape dots or use ASCII
+binfiddle -i file.bin search "192\.168\.1\.1" --input-format regex
+binfiddle -i file.bin search "192.168.1.1" --input-format ascii
+```
+
+**Pitfall 5: Case sensitivity**
+```bash
+# Hex is case-insensitive
+binfiddle -i file.bin search "deadbeef"  # Same as "DEADBEEF"
+
+# ASCII and regex are case-sensitive
+binfiddle -i file.bin search "error" --input-format ascii   # Won't find "ERROR"
+
+# For case-insensitive ASCII, use regex
+binfiddle -i file.bin search "(?i)error" --input-format regex --all
+```
+
+#### When to Use Each Format - Decision Tree
+
+```
+Need to find exact bytes you know in hex?
+    → Use `hex` format
+
+Need to find exact text string?
+    → Use `ascii` format
+
+Know some bytes but not others?
+    → Use `mask` format with ??
+
+Need to find byte value ranges or patterns?
+    → Use `regex` format with byte escapes (\x00-\xFF)
+
+Need to find ASCII character patterns (letters, numbers)?
+    → Use `regex` format with [A-Z], [0-9], etc.
+
+Need to find repeating patterns?
+    → Use `regex` format with {n,m} quantifiers
+```
+
+#### Advanced: Regex Pattern Matching on Bytes
+
+The `regex` format uses Rust's `regex::bytes` engine, which operates on raw byte sequences.
+
+**Character Classes (Byte Ranges):**
+- `[A-Z]` - Uppercase ASCII letters (bytes 0x41-0x5A)
+- `[a-z]` - Lowercase ASCII letters (bytes 0x61-0x7A)
+- `[0-9]` - ASCII digits (bytes 0x30-0x39)
+- `[\x00-\xFF]` - Any byte (full range)
+- `[\x20-\x7E]` - Printable ASCII (space through ~)
+
+**Special Regex Constructs:**
+- `.` - Any single byte
+- `*` - Zero or more repetitions
+- `+` - One or more repetitions
+- `{n,m}` - Between n and m repetitions
+- `^` - Start of data (rarely useful in binary search)
+- `$` - End of data (rarely useful in binary search)
+- `|` - Alternation (OR)
+- `()` - Grouping
+- `(?i)` - Case-insensitive flag (for ASCII characters only)
+
+**Escaping Bytes:**
+- `\x00` - NULL byte
+- `\xFF` - Byte value 255
+- `\x20` - Space character
+- `\xHH` - Any byte in hex notation
+
+**Example Patterns:**
+
+```bash
+# Find version strings
+binfiddle search "[0-9]+\.[0-9]+\.[0-9]+" --input-format regex -i app.bin --all
+
+# Find URL patterns
+binfiddle search "https?://[^\x00]{5,}" --input-format regex -i memory.dump --all
+
+# Find C function names (uppercase start, alphanumeric)
+binfiddle search "[A-Z][A-Za-z0-9_]{3,}" --input-format regex -i binary --all
+
+# Find UUIDs
+binfiddle search "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" --input-format regex -i file --all
+
+# Find null-terminated strings longer than 10 chars
+binfiddle search "[\x20-\x7E]{10,}\x00" --input-format regex -i data.bin --all
+```
+
+**Performance Note:** Regex searches are slower than exact matches. For simple patterns, prefer `hex`, `ascii`, or `mask` formats.
 
 #### Search Options
 
@@ -240,37 +488,6 @@ binfiddle -i <FILE> search <PATTERN> [OPTIONS]
 | `--context <N>` | Show N bytes before/after each match |
 | `--no-overlap` | Prevent overlapping matches |
 | `--color <MODE>` | Color output: always, auto, never |
-
-#### Examples
-
-```bash
-# Find first occurrence
-binfiddle -i file.bin search "DEADBEEF"
-
-# Find all occurrences
-binfiddle -i file.bin search "DEADBEEF" --all
-
-# Search for ASCII string
-binfiddle -i file.bin search "ERROR" --input-format ascii --all
-
-# Count null bytes
-binfiddle -i file.bin search "00 00" --all --count
-
-# Get only offsets
-binfiddle -i file.bin search "CAFE" --all --offsets-only
-
-# Show context around matches
-binfiddle -i file.bin search "7F454C46" --context 8
-
-# Use wildcard mask (any byte in second position)
-binfiddle -i file.bin search "DE ?? BE EF" --input-format mask --all
-
-# Regex search for uppercase sequences
-binfiddle -i file.bin search "[A-Z]{4,}" --input-format regex --all
-
-# Non-overlapping search (e.g., "AA" in "AAAA" = 2 matches, not 3)
-binfiddle -i file.bin search "AA AA" --all --no-overlap
-```
 
 #### Search Output Formats
 
