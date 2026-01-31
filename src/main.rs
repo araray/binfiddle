@@ -182,6 +182,27 @@ enum Commands {
         #[arg(long, default_value = "replace")]
         on_error: String,
     },
+
+    /// Apply a binary patch file to a target file
+    Patch {
+        /// Target file to patch
+        target: String,
+
+        /// Patch file (use '-' for stdin)
+        patch_file: String,
+
+        /// Create backup with this suffix before patching (e.g., ".bak")
+        #[arg(long)]
+        backup: Option<String>,
+
+        /// Show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Apply patch in reverse (undo)
+        #[arg(long)]
+        revert: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -544,6 +565,91 @@ fn main() -> Result<()> {
             }
 
             false // Convert handles its own output, don't use standard mechanism
+        }
+        Commands::Patch {
+            target,
+            patch_file,
+            backup,
+            dry_run,
+            revert,
+        } => {
+            // Load target file
+            let target_data = std::fs::read(target)?;
+
+            // Load patch file content
+            let patch_content = if patch_file == "-" {
+                let mut buf = String::new();
+                io::stdin().read_to_string(&mut buf)?;
+                buf
+            } else {
+                std::fs::read_to_string(patch_file)?
+            };
+
+            // Build configuration
+            let config = binfiddle::PatchConfig {
+                backup_suffix: backup.clone(),
+                dry_run: *dry_run,
+                revert: *revert,
+            };
+
+            // Create patch command and parse patch file
+            let patch_cmd = binfiddle::PatchCommand::new(config);
+            let entries = patch_cmd.parse_patch_file(&patch_content)?;
+
+            if entries.is_empty() {
+                if !cli.silent {
+                    eprintln!("No patch entries found in patch file");
+                }
+                return Ok(());
+            }
+
+            // Create backup if requested
+            if let Some(suffix) = backup {
+                if !*dry_run {
+                    let backup_path = binfiddle::PatchCommand::create_backup(target, suffix)?;
+                    if !cli.silent {
+                        eprintln!("Created backup: {}", backup_path);
+                    }
+                }
+            }
+
+            // Apply patches
+            let (result_data, results) = patch_cmd.apply(&target_data, &entries)?;
+
+            // Print results
+            if !cli.silent {
+                println!("{}", patch_cmd.format_results(&results));
+            }
+
+            // Check if all patches succeeded
+            let all_success = results.iter().all(|r| r.success);
+
+            if !*dry_run && all_success {
+                // Write output
+                if let Some(output_path) = &cli.output {
+                    if output_path == "-" {
+                        io::stdout().write_all(&result_data)?;
+                    } else {
+                        std::fs::write(output_path, &result_data)?;
+                        if !cli.silent {
+                            eprintln!("Wrote patched file to: {}", output_path);
+                        }
+                    }
+                } else if cli.in_file {
+                    std::fs::write(target, &result_data)?;
+                    if !cli.silent {
+                        eprintln!("Modified file in-place: {}", target);
+                    }
+                } else {
+                    // Default: write to stdout
+                    io::stdout().write_all(&result_data)?;
+                }
+            } else if !all_success && !*dry_run {
+                eprintln!("Some patches failed - no changes written");
+                std::process::exit(1);
+            }
+
+            false // Patch handles its own output
         }
     };
 

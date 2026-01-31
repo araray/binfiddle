@@ -13,6 +13,7 @@ This guide provides detailed usage instructions, examples, and common workflows 
   - [Analyzing Data](#analyzing-data)
   - [Comparing Files (Diff)](#comparing-files-diff)
   - [Converting Encodings](#converting-encodings)
+  - [Applying Patches](#applying-patches)
 - [Input and Output](#input-and-output)
   - [File I/O](#file-io)
   - [Pipeline Usage](#pipeline-usage)
@@ -44,6 +45,7 @@ binfiddle search --help       # Search command help
 binfiddle analyze --help      # Analyze command help
 binfiddle diff --help         # Diff command help
 binfiddle convert --help      # Convert command help
+binfiddle patch --help        # Patch command help
 binfiddle --version           # Version information
 ```
 
@@ -675,6 +677,183 @@ binfiddle -i config.ini convert --newlines unix --bom remove -o config_unix.ini
 ```bash
 # Some Windows APIs expect UTF-16LE with BOM
 binfiddle -i data.txt convert --to utf-16le --bom add -o data_win.txt
+```
+
+---
+
+### Applying Patches
+
+The `patch` command applies binary patches to files. Patches can be generated using `binfiddle diff --format patch` or created manually.
+
+#### Syntax
+
+```bash
+binfiddle [GLOBAL_OPTIONS] patch <TARGET> <PATCH_FILE> [OPTIONS]
+```
+
+#### Options
+
+| Option | Description |
+|--------|-------------|
+| `--backup <SUFFIX>` | Create backup with this suffix before patching (e.g., `.bak`) |
+| `--dry-run` | Show what would be done without making any changes |
+| `--revert` | Apply the patch in reverse (undo changes) |
+
+#### Basic Usage
+
+```bash
+# Apply a patch file
+binfiddle --output patched.bin patch original.bin changes.patch
+
+# Preview changes without applying (dry run)
+binfiddle patch original.bin changes.patch --dry-run
+
+# Apply patch in-place with backup
+binfiddle --in-file -i target.bin patch target.bin changes.patch --backup .bak
+
+# Revert a previously applied patch
+binfiddle --output reverted.bin patch patched.bin changes.patch --revert
+```
+
+#### The Diff-Patch Workflow
+
+The `diff` and `patch` commands work together for version control of binary files:
+
+```bash
+# Step 1: Generate a patch from two files
+binfiddle diff original.bin modified.bin --diff-format patch > changes.patch
+
+# Step 2: Review the patch file
+cat changes.patch
+# # binfiddle patch file
+# # source: original.bin
+# # target: modified.bin
+# # format: OFFSET:OLD_HEX:NEW_HEX
+# # differences: 2
+# #
+# 0x00000000:de:ff
+# 0x00000002:be:ca
+
+# Step 3: Apply patch to recreate modified version
+binfiddle --output reconstructed.bin patch original.bin changes.patch
+
+# Step 4: Verify the result matches
+diff modified.bin reconstructed.bin && echo "Perfect match!"
+```
+
+#### Patch File Format
+
+Patch files use a simple line-based format:
+
+```
+# binfiddle patch file
+# source: <original_file>
+# target: <modified_file>
+# format: OFFSET:OLD_HEX:NEW_HEX
+# differences: <count>
+#
+0xOFFSET:OLD_HEX:NEW_HEX
+```
+
+**Format Details:**
+- Lines starting with `#` are comments (ignored)
+- Each data line has format: `OFFSET:OLD_HEX:NEW_HEX`
+  - `OFFSET`: Hexadecimal offset (with or without `0x` prefix)
+  - `OLD_HEX`: Expected bytes at offset (empty for additions)
+  - `NEW_HEX`: New bytes to write (empty for deletions)
+
+**Examples:**
+```
+0x00000000:de:ff         # Change byte 0xDE to 0xFF at offset 0
+0x00000100:deadbeef:cafebabe  # Change 4 bytes at offset 256
+0x00000200::abcd         # Add bytes at offset 512 (addition)
+0x00000300:1234:         # Remove bytes at offset 768 (deletion)
+```
+
+#### Validation
+
+The patch command validates before applying:
+
+1. **Bounds checking**: Verifies offsets are within file bounds
+2. **Content verification**: Confirms OLD_HEX matches current file content
+3. **Atomic application**: Either all patches succeed or none are applied
+
+```bash
+# If validation fails, no changes are made
+binfiddle patch wrong_file.bin changes.patch
+# ✗ 0x00000000: de -> ff
+#    Mismatch at 0x00000000: expected de, found 00
+# Summary: 0 succeeded, 1 failed
+# Some patches failed - no changes written
+```
+
+#### Dry Run Mode
+
+Preview changes before applying:
+
+```bash
+binfiddle patch file.bin changes.patch --dry-run
+# Dry run - no changes made:
+#
+# ✓ 0x00000000: de -> ff
+#    OK
+# ✓ 0x00000002: be -> ca
+#    OK
+#
+# Summary: 2 succeeded, 0 failed
+```
+
+#### Creating and Reverting Patches
+
+```bash
+# Create a patch
+binfiddle diff v1.bin v2.bin --diff-format patch > v1_to_v2.patch
+
+# Apply patch (upgrade v1 → v2)
+binfiddle --output upgraded.bin patch v1.bin v1_to_v2.patch
+
+# Revert patch (downgrade v2 → v1)
+binfiddle --output downgraded.bin patch v2.bin v1_to_v2.patch --revert
+```
+
+#### Backup Management
+
+```bash
+# Create backup before in-place modification
+binfiddle --in-file -i config.bin patch config.bin update.patch --backup .orig
+
+# Multiple patches with sequential backups
+binfiddle --in-file -i file.bin patch file.bin patch1.patch --backup .v1
+binfiddle --in-file -i file.bin patch file.bin patch2.patch --backup .v2
+# Creates: file.bin.v1, file.bin.v2, and updated file.bin
+```
+
+#### Practical Use Cases
+
+**Firmware Patching:**
+```bash
+# Generate patch for firmware modification
+binfiddle diff original_firmware.bin patched_firmware.bin --diff-format patch > mod.patch
+
+# Apply to other firmware instances
+binfiddle --output new_patched.bin patch another_firmware.bin mod.patch
+```
+
+**Binary Delta Updates:**
+```bash
+# Create delta for software updates
+binfiddle diff app_v1.0.exe app_v1.1.exe --diff-format patch > update_1.0_to_1.1.patch
+
+# Apply delta update
+binfiddle --output app_v1.1.exe patch app_v1.0.exe update_1.0_to_1.1.patch
+```
+
+**Batch Patching:**
+```bash
+# Apply same patch to multiple files
+for file in *.bin; do
+    binfiddle --output "patched_$file" patch "$file" fix.patch
+done
 ```
 
 ---

@@ -8,8 +8,8 @@ use std::io::Read;
 pub use commands::{
     parse_encoding, parse_ignore_ranges, AnalysisType, AnalyzeCommand, AnalyzeConfig,
     AnalyzeOutputFormat, BomMode, Command, ConvertCommand, ConvertConfig, DiffCommand, DiffConfig,
-    DiffEntry, DiffFormat, EditCommand, EditOperation, ErrorMode, NewlineMode, ReadCommand,
-    SearchCommand, SearchConfig, WriteCommand,
+    DiffEntry, DiffFormat, EditCommand, EditOperation, ErrorMode, NewlineMode, PatchCommand,
+    PatchConfig, PatchEntry, PatchResult, ReadCommand, SearchCommand, SearchConfig, WriteCommand,
 };
 pub use error::{BinfiddleError, Result};
 pub use utils::parsing::SearchPattern;
