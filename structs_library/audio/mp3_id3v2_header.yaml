@@ -1,0 +1,129 @@
+# MP3 (MPEG-1 Audio Layer III) with ID3v2 Metadata Tags
+# Specification: ID3v2.4.0 - Native Frames Informal Standard
+# Purpose: Parsing ID3v2 tag header containing metadata (title, artist, album, etc.)
+#
+# ID3v2 tags are prepended to MP3 files and contain textual metadata.
+# Versions: ID3v2.2, ID3v2.3 (most common), ID3v2.4 (current)
+#
+# Reference: https://id3.org/id3v2.4.0-structure
+# MIME type: audio/mpeg
+
+name: MP3 ID3v2 Tag Header
+description: |
+  ID3v2 tag header for MP3 files containing metadata version, flags,
+  and total tag size. Frames with actual metadata follow this header.
+endian: big  # ID3v2 uses big-endian (synchsafe integers for sizes)
+
+fields:
+  # ============================================================================
+  # ID3v2 Header - 10 bytes
+  # Always at the beginning of the file (or appended as footer in ID3v2.4)
+  # ============================================================================
+  
+  - name: identifier
+    offset: 0x00
+    size: 3
+    type: hex_string
+    description: "ID3v2 identifier: 'ID3' in ASCII"
+    assert: "494433"
+    
+  - name: version_major
+    offset: 0x03
+    size: 1
+    type: u8
+    description: "ID3v2 major version"
+    enum:
+      2: "ID3v2.2"
+      3: "ID3v2.3 (most common)"
+      4: "ID3v2.4 (current specification)"
+    
+  - name: version_minor
+    offset: 0x04
+    size: 1
+    type: u8
+    description: "ID3v2 revision number (usually 0)"
+    
+  - name: flags
+    offset: 0x05
+    size: 1
+    type: u8
+    description: "ID3v2 flags byte"
+    display: hex
+    # Bit 7 (0x80): Unsynchronisation (avoid false MPEG sync words)
+    # Bit 6 (0x40): Extended header present
+    # Bit 5 (0x20): Experimental indicator
+    # Bit 4 (0x10): Footer present (ID3v2.4 only)
+    # Bits 3-0: Unused, must be 0
+    
+  - name: tag_size_byte1
+    offset: 0x06
+    size: 1
+    type: u8
+    description: "Tag size byte 1 (synchsafe integer - bit 7 always 0)"
+    
+  - name: tag_size_byte2
+    offset: 0x07
+    size: 1
+    type: u8
+    description: "Tag size byte 2 (synchsafe integer - bit 7 always 0)"
+    
+  - name: tag_size_byte3
+    offset: 0x08
+    size: 1
+    type: u8
+    description: "Tag size byte 3 (synchsafe integer - bit 7 always 0)"
+    
+  - name: tag_size_byte4
+    offset: 0x09
+    size: 1
+    type: u8
+    description: "Tag size byte 4 (synchsafe integer - bit 7 always 0)"
+    # Total tag size (excluding header) = 
+    # (byte1 << 21) | (byte2 << 14) | (byte3 << 7) | byte4
+
+  # ============================================================================
+  # Extended Header (optional, if flag bit 6 set) - Variable size
+  # Present in ID3v2.3 and ID3v2.4, format differs between versions
+  # ============================================================================
+
+  # ============================================================================
+  # ID3v2 Frames - Variable, starts at offset 0x0A (or after extended header)
+  # 
+  # Each frame has:
+  #   Frame ID (4 bytes) - e.g., "TIT2" (Title), "TPE1" (Artist), "TALB" (Album)
+  #   Size (4 bytes) - Synchsafe integer in v2.4, normal in v2.3
+  #   Flags (2 bytes)
+  #   Frame data (variable, depends on frame type)
+  #
+  # Common text frames (ID3v2.3/v2.4):
+  #   TIT2 - Title
+  #   TPE1 - Lead artist/Performer
+  #   TALB - Album
+  #   TYER - Year (v2.3), TDRC - Recording time (v2.4)
+  #   TCON - Content type (Genre)
+  #   COMM - Comment
+  #   APIC - Attached picture (album art)
+  #   TRCK - Track number
+  #   TLEN - Length (milliseconds)
+  #
+  # ID3v2.2 uses 3-character frame IDs (TT2, TP1, TAL, TYE, TCO, COM, PIC, TRK)
+  # ============================================================================
+
+  # ============================================================================
+  # Padding - Optional null bytes between last frame and audio data
+  # Used to allow in-place tag editing without rewriting entire file
+  # ============================================================================
+
+  # ============================================================================
+  # Footer (optional, ID3v2.4 only, if flag bit 4 set) - 10 bytes
+  # Identical to header but with identifier "3DI" instead of "ID3"
+  # Allows scanning for tags from end of file
+  # ============================================================================
+
+  # ============================================================================
+  # MP3 Audio Data - Starts after ID3v2 tag (header + frames + padding)
+  # MPEG frames begin with sync word: 0xFFF or 0xFFE (11 or 12 bits set)
+  # Each MPEG frame header is 4 bytes containing:
+  #   Sync (12 bits), Version (2), Layer (2), Protection (1), Bitrate (4),
+  #   Samplerate (2), Padding (1), Private (1), Channel Mode (2), etc.
+  # ============================================================================

@@ -1,0 +1,107 @@
+# ELF 64-bit Symbol Table Entry
+# Specification: Tool Interface Standard (TIS) Executable and Linking Format (ELF) Specification Version 1.2
+# Platform: Linux, BSD, Solaris - 64-bit architectures
+# Purpose: Parsing entries in .symtab or .dynsym sections (Elf64_Sym)
+#
+# Symbol table entries define functions, variables, and other named entities.
+# Critical for linking, dynamic loading, and reverse engineering.
+# Each entry is 24 bytes for ELF64.
+#
+# Usage: Found in SHT_SYMTAB (.symtab) or SHT_DYNSYM (.dynsym) sections
+# Symbol names are in associated string table (sh_link)
+# Reference: https://refspecs.linuxfoundation.org/elf/elf.pdf
+# See also: readelf -s, nm, /usr/include/elf.h
+
+name: ELF 64-bit Symbol Table Entry
+description: |
+  Symbol table entry describing a function, variable, or other named entity.
+  Contains binding (local/global/weak), type (func/object/file), visibility,
+  section index, address, and size. Essential for linking and reverse engineering.
+endian: little  # Should match ELF header's e_ident[EI_DATA]
+
+fields:
+  - name: st_name
+    offset: 0x00
+    size: 4
+    type: u32
+    description: "Offset into string table for symbol name (0 if unnamed)"
+    display: hex
+    # Get the actual name from: string_table[st_name]
+    
+  - name: st_info
+    offset: 0x04
+    size: 1
+    type: u8
+    description: "Symbol binding and type (packed byte)"
+    display: hex
+    # High nibble (bits 4-7): Symbol Binding
+    #   STB_LOCAL (0): Local symbols (not visible outside object)
+    #   STB_GLOBAL (1): Global symbols (visible to all objects)
+    #   STB_WEAK (2): Weak symbols (lower precedence than global)
+    #   STB_LOOS (10): OS-specific binding start
+    #   STB_HIOS (12): OS-specific binding end
+    #   STB_LOPROC (13): Processor-specific binding start
+    #   STB_HIPROC (15): Processor-specific binding end
+    #
+    # Low nibble (bits 0-3): Symbol Type
+    #   STT_NOTYPE (0): Type not specified
+    #   STT_OBJECT (1): Data object (variable, array, etc.)
+    #   STT_FUNC (2): Function or executable code
+    #   STT_SECTION (3): Section symbol (for relocation)
+    #   STT_FILE (4): Source file name
+    #   STT_COMMON (5): Common data object
+    #   STT_TLS (6): Thread-local storage object
+    #   STT_LOOS (10): OS-specific type start
+    #   STT_GNU_IFUNC (10): GNU indirect function
+    #   STT_HIOS (12): OS-specific type end
+    #   STT_LOPROC (13): Processor-specific type start
+    #   STT_HIPROC (15): Processor-specific type end
+    #
+    # Extract: binding = st_info >> 4, type = st_info & 0xF
+    
+  - name: st_other
+    offset: 0x05
+    size: 1
+    type: u8
+    description: "Symbol visibility (bits 0-2) and other info"
+    display: hex
+    # Bits 0-2: Visibility
+    #   STV_DEFAULT (0): Default visibility
+    #   STV_INTERNAL (1): Internal (processor-specific)
+    #   STV_HIDDEN (2): Hidden (not visible to other objects)
+    #   STV_PROTECTED (3): Protected (visible but not preemptable)
+    # Bits 3-7: Reserved (must be 0)
+    
+  - name: st_shndx
+    offset: 0x06
+    size: 2
+    type: u16
+    description: "Section header index of associated section"
+    display: hex
+    # Special values:
+    # SHN_UNDEF (0): Undefined symbol (external reference)
+    # SHN_ABS (0xFFF1): Absolute symbol (not affected by relocation)
+    # SHN_COMMON (0xFFF2): Common symbol (unallocated)
+    # SHN_XINDEX (0xFFFF): Index in SHT_SYMTAB_SHNDX section
+    # Otherwise: index into section header table
+    
+  - name: st_value
+    offset: 0x08
+    size: 8
+    type: u64
+    description: "Symbol value (address for funcs/vars, alignment for COMMON)"
+    display: hex
+    # For functions and variables: virtual address
+    # For relocatable files: offset from section start
+    # For SHN_COMMON: alignment constraint
+    # For SHN_UNDEF: usually 0
+    
+  - name: st_size
+    offset: 0x10
+    size: 8
+    type: u64
+    description: "Size of symbol in bytes (0 if unknown or not applicable)"
+    display: hex
+    # For functions: size of function code
+    # For variables: size of data object
+    # For STT_NOTYPE or unknown: often 0

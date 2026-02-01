@@ -1,0 +1,181 @@
+# PyTorch Model File (.pt / .pth)
+# Specification: PyTorch serialization format (pickle-based)
+# Platform: Cross-platform - Python ML/AI framework
+# Purpose: Parsing PyTorch saved models and checkpoints
+#
+# PyTorch uses Python's pickle protocol for serialization with
+# extensions for tensors (torch.save/torch.load).
+# Files contain pickled state_dict, entire models, or checkpoints.
+#
+# Format is based on Python pickle protocol 2 or higher, with:
+#   - ZIP archive (newer format, v1.6+)
+#   - Raw pickle (older format)
+#
+# Common contents:
+#   - state_dict: OrderedDict of layer_name -> tensor
+#   - Model architecture (if torch.save(model))
+#   - Optimizer state
+#   - Training metadata (epoch, loss, etc.)
+#
+# Usage: ML model analysis, weight extraction, forensics
+# Reference: PyTorch documentation, Python pickle protocol
+# See also: torch.load(), torch.jit.save/load (TorchScript)
+
+name: PyTorch Model File (ZIP-based format)
+description: |
+  PyTorch model saved in ZIP archive format (PyTorch 1.6+).
+  Contains pickle files for tensor data and metadata.
+  Older .pt files use raw pickle without ZIP wrapper.
+endian: little  # ZIP and pickle both use little-endian
+
+fields:
+  - name: zip_signature
+    offset: 0x00
+    size: 4
+    type: hex_string
+    description: "ZIP local file header signature (for v1.6+ format)"
+    assert: "504b0304"
+    # 0x504B0304 = "PK\x03\x04" - ZIP local file header
+    # If this is NOT present, file uses legacy raw pickle format
+    
+  - name: zip_version
+    offset: 0x04
+    size: 2
+    type: u16
+    description: "Version needed to extract (minimum ZIP version)"
+    
+  - name: zip_flags
+    offset: 0x06
+    size: 2
+    type: u16
+    description: "General purpose bit flags"
+    display: hex
+    
+  - name: zip_compression
+    offset: 0x08
+    size: 2
+    type: u16
+    description: "Compression method"
+    enum:
+      0: "No compression (stored)"
+      8: "Deflate compression"
+    
+  - name: zip_mod_time
+    offset: 0x0A
+    size: 2
+    type: u16
+    description: "Last modification time (MS-DOS format)"
+    
+  - name: zip_mod_date
+    offset: 0x0C
+    size: 2
+    type: u16
+    description: "Last modification date (MS-DOS format)"
+    
+  - name: zip_crc32
+    offset: 0x0E
+    size: 4
+    type: u32
+    description: "CRC-32 checksum of uncompressed data"
+    display: hex
+    
+  - name: zip_compressed_size
+    offset: 0x12
+    size: 4
+    type: u32
+    description: "Compressed size in bytes"
+    
+  - name: zip_uncompressed_size
+    offset: 0x16
+    size: 4
+    type: u32
+    description: "Uncompressed size in bytes"
+    
+  - name: zip_filename_length
+    offset: 0x1A
+    size: 2
+    type: u16
+    description: "Length of filename field"
+    
+  - name: zip_extra_field_length
+    offset: 0x1C
+    size: 2
+    type: u16
+    description: "Length of extra field"
+
+# After ZIP header, filename and data follow
+#
+# PyTorch ZIP Archive Structure (v1.6+):
+#   archive/
+#     data.pkl          - Pickled model structure/state_dict
+#     byteorder         - System byte order ("little" or "big")
+#     data/
+#       0               - Tensor data file 0
+#       1               - Tensor data file 1
+#       ...
+#     version           - PyTorch version string
+#
+# Legacy Pickle Format (pre-v1.6):
+#   Raw pickle stream starting with pickle opcode
+#   Pickle Protocol 2: 0x80 0x02 ...
+#   Pickle Protocol 3: 0x80 0x03 ...
+#   Pickle Protocol 4: 0x80 0x04 ...
+#
+# Pickle opcodes (first bytes after protocol header):
+#   0x80: PROTO (protocol version)
+#   0x7D: EMPTY_DICT
+#   0x28: MARK
+#   0x63: GLOBAL (import module.class)
+#   0x71: BINGET
+#   0x7D: DICT
+#
+# Common pickle structure for state_dict:
+#   PROTO 2
+#   GLOBAL collections OrderedDict
+#   MARK
+#     TUPLE (layer_name, tensor_storage_info) pairs
+#   BUILD (construct OrderedDict)
+#
+# TorchScript format (.pt files from torch.jit.save):
+#   Different format - ZIP with:
+#     code/__torch__.py     - Serialized TorchScript code
+#     data.pkl              - Pickled constants/parameters
+#     constants/            - Tensor constants
+#   Magic: "PK\x03\x04" (ZIP) with specific file layout
+#
+# Tensor Storage Format:
+#   Each tensor references a storage object
+#   Storage types:
+#     torch.FloatStorage    - 32-bit float
+#     torch.DoubleStorage   - 64-bit float
+#     torch.HalfStorage     - 16-bit float
+#     torch.LongStorage     - 64-bit int
+#     torch.IntStorage      - 32-bit int
+#     torch.ShortStorage    - 16-bit int
+#     torch.CharStorage     - 8-bit int
+#     torch.ByteStorage     - 8-bit unsigned int
+#     torch.BoolStorage     - boolean
+#
+# Security considerations:
+#   - Pickle is NOT secure - arbitrary code execution possible
+#   - Never load untrusted .pt/.pth files without sandboxing
+#   - torch.load() executes Python code during unpickling
+#   - Use torch.load() with weights_only=True for safer loading
+#   - Malicious models can contain:
+#     * Backdoor weights
+#     * Embedded exploit code in pickle
+#     * Large tensors for DoS
+#   - Verify model source and integrity before loading
+#
+# Model inspection without loading:
+#   - Use zipfile module to extract archive
+#   - Examine data.pkl with pickletools.dis()
+#   - Check tensor sizes in data/ directory
+#   - Read version and byteorder files
+#
+# Common file sizes:
+#   - Small CNN: 1-10 MB
+#   - ResNet-50: ~100 MB
+#   - BERT-base: ~440 MB
+#   - GPT-2: ~500 MB - 1.5 GB
+#   - LLaMA-7B: ~13 GB (often quantized/sharded)

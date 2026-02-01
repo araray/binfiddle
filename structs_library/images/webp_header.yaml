@@ -1,0 +1,164 @@
+# WebP Image File Format
+# Specification: WebP Container Specification
+# Purpose: Parsing WebP RIFF container and VP8/VP8L/VP8X headers
+#
+# WebP is a modern image format supporting lossy (VP8), lossless (VP8L),
+# and animated (VP8X) compression with alpha transparency.
+#
+# Reference: https://developers.google.com/speed/webp/docs/riff_container
+# MIME type: image/webp
+
+name: WebP Image File Header
+description: |
+  WebP RIFF container with file type and first chunk header.
+  Supports VP8 (lossy), VP8L (lossless), and VP8X (extended/animated).
+endian: little  # RIFF uses little-endian for sizes, big-endian for FourCC codes
+
+fields:
+  # ============================================================================
+  # RIFF Container Header - 12 bytes
+  # ============================================================================
+  
+  - name: riff_header
+    offset: 0x00
+    size: 4
+    type: hex_string
+    description: "RIFF container identifier: 'RIFF' in ASCII"
+    assert: "52494646"
+    
+  - name: file_size
+    offset: 0x04
+    size: 4
+    type: u32
+    description: "File size minus 8 bytes (RIFF header excluded)"
+    display: hex
+    
+  - name: webp_fourcc
+    offset: 0x08
+    size: 4
+    type: hex_string
+    description: "WebP FourCC code: 'WEBP' in ASCII"
+    assert: "57454250"
+
+  # ============================================================================
+  # First Chunk - VP8, VP8L, or VP8X
+  # Offset 0x0C, variable size
+  # ============================================================================
+
+  - name: chunk_fourcc
+    offset: 0x0C
+    size: 4
+    type: hex_string
+    description: "Chunk FourCC code"
+    enum:
+      "56503820": "VP8  - Lossy bitstream (VP8)"
+      "5650384c": "VP8L - Lossless bitstream"
+      "56503858": "VP8X - Extended format (animation/alpha/EXIF/XMP)"
+      "414c5048": "ALPH - Alpha channel (used with VP8)"
+      "414e494d": "ANIM - Animation parameters"
+      "414e4d46": "ANMF - Animation frame"
+      "49434350": "ICCP - ICC color profile"
+      "45584946": "EXIF - EXIF metadata"
+      "584d5020": "XMP  - XMP metadata"
+    
+  - name: chunk_size
+    offset: 0x10
+    size: 4
+    type: u32
+    description: "Chunk data size in bytes (excluding 8-byte chunk header)"
+    display: hex
+
+  # ============================================================================
+  # VP8X Chunk Data (Extended Format) - 10 bytes
+  # Present if chunk_fourcc = "VP8X"
+  # ============================================================================
+
+  # If VP8X chunk (extended features):
+  #   Offset 0x14: Flags (4 bytes)
+  #     Bit 1: ICC profile present
+  #     Bit 2: Alpha channel present
+  #     Bit 3: EXIF metadata present
+  #     Bit 4: XMP metadata present
+  #     Bit 5: Animation present
+  #   Offset 0x18: Canvas Width - 1 (3 bytes, 24-bit little-endian)
+  #   Offset 0x1B: Canvas Height - 1 (3 bytes, 24-bit little-endian)
+
+  # ============================================================================
+  # VP8 Chunk Data (Lossy) - Variable
+  # Present if chunk_fourcc = "VP8 "
+  # ============================================================================
+
+  # VP8 bitstream format:
+  #   Frame tag (3 bytes):
+  #     Bit 0: Frame type (0=key frame, 1=inter frame)
+  #     Bits 1-3: Version number
+  #     Bit 4: Show frame flag
+  #     Bits 5-23: Size of first data partition
+  #   
+  #   If key frame (bit 0 = 0):
+  #     Start code (3 bytes): 0x9D 0x01 0x2A
+  #     Horizontal size code (2 bytes):
+  #       Bits 0-13: Width - 1
+  #       Bits 14-15: Horizontal scale
+  #     Vertical size code (2 bytes):
+  #       Bits 0-13: Height - 1
+  #       Bits 14-15: Vertical scale
+
+  # ============================================================================
+  # VP8L Chunk Data (Lossless) - Variable
+  # Present if chunk_fourcc = "VP8L"
+  # ============================================================================
+
+  # VP8L bitstream format:
+  #   Signature (1 byte): 0x2F
+  #   Image size:
+  #     Bits 0-13: Width - 1 (14 bits)
+  #     Bits 14-27: Height - 1 (14 bits)
+  #     Bit 28: Alpha is used
+  #     Bits 29-31: Version (0)
+
+  # ============================================================================
+  # ALPH Chunk (Alpha Channel) - Variable
+  # Contains alpha channel data, used with VP8 lossy bitstream
+  # ============================================================================
+
+  # ALPH chunk format:
+  #   Flags (1 byte):
+  #     Bits 0-1: Reserved (0)
+  #     Bits 2-3: Filtering method
+  #     Bits 4-5: Compression method (0=none, 1=VP8L lossless)
+  #     Bits 6-7: Reserved (0)
+  #   Alpha bitstream (variable, size = chunk_size - 1)
+
+  # ============================================================================
+  # ANIM Chunk (Animation Parameters) - 6 bytes
+  # ============================================================================
+
+  # ANIM chunk format:
+  #   Background color (4 bytes): ARGB
+  #   Loop count (2 bytes): 0 = infinite loop
+
+  # ============================================================================
+  # ANMF Chunk (Animation Frame) - Variable
+  # One chunk per animation frame
+  # ============================================================================
+
+  # ANMF chunk format:
+  #   Frame X (3 bytes): X coordinate * 2
+  #   Frame Y (3 bytes): Y coordinate * 2
+  #   Frame Width - 1 (3 bytes)
+  #   Frame Height - 1 (3 bytes)
+  #   Frame Duration (3 bytes): Duration in milliseconds
+  #   Flags (1 byte):
+  #     Bits 0-1: Disposal method
+  #     Bit 2: Blending method
+  #     Bits 3-7: Reserved (0)
+  #   Frame Data: One or more image chunks (VP8/VP8L/ALPH)
+
+  # ============================================================================
+  # Metadata Chunks (optional)
+  # ============================================================================
+
+  # ICCP: ICC color profile data
+  # EXIF: EXIF metadata (same format as JPEG EXIF)
+  # XMP: XMP metadata (XML format)

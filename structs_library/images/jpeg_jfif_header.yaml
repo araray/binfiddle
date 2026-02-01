@@ -1,0 +1,131 @@
+# JPEG/JFIF (Joint Photographic Experts Group) File Format
+# Specification: JPEG File Interchange Format (JFIF) 1.02
+# Purpose: Parsing JPEG/JFIF file markers, APP0 segment, and frame header
+#
+# JPEG files use marker-based structure. Each marker is 2 bytes: 0xFF followed by marker type.
+# JFIF is a standardized interchange format for JPEG-compressed images.
+#
+# Reference: https://www.w3.org/Graphics/JPEG/jfif3.pdf
+# MIME type: image/jpeg
+
+name: JPEG/JFIF Image Header
+description: |
+  JPEG file structure with SOI marker, JFIF APP0 segment, and Start of Frame header.
+  Includes image dimensions, color space, and compression parameters.
+endian: big  # JPEG uses big-endian byte order
+
+fields:
+  # ============================================================================
+  # JPEG Markers - Start of Image
+  # All markers start with 0xFF and are 2 bytes total
+  # ============================================================================
+  
+  - name: soi_marker
+    offset: 0x00
+    size: 2
+    type: hex_string
+    description: "Start of Image marker (SOI): always 0xFFD8"
+    assert: "ffd8"
+    
+  # ============================================================================
+  # APP0 Marker - JFIF Application Segment
+  # ============================================================================
+  
+  - name: app0_marker
+    offset: 0x02
+    size: 2
+    type: hex_string
+    description: "APP0 marker for JFIF segment: 0xFFE0"
+    assert: "ffe0"
+    
+  - name: app0_length
+    offset: 0x04
+    size: 2
+    type: u16
+    description: "APP0 segment length including this field (typically 16)"
+    
+  - name: jfif_identifier
+    offset: 0x06
+    size: 5
+    type: hex_string
+    description: "JFIF identifier: 'JFIF\\0' in ASCII"
+    assert: "4a46494600"
+    
+  - name: jfif_version_major
+    offset: 0x0B
+    size: 1
+    type: u8
+    description: "JFIF major version (1 for JFIF 1.x)"
+    
+  - name: jfif_version_minor
+    offset: 0x0C
+    size: 1
+    type: u8
+    description: "JFIF minor version (0, 1, or 2)"
+    enum:
+      0: "JFIF 1.00"
+      1: "JFIF 1.01"
+      2: "JFIF 1.02"
+    
+  - name: density_units
+    offset: 0x0D
+    size: 1
+    type: u8
+    description: "Units for pixel density (X/Y density fields)"
+    enum:
+      0: "No units (aspect ratio only)"
+      1: "Dots per inch (DPI)"
+      2: "Dots per centimeter"
+    
+  - name: x_density
+    offset: 0x0E
+    size: 2
+    type: u16
+    description: "Horizontal pixel density"
+    
+  - name: y_density
+    offset: 0x10
+    size: 2
+    type: u16
+    description: "Vertical pixel density"
+    
+  - name: thumbnail_width
+    offset: 0x12
+    size: 1
+    type: u8
+    description: "Thumbnail width in pixels (0 if no thumbnail)"
+    
+  - name: thumbnail_height
+    offset: 0x13
+    size: 1
+    type: u8
+    description: "Thumbnail height in pixels (0 if no thumbnail)"
+
+  # ============================================================================
+  # Common JPEG markers that follow (not at fixed offsets):
+  # 
+  # Standalone markers (no data):
+  #   0xFFD8 - SOI (Start of Image)
+  #   0xFFD9 - EOI (End of Image)
+  #   0xFFD0-0xFFD7 - RSTn (Restart markers)
+  #
+  # Markers with variable-length data:
+  #   0xFFC0 - SOF0 (Start of Frame - Baseline DCT)
+  #   0xFFC1 - SOF1 (Extended Sequential DCT)
+  #   0xFFC2 - SOF2 (Progressive DCT)
+  #   0xFFC4 - DHT (Define Huffman Table)
+  #   0xFFDB - DQT (Define Quantization Table)
+  #   0xFFDA - SOS (Start of Scan)
+  #   0xFFDD - DRI (Define Restart Interval)
+  #   0xFFE0 - APP0 (JFIF/JFXX)
+  #   0xFFE1 - APP1 (EXIF/XMP)
+  #   0xFFE2-0xFFEF - APP2-APP15 (Application-specific)
+  #   0xFFFE - COM (Comment)
+  #
+  # The SOF0 marker contains image dimensions:
+  #   Length (2) + Precision (1) + Height (2) + Width (2) + Components (1) + ...
+  #   Typically at variable offset (after APP0, possibly after other APPn/DQT/DHT)
+  #
+  # Note: Full JPEG parsing requires scanning for markers throughout the file,
+  # as their positions are not fixed. This template shows only the fixed header.
+  # ============================================================================

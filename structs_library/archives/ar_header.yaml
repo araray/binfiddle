@@ -1,0 +1,86 @@
+# Unix AR Archive Format
+# Specification: System V / GNU ar archive format
+# Platform: Unix, Linux, BSD - all architectures
+# Purpose: Parsing AR archive headers (.a static libraries, .deb packages)
+#
+# AR archives are used for static libraries (.a files) and Debian packages (.deb).
+# Each file in the archive has a header followed by the file data.
+# The archive starts with a global magic "!<arch>\n"
+#
+# This template parses individual file headers within the archive.
+# Usage: First 8 bytes of file should be "!<arch>\n", then file headers follow
+# Reference: https://en.wikipedia.org/wiki/Ar_(Unix)
+# See also: ar command, /usr/include/ar.h
+
+name: AR Archive File Header
+description: |
+  File header for entries within AR archives (.a static libraries).
+  Contains filename, timestamp, owner IDs, permissions, and file size.
+  Used in static linking and Debian package management.
+endian: little  # AR format uses ASCII for most fields
+
+fields:
+  - name: ar_name
+    offset: 0x00
+    size: 16
+    type: string
+    description: "File name (ASCII, space-padded or / for special files)"
+    # Formats:
+    # - Normal: "filename.txt    " (space-padded to 16 bytes)
+    # - Long filename (BSD): "#1/NNN" where NNN is length, name follows header
+    # - Long filename (GNU): "/NNN" where NNN is offset into // special file
+    # - Symbol table: "/" (first file in archive)
+    # - Long filename table: "//" (second file in archive, GNU format)
+    
+  - name: ar_date
+    offset: 0x10
+    size: 12
+    type: string
+    description: "Modification timestamp (decimal ASCII seconds since epoch)"
+    # Example: "1609459200 " = Jan 1, 2021 00:00:00 UTC
+    # Space-padded to 12 bytes
+    
+  - name: ar_uid
+    offset: 0x1C
+    size: 6
+    type: string
+    description: "Owner user ID (decimal ASCII, space-padded)"
+    # Example: "1000  "
+    
+  - name: ar_gid
+    offset: 0x22
+    size: 6
+    type: string
+    description: "Owner group ID (decimal ASCII, space-padded)"
+    # Example: "1000  "
+    
+  - name: ar_mode
+    offset: 0x28
+    size: 8
+    type: string
+    description: "File mode/permissions (octal ASCII, space-padded)"
+    # Example: "100644  " = regular file, rw-r--r--
+    # Format is same as Unix stat st_mode field
+    
+  - name: ar_size
+    offset: 0x30
+    size: 10
+    type: string
+    description: "File size in bytes (decimal ASCII, space-padded)"
+    # This is the size of the file data following this header
+    # If BSD long name (#1/NNN), size includes the NNN bytes of filename
+    
+  - name: ar_fmag
+    offset: 0x3A
+    size: 2
+    type: hex_string
+    description: "File magic signature (should be 0x60 0x0A)"
+    assert: "600a"
+    # This is the backtick character (0x60) followed by newline (0x0A)
+    # Acts as a header terminator/validity check
+
+# Note: After this 60-byte header, the file data follows
+# If the filename was in #1/NNN format (BSD), the first NNN bytes
+# of the file data are the actual filename, then the real file data follows
+# File data is padded to even byte boundary (pad byte is 0x0A)
+# Next file header starts immediately after padding

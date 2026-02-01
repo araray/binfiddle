@@ -1,0 +1,65 @@
+# Mach-O Universal/Fat Binary Header
+# Specification: Apple Mach-O File Format
+# Platform: macOS, iOS, watchOS, tvOS - multi-architecture binaries
+# Purpose: Parsing universal/fat binary headers containing multiple architectures
+#
+# Universal binaries (also called fat binaries) contain multiple Mach-O files
+# for different architectures (e.g., x86_64 + ARM64) in a single file.
+# Common in macOS applications and iOS frameworks.
+#
+# Header contains magic number and list of architecture-specific slices.
+# Each slice points to a complete Mach-O binary for that architecture.
+#
+# Usage: Check first 4 bytes for fat magic, then parse fat_arch entries
+# Reference: https://github.com/aidansteele/osx-abi-macho-file-format-reference
+# See also: lipo, file command, otool -f
+
+name: Mach-O Universal Binary Header
+description: |
+  Universal/fat binary header wrapping multiple Mach-O files for different
+  architectures. Contains magic number and count, followed by fat_arch
+  entries (8 bytes each for 32-bit, 20 bytes for 64-bit variant).
+endian: big  # Universal binary header is always big-endian
+
+fields:
+  - name: magic
+    offset: 0x00
+    size: 4
+    type: u32
+    description: "Fat binary magic number"
+    enum:
+      3405691582: "FAT_MAGIC (0xCAFEBABE - 32-bit offsets)"
+      3405691583: "FAT_MAGIC_64 (0xCAFEBABF - 64-bit offsets)"
+    # FAT_MAGIC: followed by fat_arch entries (20 bytes each)
+    # FAT_MAGIC_64: followed by fat_arch_64 entries (32 bytes each)
+    
+  - name: nfat_arch
+    offset: 0x04
+    size: 4
+    type: u32
+    description: "Number of architecture slices in this file"
+    # Typically 2-4 (e.g., x86_64 + ARM64, or x86_64 + ARM64 + ARM64E)
+    # Each slice is a complete Mach-O binary
+
+# After this 8-byte header, nfat_arch entries follow:
+# For FAT_MAGIC (20 bytes per entry):
+#   u32 cputype        CPU type (CPU_TYPE_X86_64, CPU_TYPE_ARM64, etc.)
+#   u32 cpusubtype     CPU subtype (specific variant)
+#   u32 offset         File offset to Mach-O header (aligned to 2^align)
+#   u32 size           Size of Mach-O slice in bytes
+#   u32 align          Alignment as power of 2 (typically 12 = 4KB, 14 = 16KB)
+#
+# For FAT_MAGIC_64 (32 bytes per entry):
+#   u32 cputype        CPU type
+#   u32 cpusubtype     CPU subtype
+#   u64 offset         64-bit file offset to Mach-O header
+#   u64 size           64-bit size of Mach-O slice
+#   u32 align          Alignment as power of 2
+#   u32 reserved       Reserved (should be 0)
+#
+# Common CPU types:
+#   CPU_TYPE_X86 (7)       - Intel 32-bit
+#   CPU_TYPE_X86_64 (0x01000007) - Intel 64-bit
+#   CPU_TYPE_ARM (12)      - ARM 32-bit
+#   CPU_TYPE_ARM64 (0x0100000C) - ARM 64-bit
+#   CPU_TYPE_ARM64_32 (0x0200000C) - ARM64 with 32-bit pointers (watchOS)

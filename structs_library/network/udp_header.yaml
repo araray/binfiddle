@@ -1,0 +1,112 @@
+# UDP (User Datagram Protocol) Header
+# Specification: RFC 768 - User Datagram Protocol
+# Platform: Network - all platforms
+# Purpose: Parsing UDP datagram headers
+#
+# UDP is a connectionless transport protocol providing minimal overhead.
+# Used for: DNS, DHCP, streaming media, gaming, VoIP, NTP, TFTP
+# Header is only 8 bytes, making it very lightweight.
+#
+# UDP provides no reliability, ordering, or duplicate protection.
+# Applications must handle these if needed.
+#
+# Usage: Network packet analysis, protocol development, forensics
+# Reference: https://www.rfc-editor.org/rfc/rfc768
+# See also: Wireshark, tcpdump, scapy
+
+name: UDP Datagram Header
+description: |
+  User Datagram Protocol header (8 bytes). Contains source port,
+  destination port, length, and checksum. Provides connectionless,
+  best-effort datagram delivery with minimal overhead.
+endian: big  # Network protocols use big-endian (network byte order)
+
+fields:
+  - name: source_port
+    offset: 0x00
+    size: 2
+    type: u16
+    description: "Source port number (0-65535, 0 = no reply expected)"
+    # Common ephemeral ports: 49152-65535
+    # Well-known services: < 1024
+    # Example: 53 = DNS, 67/68 = DHCP, 123 = NTP
+    
+  - name: destination_port
+    offset: 0x02
+    size: 2
+    type: u16
+    description: "Destination port number (0-65535)"
+    # Well-known UDP ports:
+    #   7: Echo
+    #   53: DNS
+    #   67: DHCP server
+    #   68: DHCP client
+    #   69: TFTP
+    #   123: NTP
+    #   161: SNMP
+    #   162: SNMP trap
+    #   500: ISAKMP (IPsec IKE)
+    #   514: Syslog
+    #   520: RIP
+    #   1900: SSDP (UPnP)
+    #   5353: mDNS
+    #   6881-6889: BitTorrent
+    
+  - name: length
+    offset: 0x04
+    size: 2
+    type: u16
+    description: "Length of UDP header + data in bytes (minimum 8)"
+    # Includes 8-byte header + payload
+    # Minimum value is 8 (header only, no data)
+    # Maximum theoretical value is 65535 (limited by IP packet size)
+    # Actual maximum depends on MTU (usually 1472 for Ethernet without fragmentation)
+    
+  - name: checksum
+    offset: 0x06
+    size: 2
+    type: u16
+    description: "UDP checksum (0 = no checksum, optional in IPv4)"
+    display: hex
+    # Checksum calculation:
+    #   1. Create pseudo-header from IP header:
+    #      - Source IP (4 bytes)
+    #      - Destination IP (4 bytes)
+    #      - Zero byte (1 byte)
+    #      - Protocol (1 byte, 17 for UDP)
+    #      - UDP length (2 bytes)
+    #   2. Concatenate pseudo-header + UDP header + UDP data
+    #   3. Calculate 16-bit one's complement sum
+    #   4. Take one's complement of sum
+    #
+    # For IPv4: checksum is optional (can be 0)
+    # For IPv6: checksum is mandatory (cannot be 0)
+    # If checksum is 0 in calculation, use 0xFFFF instead
+
+# After this 8-byte header, the UDP payload follows
+# Payload interpretation depends on destination port:
+#   Port 53: DNS query/response
+#   Port 67/68: DHCP messages
+#   Port 123: NTP time sync
+#   Port 161/162: SNMP messages
+#   Port 514: Syslog messages
+#   etc.
+#
+# UDP characteristics:
+#   - Connectionless: no handshake or connection state
+#   - Unreliable: no acknowledgments, retransmissions, or ordering
+#   - Low overhead: 8-byte header vs TCP's 20+ bytes
+#   - Fast: no connection setup, tear-down, or flow control
+#   - Broadcast/multicast: supports one-to-many communication
+#
+# Common UDP usage patterns:
+#   1. Query-response (DNS, SNMP): single request, single response
+#   2. Streaming (video, VoIP): continuous flow, occasional drops OK
+#   3. Broadcast (DHCP discovery): one-to-many communication
+#   4. Tunneling (VPN, DNS-over-HTTPS): encapsulate other protocols
+#
+# Security considerations:
+#   - No source validation (easy to spoof)
+#   - Amplification attacks (DNS, NTP, SSDP)
+#   - Flooding attacks (UDP flood DoS)
+#   - No encryption (application-level security required)

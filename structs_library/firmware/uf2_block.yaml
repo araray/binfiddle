@@ -1,0 +1,147 @@
+# UF2 (USB Flashing Format) Firmware Block
+# Specification: Microsoft UF2 Format Specification
+# Platform: Embedded - Arduino, Raspberry Pi Pico (RP2040), ESP32, SAMD, nRF52
+# Purpose: Parsing UF2 firmware files for USB mass storage bootloaders
+#
+# UF2 is a file format for flashing microcontrollers via USB mass storage.
+# The file appears as a FAT filesystem when the device is in bootloader mode.
+# Each block is 512 bytes (one FAT sector) containing 256 bytes of data.
+#
+# Common uses:
+#   - Arduino boards with native USB (SAMD21, SAMD51)
+#   - Raspberry Pi Pico (RP2040)
+#   - ESP32-S2, ESP32-S3
+#   - Adafruit boards (Circuit Playground, Feather, etc.)
+#   - Nordic nRF52 boards
+#
+# Usage: Drag-and-drop firmware flashing
+# Reference: https://github.com/microsoft/uf2
+# See also: uf2conv.py, Arduino IDE, PlatformIO
+
+name: UF2 Firmware Block
+description: |
+  UF2 firmware block (512 bytes). Contains magic numbers, flags,
+  target address, 256 bytes of payload data, and file info.
+  Each block is self-contained and can be written independently.
+endian: little  # UF2 format uses little-endian
+
+fields:
+  - name: magic_start_0
+    offset: 0x00
+    size: 4
+    type: hex_string
+    description: "First magic number (0x0A324655 in little-endian)"
+    assert: "5546320a"
+    # 0x0A324655 = UF2 first magic
+    # In little-endian bytes: 55 46 32 0A
+    
+  - name: magic_start_1
+    offset: 0x04
+    size: 4
+    type: hex_string
+    description: "Second magic number (0x9E5D5157 in little-endian)"
+    assert: "57515d9e"
+    # 0x9E5D5157 = UF2 second magic
+    # In little-endian bytes: 57 51 5D 9E
+    
+  - name: flags
+    offset: 0x08
+    size: 4
+    type: u32
+    description: "Block flags (bitfield)"
+    display: hex
+    # Bit 0 (0x00000001): Not main flash (skip this block)
+    # Bit 12 (0x00001000): File container (0x00002000 in flags)
+    # Bit 13 (0x00002000): Family ID present
+    # Bit 14 (0x00004000): MD5 checksum present
+    # Bit 15 (0x00008000): Extension tags present
+    # Other bits reserved, should be 0
+    
+  - name: target_addr
+    offset: 0x0C
+    size: 4
+    type: u32
+    description: "Target memory address for this block's payload"
+    display: hex
+    # Where to write the 256 bytes of data in target device memory
+    # Example: 0x10000000 for RP2040 flash, 0x00000000 for ESP32
+    
+  - name: payload_size
+    offset: 0x10
+    size: 4
+    type: u32
+    description: "Number of valid bytes in payload (0-476)"
+    # Usually 256, but last block may be smaller
+    # Valid payload is from offset 0x20 to 0x20 + payload_size
+    
+  - name: block_no
+    offset: 0x14
+    size: 4
+    type: u32
+    description: "Sequential block number (0-based)"
+    # Used to order blocks and track progress
+    
+  - name: num_blocks
+    offset: 0x18
+    size: 4
+    type: u32
+    description: "Total number of blocks in the file"
+    # Allows validation that all blocks are present
+    
+  - name: file_size_or_family_id
+    offset: 0x1C
+    size: 4
+    type: u32
+    description: "File size (if no family ID) or family ID (if flag 0x2000 set)"
+    display: hex
+    # If flags & 0x2000:
+    #   This is a family ID identifying the target board/chip
+    #   Common family IDs:
+    #     0xe48bff56: Raspberry Pi RP2040
+    #     0x68ed2b88: SAMD21
+    #     0x55114460: SAMD51
+    #     0x1c5f21b0: ESP32-S2
+    #     0xc47e5767: ESP32-S3
+    #     0xada52840: nRF52840
+    # Else:
+    #   Total size of binary file being flashed
+    
+  - name: data
+    offset: 0x20
+    size: 476
+    type: hex_string
+    description: "Payload data (256 bytes used, rest padding)"
+    # First payload_size bytes are the actual firmware data
+    # Remaining bytes (476 - payload_size) are padding (usually 0)
+    # 476 bytes allows for future expansion of header
+    
+  - name: magic_end
+    offset: 0x1FC
+    size: 4
+    type: hex_string
+    description: "End magic number (0x0AB16F30 in little-endian)"
+    assert: "306fb10a"
+    # 0x0AB16F30 - marks end of UF2 block
+    # In little-endian bytes: 30 6F B1 0A
+
+# Total size: 512 bytes (0x200) - one FAT sector
+#
+# UF2 file structure:
+#   - Multiple 512-byte blocks, each self-contained
+#   - Blocks can be written in any order (bootloader sorts by block_no)
+#   - File appears as CURRENT.UF2 on FAT filesystem
+#   - Writing a new UF2 file triggers flashing and reboot
+#
+# Family IDs (common):
+#   0xe48bff56: Raspberry Pi RP2040 (Pico, Pico W)
+#   0x68ed2b88: Microchip SAMD21 (Arduino Zero, Feather M0)
+#   0x55114460: Microchip SAMD51 (Feather M4, ItsyBitsy M4)
+#   0x1c5f21b0: ESP32-S2
+#   0xc47e5767: ESP32-S3
+#   0xada52840: Nordic nRF52840
+#   0x04240bdf: STM32L4xx
+#   0x53b80f00: STM32G0xx
+#   0x300f5633: STM32F103
+#   0x31d228c6: GD32F350
+#   0x4fb2d5bd: i.MX RT10xx
+#   0x2b88d29c: Nordic nRF52833

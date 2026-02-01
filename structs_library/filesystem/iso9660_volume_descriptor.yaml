@@ -1,0 +1,319 @@
+# ISO 9660 Filesystem Volume Descriptor
+# Specification: ISO 9660:1988 / ECMA-119
+# Platform: CD-ROM, DVD, ISO images - all platforms
+# Purpose: Parsing ISO 9660 filesystem volume descriptors
+#
+# ISO 9660 is the standard filesystem for CD-ROMs and ISO images.
+# Volume descriptors start at sector 16 (byte offset 0x8000).
+# Each descriptor is 2048 bytes (one sector).
+#
+# Common uses:
+#   - CD/DVD images (.iso files)
+#   - Bootable installation media (Linux, Windows)
+#   - Software distribution
+#   - Digital preservation
+#
+# Usage: Mount ISO images, analyze disc structure
+# Reference: ECMA-119 standard, ISO 9660 specification
+# See also: isoinfo, mount -o loop, genisoimage
+
+name: ISO 9660 Primary Volume Descriptor
+description: |
+  ISO 9660 primary volume descriptor (sector 16, 2048 bytes).
+  Contains filesystem metadata, volume name, creation date,
+  root directory location, and block size. Essential for
+  mounting and navigating ISO images.
+endian: little  # ISO 9660 stores integers in both little and big endian
+
+fields:
+  - name: volume_descriptor_type
+    offset: 0x00
+    size: 1
+    type: u8
+    description: "Volume descriptor type code"
+    enum:
+      0: "Boot Record"
+      1: "Primary Volume Descriptor"
+      2: "Supplementary Volume Descriptor"
+      3: "Volume Partition Descriptor"
+      255: "Volume Descriptor Set Terminator"
+    # Type 1 (Primary Volume Descriptor) is required
+    # Type 255 marks end of descriptor sequence
+    assert: "01"
+    
+  - name: standard_identifier
+    offset: 0x01
+    size: 5
+    type: string
+    description: "Standard identifier (should be 'CD001')"
+    assert: "4344303031"  # "CD001" in hex
+    
+  - name: volume_descriptor_version
+    offset: 0x06
+    size: 1
+    type: u8
+    description: "Volume descriptor version (should be 1)"
+    assert: "01"
+    
+  - name: unused_1
+    offset: 0x07
+    size: 1
+    type: u8
+    description: "Unused field (should be 0)"
+    
+  - name: system_identifier
+    offset: 0x08
+    size: 32
+    type: string
+    description: "System identifier (OS that created the volume)"
+    # Examples: "LINUX", "WIN32", "APPLE", space-padded
+    
+  - name: volume_identifier
+    offset: 0x28
+    size: 32
+    type: string
+    description: "Volume identifier (volume label/name)"
+    # Example: "UBUNTU 22.04 LTS AMD64", space-padded
+    
+  - name: unused_2
+    offset: 0x48
+    size: 8
+    type: hex_string
+    description: "Unused field (should be all zeros)"
+    
+  - name: volume_space_size_lsb
+    offset: 0x50
+    size: 4
+    type: u32
+    description: "Volume size in logical blocks (little-endian)"
+    # Total size = volume_space_size * logical_block_size
+    # ISO 9660 stores this in both little and big endian
+    
+  - name: volume_space_size_msb
+    offset: 0x54
+    size: 4
+    type: u32
+    description: "Volume size in logical blocks (big-endian, same as LSB)"
+    # Should match volume_space_size_lsb (stored in both endians)
+    
+  - name: unused_3
+    offset: 0x58
+    size: 32
+    type: hex_string
+    description: "Unused field (should be all zeros)"
+    
+  - name: volume_set_size_lsb
+    offset: 0x78
+    size: 2
+    type: u16
+    description: "Volume set size (little-endian, usually 1)"
+    
+  - name: volume_set_size_msb
+    offset: 0x7A
+    size: 2
+    type: u16
+    description: "Volume set size (big-endian, same as LSB)"
+    
+  - name: volume_sequence_number_lsb
+    offset: 0x7C
+    size: 2
+    type: u16
+    description: "Volume sequence number (little-endian, usually 1)"
+    
+  - name: volume_sequence_number_msb
+    offset: 0x7E
+    size: 2
+    type: u16
+    description: "Volume sequence number (big-endian, same as LSB)"
+    
+  - name: logical_block_size_lsb
+    offset: 0x80
+    size: 2
+    type: u16
+    description: "Logical block size in bytes (little-endian, usually 2048)"
+    # Standard CD-ROM sector size is 2048 bytes
+    
+  - name: logical_block_size_msb
+    offset: 0x82
+    size: 2
+    type: u16
+    description: "Logical block size in bytes (big-endian, same as LSB)"
+    
+  - name: path_table_size_lsb
+    offset: 0x84
+    size: 4
+    type: u32
+    description: "Path table size in bytes (little-endian)"
+    # Path table allows fast directory lookup
+    
+  - name: path_table_size_msb
+    offset: 0x88
+    size: 4
+    type: u32
+    description: "Path table size in bytes (big-endian, same as LSB)"
+    
+  - name: type_l_path_table
+    offset: 0x8C
+    size: 4
+    type: u32
+    description: "Logical block number of Type-L path table"
+    display: hex
+    # Type-L = little-endian path table
+    
+  - name: optional_type_l_path_table
+    offset: 0x90
+    size: 4
+    type: u32
+    description: "Logical block number of optional Type-L path table (0 if none)"
+    display: hex
+    
+  - name: type_m_path_table
+    offset: 0x94
+    size: 4
+    type: u32
+    description: "Logical block number of Type-M path table"
+    display: hex
+    # Type-M = big-endian (Motorola byte order) path table
+    
+  - name: optional_type_m_path_table
+    offset: 0x98
+    size: 4
+    type: u32
+    description: "Logical block number of optional Type-M path table (0 if none)"
+    display: hex
+    
+  - name: root_directory_entry
+    offset: 0x9C
+    size: 34
+    type: hex_string
+    description: "Directory entry for root directory"
+    # This is a directory record structure (34 bytes):
+    #   u8 length
+    #   u8 extended_attribute_record_length
+    #   u32 extent_location_lsb
+    #   u32 extent_location_msb
+    #   u32 data_length_lsb
+    #   u32 data_length_msb
+    #   u8[7] recording_date_time
+    #   u8 file_flags
+    #   u8 file_unit_size
+    #   u8 interleave_gap_size
+    #   u16 volume_sequence_number_lsb
+    #   u16 volume_sequence_number_msb
+    #   u8 file_identifier_length
+    #   variable: file_identifier (1 byte: 0x00 for root)
+    
+  - name: volume_set_identifier
+    offset: 0xBE
+    size: 128
+    type: string
+    description: "Volume set identifier (space-padded)"
+    
+  - name: publisher_identifier
+    offset: 0x13E
+    size: 128
+    type: string
+    description: "Publisher identifier (space-padded or filename reference)"
+    
+  - name: data_preparer_identifier
+    offset: 0x1BE
+    size: 128
+    type: string
+    description: "Data preparer identifier (space-padded or filename reference)"
+    
+  - name: application_identifier
+    offset: 0x23E
+    size: 128
+    type: string
+    description: "Application identifier (space-padded or filename reference)"
+    # Often contains the software used to create the ISO
+    # Example: "GENISOIMAGE", "MKISOFS", "CDRTFE"
+    
+  - name: copyright_file_identifier
+    offset: 0x2BE
+    size: 37
+    type: string
+    description: "Copyright file identifier (filename or space-padded)"
+    
+  - name: abstract_file_identifier
+    offset: 0x2E3
+    size: 37
+    type: string
+    description: "Abstract file identifier (filename or space-padded)"
+    
+  - name: bibliographic_file_identifier
+    offset: 0x308
+    size: 37
+    type: string
+    description: "Bibliographic file identifier (filename or space-padded)"
+    
+  - name: volume_creation_date_time
+    offset: 0x32D
+    size: 17
+    type: string
+    description: "Volume creation date/time (ASCII: YYYYMMDDHHMMSSmmZZ)"
+    # Format: 17 bytes
+    #   YYYY - year (4 digits)
+    #   MM - month (2 digits, 01-12)
+    #   DD - day (2 digits, 01-31)
+    #   HH - hour (2 digits, 00-23)
+    #   MM - minute (2 digits, 00-59)
+    #   SS - second (2 digits, 00-59)
+    #   mm - centiseconds (2 digits, 00-99)
+    #   Z - timezone offset in 15-minute intervals from GMT (-48 to +52)
+    
+  - name: volume_modification_date_time
+    offset: 0x33E
+    size: 17
+    type: string
+    description: "Volume modification date/time (ASCII: YYYYMMDDHHMMSSmmZZ)"
+    
+  - name: volume_expiration_date_time
+    offset: 0x34F
+    size: 17
+    type: string
+    description: "Volume expiration date/time (0s if not specified)"
+    
+  - name: volume_effective_date_time
+    offset: 0x360
+    size: 17
+    type: string
+    description: "Volume effective date/time (0s if not specified)"
+    
+  - name: file_structure_version
+    offset: 0x371
+    size: 1
+    type: u8
+    description: "File structure version (should be 1)"
+    assert: "01"
+    
+  - name: reserved_for_future
+    offset: 0x372
+    size: 1
+    type: u8
+    description: "Reserved for future standardization (should be 0)"
+    
+  - name: application_use
+    offset: 0x373
+    size: 512
+    type: hex_string
+    description: "Application-specific data (often empty)"
+    
+  - name: reserved_2
+    offset: 0x573
+    size: 653
+    type: hex_string
+    description: "Reserved for future standardization (should be all zeros)"
+
+# Total size: 2048 bytes (0x800) - one CD-ROM sector
+#
+# ISO 9660 filesystem layout:
+#   Sector 0-15: System area (usually empty or boot code)
+#   Sector 16: Primary Volume Descriptor (this structure)
+#   Sector 17+: Additional descriptors (supplementary, boot, terminator)
+#   Sector N: Path tables (for fast directory lookup)
+#   Sector M: Directory records and file data
+#
+# For bootable ISOs (El Torito):
+#   Volume Descriptor Type 0 at sector 17 contains boot catalog pointer
+#   Boot catalog contains boot image locations and validation entries

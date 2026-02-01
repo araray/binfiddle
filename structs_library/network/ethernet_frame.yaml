@@ -1,0 +1,140 @@
+# Ethernet II Frame Format
+# Specification: IEEE 802.3 Ethernet
+# Purpose: Parsing Ethernet frame header for network packet analysis
+#
+# Ethernet is the dominant link-layer protocol for local area networks.
+# Frame structure: Preamble + Frame header + Payload + FCS
+#
+# Reference: IEEE 802.3-2018 Standard
+# Layer: OSI Layer 2 (Data Link)
+
+name: Ethernet II Frame Header
+description: |
+  Ethernet II (DIX Ethernet) frame header with MAC addresses, EtherType,
+  and frame check sequence. Used for IP, ARP, and other network protocols.
+endian: big  # Network byte order (big-endian)
+
+fields:
+  # ============================================================================
+  # Preamble and SFD - 8 bytes (usually not present in captured packets)
+  # ============================================================================
+  
+  # Preamble (7 bytes): 0xAA-AA-AA-AA-AA-AA-AA
+  #   Used for synchronization, typically stripped by NIC
+  # 
+  # Start Frame Delimiter (1 byte): 0xAB
+  #   Marks start of actual frame
+
+  # ============================================================================
+  # Ethernet II Frame Header - 14 bytes
+  # ============================================================================
+  
+  - name: destination_mac
+    offset: 0x00
+    size: 6
+    type: hex_string
+    description: "Destination MAC address (48-bit)"
+    # Bit 0 of first byte: I/G (Individual/Group) - 0=unicast, 1=multicast
+    # Bit 1 of first byte: U/L (Universal/Local) - 0=globally unique, 1=locally administered
+    # Special addresses:
+    #   FF-FF-FF-FF-FF-FF = Broadcast
+    #   01-00-5E-xx-xx-xx = IPv4 multicast
+    #   33-33-xx-xx-xx-xx = IPv6 multicast
+    
+  - name: source_mac
+    offset: 0x06
+    size: 6
+    type: hex_string
+    description: "Source MAC address (48-bit, sender's NIC address)"
+    
+  - name: ethertype
+    offset: 0x0C
+    size: 2
+    type: u16
+    description: "EtherType field - indicates protocol of payload"
+    display: hex
+    enum:
+      2048: "0x0800 - IPv4"
+      2054: "0x0806 - ARP (Address Resolution Protocol)"
+      34525: "0x86DD - IPv6"
+      33024: "0x8100 - 802.1Q VLAN-tagged frame"
+      34984: "0x88A8 - 802.1ad Provider Bridging (QinQ)"
+      34887: "0x8847 - MPLS unicast"
+      34888: "0x8848 - MPLS multicast"
+      34916: "0x8864 - PPPoE Discovery Stage"
+      34915: "0x8863 - PPPoE Session Stage"
+      35020: "0x88CC - LLDP (Link Layer Discovery Protocol)"
+      34958: "0x888E - 802.1X Authentication"
+      35138: "0x8922 - Profinet"
+      2114: "0x0842 - Wake-on-LAN"
+      # Values ≤ 1500 (0x05DC) indicate 802.3 frame with length field
+
+  # ============================================================================
+  # 802.1Q VLAN Tag (optional, if EtherType = 0x8100)
+  # Inserted between source MAC and EtherType
+  # ============================================================================
+
+  # If VLAN-tagged frame (EtherType 0x8100):
+  #   Tag Control Information (2 bytes):
+  #     Priority (3 bits): 802.1p priority (0-7)
+  #     DEI (1 bit): Drop Eligible Indicator
+  #     VLAN ID (12 bits): VLAN identifier (0-4095)
+  #   EtherType (2 bytes): Actual protocol type (e.g., 0x0800 for IPv4)
+  #
+  # Total header size: 18 bytes for VLAN-tagged frames
+
+  # ============================================================================
+  # Payload - 46-1500 bytes for Ethernet II
+  # ============================================================================
+
+  # Contains higher-layer protocol data (IP packet, ARP, etc.)
+  # Minimum payload: 46 bytes (padded if necessary)
+  # Maximum payload: 1500 bytes (MTU - Maximum Transmission Unit)
+  # Jumbo frames: Up to 9000 bytes (non-standard extension)
+
+  # ============================================================================
+  # Frame Check Sequence (FCS) - 4 bytes
+  # Usually at end of frame, often not present in captured packets
+  # ============================================================================
+
+  # CRC-32 checksum of entire frame (excluding preamble, SFD, and FCS itself)
+  # Used for error detection
+  # Typically calculated and verified by NIC hardware
+
+  # ============================================================================
+  # Interframe Gap - 12 bytes (96 bits)
+  # Not part of frame, but required spacing between frames
+  # ============================================================================
+
+  # Idle time between frames to allow processing
+  # Not captured in packet dumps
+
+  # ============================================================================
+  # Frame Size
+  # ============================================================================
+
+  # Minimum valid frame: 64 bytes (with FCS)
+  #   14 (header) + 46 (payload) + 4 (FCS) = 64 bytes
+  #   Smaller frames are "runts" and discarded
+  #
+  # Maximum standard frame: 1518 bytes (with FCS)
+  #   14 (header) + 1500 (payload) + 4 (FCS) = 1518 bytes
+  #
+  # Maximum VLAN frame: 1522 bytes (with FCS)
+  #   18 (header with tag) + 1500 (payload) + 4 (FCS) = 1522 bytes
+  #
+  # Jumbo frames: Up to 9018 bytes (9000 byte payload)
+
+  # ============================================================================
+  # Common Payload Types
+  # ============================================================================
+
+  # IPv4 (EtherType 0x0800):
+  #   IP header (20-60 bytes) + IP payload (TCP/UDP/ICMP/etc.)
+  #
+  # ARP (EtherType 0x0806):
+  #   Hardware type (2), Protocol type (2), HW size (1), Protocol size (1),
+  #   Operation (2), Sender MAC (6), Sender IP (4), Target MAC (6), Target IP (4)
+  #
+  # IPv6 (EtherType 0x86DD):
+  #   IPv6 header (40 bytes fixed) + Extension headers + Payload

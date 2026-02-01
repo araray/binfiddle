@@ -1,0 +1,130 @@
+# ELF 32-bit Section Header Entry
+# Specification: Tool Interface Standard (TIS) Executable and Linking Format (ELF) Specification Version 1.2
+# Platform: Linux, BSD, Solaris - 32-bit architectures
+# Purpose: Parsing a single section header table entry (Elf32_Shdr)
+#
+# Section headers describe sections for linking and debugging.
+# They define named regions like .text, .data, .bss, .symtab, etc.
+# Each entry is 40 bytes for ELF32.
+#
+# Usage: Point to e_shoff + (entry_index * e_shentsize) from the ELF header
+# Section names are stored in .shstrtab section (index e_shstrndx)
+# Reference: https://refspecs.linuxfoundation.org/elf/elf.pdf
+# See also: readelf -S, /usr/include/elf.h
+
+name: ELF 32-bit Section Header Entry
+description: |
+  Section header table entry describing a section within the ELF file.
+  Sections contain code (.text), data (.data/.bss), symbols (.symtab),
+  relocations (.rel/.rela), strings (.strtab), and debugging information.
+  Critical for linking, loading, and debugging on 32-bit architectures.
+endian: little  # Should match ELF header's e_ident[EI_DATA]
+
+fields:
+  - name: sh_name
+    offset: 0x00
+    size: 4
+    type: u32
+    description: "Offset into .shstrtab section for section name string"
+    display: hex
+    
+  - name: sh_type
+    offset: 0x04
+    size: 4
+    type: u32
+    description: "Section type - categorizes section contents"
+    enum:
+      0: "SHT_NULL (Inactive entry)"
+      1: "SHT_PROGBITS (Program data - .text, .data, .rodata)"
+      2: "SHT_SYMTAB (Symbol table - .symtab)"
+      3: "SHT_STRTAB (String table - .strtab, .shstrtab)"
+      4: "SHT_RELA (Relocation entries with addends - .rela.*)"
+      5: "SHT_HASH (Symbol hash table - .hash)"
+      6: "SHT_DYNAMIC (Dynamic linking info - .dynamic)"
+      7: "SHT_NOTE (Note section - .note.*)"
+      8: "SHT_NOBITS (No file space - .bss)"
+      9: "SHT_REL (Relocation entries without addends - .rel.*)"
+      10: "SHT_SHLIB (Reserved, unspecified)"
+      11: "SHT_DYNSYM (Dynamic symbol table - .dynsym)"
+      14: "SHT_INIT_ARRAY (Array of constructors - .init_array)"
+      15: "SHT_FINI_ARRAY (Array of destructors - .fini_array)"
+      16: "SHT_PREINIT_ARRAY (Pre-init array - .preinit_array)"
+      17: "SHT_GROUP (Section group)"
+      18: "SHT_SYMTAB_SHNDX (Extended section indices)"
+      1879048192: "SHT_LOOS (0x70000000 - OS-specific start)"
+      1879048194: "SHT_GNU_HASH (0x70000002 - GNU hash table)"
+      1879048700: "SHT_GNU_verdef (0x7000006d - Version definitions)"
+      1879048701: "SHT_GNU_verneed (0x7000006e - Version needs)"
+      1879048702: "SHT_GNU_versym (0x7000006f - Version symbols)"
+      2147483647: "SHT_HIOS (0x7FFFFFFF - OS-specific end)"
+      2147483648: "SHT_LOPROC (0x80000000 - Processor-specific start)"
+      4294967295: "SHT_HIPROC (0xFFFFFFFF - Processor-specific end)"
+
+  - name: sh_flags
+    offset: 0x08
+    size: 4
+    type: u32
+    description: "Section attribute flags (bitwise OR)"
+    display: hex
+    # Bit flags:
+    # SHF_WRITE (0x1) - Writable at runtime
+    # SHF_ALLOC (0x2) - Occupies memory during execution
+    # SHF_EXECINSTR (0x4) - Contains executable instructions
+    # SHF_MERGE (0x10) - Can be merged
+    # SHF_STRINGS (0x20) - Contains null-terminated strings
+    # SHF_INFO_LINK (0x40) - sh_info holds section header index
+    # SHF_LINK_ORDER (0x80) - Special ordering requirements
+    # SHF_OS_NONCONFORMING (0x100) - Non-standard OS handling
+    # SHF_GROUP (0x200) - Member of section group
+    # SHF_TLS (0x400) - Thread-local storage
+    
+  - name: sh_addr
+    offset: 0x0C
+    size: 4
+    type: u32
+    description: "Virtual address where section should be loaded (0 if not loaded)"
+    display: hex
+    
+  - name: sh_offset
+    offset: 0x10
+    size: 4
+    type: u32
+    description: "Offset of section data in file (0 for SHT_NOBITS)"
+    display: hex
+    
+  - name: sh_size
+    offset: 0x14
+    size: 4
+    type: u32
+    description: "Size of section in bytes (may be 0)"
+    display: hex
+    
+  - name: sh_link
+    offset: 0x18
+    size: 4
+    type: u32
+    description: "Section header index link (interpretation depends on sh_type)"
+    
+  - name: sh_info
+    offset: 0x1C
+    size: 4
+    type: u32
+    description: "Extra information (interpretation depends on sh_type)"
+    
+  - name: sh_addralign
+    offset: 0x20
+    size: 4
+    type: u32
+    description: "Section alignment constraint (0 or 1 = no alignment, else power of 2)"
+    display: hex
+    
+  - name: sh_entsize
+    offset: 0x24
+    size: 4
+    type: u32
+    description: "Entry size for fixed-size entries (0 if variable/none)"
+    display: hex
+    # For SHT_SYMTAB: size of Elf32_Sym (16 bytes)
+    # For SHT_RELA: size of Elf32_Rela (12 bytes)
+    # For SHT_REL: size of Elf32_Rel (8 bytes)
+    # For SHT_DYNAMIC: size of Elf32_Dyn (8 bytes)

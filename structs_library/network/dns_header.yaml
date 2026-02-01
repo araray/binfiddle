@@ -1,0 +1,185 @@
+# DNS (Domain Name System) Message Header
+# Specification: RFC 1035 - Domain Names - Implementation and Specification
+# Platform: Network - all platforms (typically UDP port 53, TCP for large responses)
+# Purpose: Parsing DNS query and response messages
+#
+# DNS translates domain names to IP addresses and vice versa.
+# Messages use a compact binary format optimized for small UDP packets.
+# Header is 12 bytes, followed by variable-length questions and resource records.
+#
+# Message structure:
+#   - Header (12 bytes)
+#   - Questions (variable)
+#   - Answer RRs (variable)
+#   - Authority RRs (variable)
+#   - Additional RRs (variable)
+#
+# Usage: Network traffic analysis, DNS server development, forensics
+# Reference: https://www.rfc-editor.org/rfc/rfc1035
+# See also: dig, nslookup, wireshark, dnsdist
+
+name: DNS Message Header
+description: |
+  DNS protocol message header (12 bytes). Contains transaction ID,
+  flags, and counts for questions and resource records. Used for
+  both queries and responses in the DNS protocol.
+endian: big  # Network protocols use big-endian (network byte order)
+
+fields:
+  - name: transaction_id
+    offset: 0x00
+    size: 2
+    type: u16
+    description: "Transaction ID for matching queries with responses"
+    display: hex
+    # Client generates random ID for query
+    # Server echoes same ID in response
+    # Used to correlate requests and responses
+    
+  - name: flags
+    offset: 0x02
+    size: 2
+    type: u16
+    description: "DNS flags (QR, Opcode, AA, TC, RD, RA, Z, RCODE)"
+    display: hex
+    # Bit 15 (MSB): QR (Query/Response)
+    #   0 = Query, 1 = Response
+    # Bits 14-11: Opcode
+    #   0 = Standard query (QUERY)
+    #   1 = Inverse query (IQUERY, obsolete)
+    #   2 = Server status request (STATUS)
+    #   4 = Notify
+    #   5 = Update (RFC 2136)
+    # Bit 10: AA (Authoritative Answer)
+    #   1 = Server is authoritative for domain
+    # Bit 9: TC (Truncation)
+    #   1 = Message truncated (use TCP for full response)
+    # Bit 8: RD (Recursion Desired)
+    #   1 = Client wants recursive query
+    # Bit 7: RA (Recursion Available)
+    #   1 = Server supports recursion
+    # Bit 6: Z (Reserved, must be 0)
+    # Bit 5: AD (Authentic Data, DNSSEC)
+    #   1 = Response data authenticated
+    # Bit 4: CD (Checking Disabled, DNSSEC)
+    #   1 = Disable DNSSEC validation
+    # Bits 3-0: RCODE (Response Code)
+    #   0 = No error (NOERROR)
+    #   1 = Format error (FORMERR)
+    #   2 = Server failure (SERVFAIL)
+    #   3 = Non-existent domain (NXDOMAIN)
+    #   4 = Not implemented (NOTIMP)
+    #   5 = Refused (REFUSED)
+    #   6 = Name exists when it shouldn't (YXDOMAIN)
+    #   7 = RR set exists when it shouldn't (YXRRSET)
+    #   8 = RR set that should exist doesn't (NXRRSET)
+    #   9 = Not authoritative (NOTAUTH)
+    #   10 = Name not in zone (NOTZONE)
+    #
+    # Extract fields (in C-like pseudocode):
+    #   qr = (flags >> 15) & 0x1
+    #   opcode = (flags >> 11) & 0xF
+    #   aa = (flags >> 10) & 0x1
+    #   tc = (flags >> 9) & 0x1
+    #   rd = (flags >> 8) & 0x1
+    #   ra = (flags >> 7) & 0x1
+    #   z = (flags >> 6) & 0x1
+    #   ad = (flags >> 5) & 0x1
+    #   cd = (flags >> 4) & 0x1
+    #   rcode = flags & 0xF
+    
+  - name: qdcount
+    offset: 0x04
+    size: 2
+    type: u16
+    description: "Number of questions in Question section"
+    # Typically 1 for standard queries
+    # Can be 0 in some UPDATE messages
+    
+  - name: ancount
+    offset: 0x06
+    size: 2
+    type: u16
+    description: "Number of resource records in Answer section"
+    # Number of answers to the query
+    # 0 in queries, > 0 in responses
+    
+  - name: nscount
+    offset: 0x08
+    size: 2
+    type: u16
+    description: "Number of resource records in Authority section"
+    # Contains NS records for authoritative servers
+    # Used for delegation and SOA records for negative caching
+    
+  - name: arcount
+    offset: 0x0A
+    size: 2
+    type: u16
+    description: "Number of resource records in Additional section"
+    # Additional helpful records (A/AAAA for NS servers, OPT for EDNS0)
+    # EDNS0 (RFC 6891) uses a pseudo-RR in Additional section
+
+# After this 12-byte header, the message continues with:
+#
+# 1. Question Section (qdcount entries):
+#    Each question contains:
+#      - QNAME: domain name (variable length, label format)
+#      - QTYPE: query type (2 bytes, u16)
+#      - QCLASS: query class (2 bytes, u16, usually 1 for IN = Internet)
+#
+#    QNAME format (label sequence):
+#      - Each label: length byte (0-63) + label characters
+#      - Terminated by 0 length byte
+#      - Example: "www.example.com" = 3 "www" 7 "example" 3 "com" 0
+#      - Can use compression pointers (2 bytes starting with 0xC0)
+#
+#    Common QTYPE values:
+#      1: A (IPv4 address)
+#      2: NS (Authoritative name server)
+#      5: CNAME (Canonical name for alias)
+#      6: SOA (Start of authority)
+#      12: PTR (Pointer for reverse DNS)
+#      15: MX (Mail exchange)
+#      16: TXT (Text strings)
+#      28: AAAA (IPv6 address)
+#      33: SRV (Service location)
+#      35: NAPTR (Naming authority pointer)
+#      43: DS (Delegation signer, DNSSEC)
+#      46: RRSIG (DNSSEC signature)
+#      47: NSEC (Next secure, DNSSEC)
+#      48: DNSKEY (DNS key, DNSSEC)
+#      255: ANY (All records, deprecated)
+#
+# 2. Answer Section (ancount Resource Records)
+# 3. Authority Section (nscount Resource Records)
+# 4. Additional Section (arcount Resource Records)
+#
+# Resource Record format:
+#   - NAME: domain name (variable, with compression)
+#   - TYPE: RR type (2 bytes, u16, same values as QTYPE)
+#   - CLASS: RR class (2 bytes, u16, usually 1 for IN)
+#   - TTL: Time to live in seconds (4 bytes, u32)
+#   - RDLENGTH: Length of RDATA (2 bytes, u16)
+#   - RDATA: Type-specific data (RDLENGTH bytes)
+#
+# RDATA examples:
+#   A record: 4 bytes (IPv4 address)
+#   AAAA record: 16 bytes (IPv6 address)
+#   NS/CNAME/PTR: domain name (variable)
+#   MX: 2-byte preference + domain name
+#   TXT: length-prefixed text strings
+#   SOA: multiple fields (MNAME, RNAME, SERIAL, REFRESH, RETRY, EXPIRE, MINIMUM)
+#
+# DNS message size:
+#   - UDP: traditionally 512 bytes max
+#   - EDNS0 (RFC 6891): advertises larger buffer sizes (up to 4096 typical)
+#   - TCP: used when response exceeds UDP buffer or TC flag is set
+#
+# Security considerations:
+#   - DNS spoofing: verify transaction ID and source
+#   - Cache poisoning: validate responses, use DNSSEC
+#   - Amplification attacks: recursive resolvers should restrict queries
+#   - DNSSEC (RFC 4033-4035): cryptographic authentication
+#   - DNS over HTTPS (DoH, RFC 8484): encrypted DNS
+#   - DNS over TLS (DoT, RFC 7858): encrypted DNS

@@ -1,0 +1,172 @@
+# X.509 Certificate DER Encoding
+# Specification: RFC 5280 - Internet X.509 Public Key Infrastructure Certificate
+# Platform: All platforms - SSL/TLS, code signing, email encryption
+# Purpose: Parsing X.509 digital certificates in DER format
+#
+# X.509 certificates are used for TLS/SSL, code signing, and identity verification.
+# DER (Distinguished Encoding Rules) is a binary encoding of ASN.1 structures.
+# Certificates contain public keys, identity information, and digital signatures.
+#
+# Common uses:
+#   - HTTPS/TLS certificates (.crt, .cer, .der files)
+#   - Code signing certificates (Windows Authenticode, macOS, Android)
+#   - Email certificates (S/MIME)
+#   - Client authentication
+#   - CA (Certificate Authority) certificates
+#
+# Usage: TLS analysis, certificate inspection, PKI forensics
+# Reference: https://www.rfc-editor.org/rfc/rfc5280
+# See also: openssl x509, certutil, keytool
+
+name: X.509 Certificate DER Encoding
+description: |
+  X.509 certificate encoded in DER (Distinguished Encoding Rules).
+  ASN.1 structure containing certificate data, public key, and signature.
+  This template covers the outer SEQUENCE structure; full parsing
+  requires ASN.1 DER decoder.
+endian: big  # ASN.1 DER uses big-endian for length encoding
+
+fields:
+  - name: sequence_tag
+    offset: 0x00
+    size: 1
+    type: u8
+    description: "ASN.1 SEQUENCE tag (0x30)"
+    assert: "30"
+    # 0x30 = SEQUENCE (constructed type)
+    # X.509 Certificate is a SEQUENCE of 3 elements:
+    #   1. tbsCertificate (SEQUENCE)
+    #   2. signatureAlgorithm (SEQUENCE)
+    #   3. signatureValue (BIT STRING)
+    
+  - name: length_encoding
+    offset: 0x01
+    size: 1
+    type: u8
+    description: "First byte of length encoding"
+    # ASN.1 DER length encoding:
+    # If bit 7 = 0 (value < 128):
+    #   This byte is the length directly
+    # If bit 7 = 1 (value >= 128):
+    #   Lower 7 bits = number of subsequent length bytes
+    #   Example: 0x82 = 2 length bytes follow
+    #   Example: 0x81 = 1 length byte follows
+    #
+    # Common for certificates (typically 0x82):
+    #   0x82 XX XX = length is in next 2 bytes (up to 65535)
+    #   0x83 XX XX XX = length is in next 3 bytes (up to 16 MB)
+    
+  # If length_encoding & 0x80:
+  #   num_length_bytes = length_encoding & 0x7F
+  #   Next num_length_bytes contain the actual length (big-endian)
+  # Example for typical cert:
+  #   0x30 0x82 0x05 0x23
+  #   SEQUENCE, long form length (2 bytes), length = 0x0523 (1315 bytes)
+
+# After the SEQUENCE tag and length, the certificate data follows
+# X.509 Certificate structure (simplified):
+#
+# Certificate ::= SEQUENCE {
+#   tbsCertificate       TBSCertificate,
+#   signatureAlgorithm   AlgorithmIdentifier,
+#   signatureValue       BIT STRING
+# }
+#
+# TBSCertificate (To Be Signed) ::= SEQUENCE {
+#   version              [0] EXPLICIT Version DEFAULT v1,
+#   serialNumber         CertificateSerialNumber,
+#   signature            AlgorithmIdentifier,
+#   issuer               Name,
+#   validity             Validity,
+#   subject              Name,
+#   subjectPublicKeyInfo SubjectPublicKeyInfo,
+#   issuerUniqueID       [1] IMPLICIT UniqueIdentifier OPTIONAL,
+#   subjectUniqueID      [2] IMPLICIT UniqueIdentifier OPTIONAL,
+#   extensions           [3] EXPLICIT Extensions OPTIONAL
+# }
+#
+# Common ASN.1 DER tags:
+#   0x01: BOOLEAN
+#   0x02: INTEGER
+#   0x03: BIT STRING
+#   0x04: OCTET STRING
+#   0x05: NULL
+#   0x06: OBJECT IDENTIFIER
+#   0x0C: UTF8String
+#   0x13: PrintableString
+#   0x16: IA5String
+#   0x17: UTCTime (YYMMDDHHMMSSZ)
+#   0x18: GeneralizedTime (YYYYMMDDHHMMSSZ)
+#   0x30: SEQUENCE (constructed)
+#   0x31: SET (constructed)
+#   0xA0-0xA3: Context-specific constructed tags
+#
+# Important certificate fields:
+#
+# Version: v1 (0), v2 (1), v3 (2)
+#   - v3 is standard for modern certs (supports extensions)
+#
+# Serial Number: unique identifier from CA
+#   - INTEGER, typically 8-20 bytes
+#   - Used in certificate revocation
+#
+# Signature Algorithm: OID + parameters
+#   - sha256WithRSAEncryption: 1.2.840.113549.1.1.11
+#   - ecdsa-with-SHA256: 1.2.840.10045.4.3.2
+#   - rsassaPss: 1.2.840.113549.1.1.10
+#
+# Issuer/Subject: Distinguished Name (DN)
+#   - commonName (CN): domain or entity name
+#   - organization (O): company name
+#   - organizationalUnit (OU): department
+#   - country (C): 2-letter code
+#   - stateOrProvinceName (ST)
+#   - locality (L): city
+#   - Example: CN=example.com,O=Example Inc,C=US
+#
+# Validity: notBefore and notAfter (UTCTime or GeneralizedTime)
+#   - Certificate valid between these dates
+#
+# Subject Public Key Info:
+#   - Algorithm (RSA, ECDSA, etc.)
+#   - Public key (modulus+exponent for RSA, point for EC)
+#
+# Extensions (v3 only):
+#   - Subject Alternative Name (SAN): additional domains
+#   - Key Usage: digital signature, key encipherment, etc.
+#   - Extended Key Usage: server auth, client auth, code signing
+#   - Basic Constraints: CA=true/false, path length
+#   - Certificate Policies: policy OIDs
+#   - CRL Distribution Points: where to check revocation
+#   - Authority Information Access: OCSP responder, CA issuers
+#   - Subject Key Identifier: hash of public key
+#   - Authority Key Identifier: hash of CA's public key
+#
+# Signature Algorithm (repeated from TBS):
+#   - Must match signature field in TBSCertificate
+#
+# Signature Value:
+#   - Digital signature over tbsCertificate
+#   - Encrypted hash using CA's private key
+#   - Verify using CA's public key
+#
+# File formats:
+#   - DER (.der, .cer, binary): raw binary ASN.1
+#   - PEM (.pem, .crt, text): Base64 DER with headers
+#     -----BEGIN CERTIFICATE-----
+#     <base64 DER data>
+#     -----END CERTIFICATE-----
+#
+# Certificate chains:
+#   - Leaf certificate (end-entity)
+#   - Intermediate CA certificate(s)
+#   - Root CA certificate (self-signed)
+#
+# Security considerations:
+#   - Check validity period
+#   - Verify signature chain to trusted root
+#   - Check for revocation (CRL or OCSP)
+#   - Validate domain name against SAN/CN
+#   - Check key strength (>= 2048-bit RSA, >= 256-bit EC)
+#   - Beware of expired or self-signed certificates
+#   - Check for weak signature algorithms (MD5, SHA-1)

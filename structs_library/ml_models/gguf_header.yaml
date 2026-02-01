@@ -1,0 +1,115 @@
+# GGUF (GPT-Generated Unified Format) Model File Header
+# Specification: GGML/llama.cpp GGUF format specification
+# Platform: Cross-platform - LLM model format for llama.cpp
+# Purpose: Parsing GGUF model files used by llama.cpp and derivatives
+#
+# GGUF is a file format for storing large language models (LLMs) for
+# efficient inference with llama.cpp. It replaced the older GGML format.
+# Contains model tensors, metadata, and quantization information.
+#
+# Used by: llama.cpp, Ollama, LM Studio, text-generation-webui, and many others
+# Common for Llama, Mistral, Mixtral, Falcon, and other LLM models
+#
+# Usage: Model files with .gguf extension
+# Reference: https://github.com/ggerganov/ggml/blob/master/docs/gguf.md
+# See also: llama.cpp, gguf-py
+
+name: GGUF Model File Header
+description: |
+  GGUF format header for large language models. Contains magic number,
+  version, tensor count, metadata count, and alignment information.
+  Essential for LLM model analysis and quantization inspection.
+endian: little  # GGUF format uses little-endian
+
+fields:
+  - name: magic
+    offset: 0x00
+    size: 4
+    type: hex_string
+    description: "GGUF magic number"
+    assert: "47475546"
+    # 0x47475546 = "GGUF" in ASCII (little-endian: 46 55 47 47)
+    # Identifies file as GGUF format
+    
+  - name: version
+    offset: 0x04
+    size: 4
+    type: u32
+    description: "GGUF format version number"
+    enum:
+      1: "GGUF version 1 (deprecated)"
+      2: "GGUF version 2 (current)"
+      3: "GGUF version 3 (current)"
+    # Version determines metadata and tensor format
+    # Version 2+ is the stable format
+    
+  - name: tensor_count
+    offset: 0x08
+    size: 8
+    type: u64
+    description: "Number of tensors in the file"
+    # Tensors contain model weights (embeddings, attention, FFN, etc.)
+    # Count typically ranges from 100s to 1000s depending on model
+    
+  - name: metadata_kv_count
+    offset: 0x10
+    size: 8
+    type: u64
+    description: "Number of metadata key-value pairs"
+    # Metadata includes model info, tokenizer config, quantization details
+    # Common keys: general.name, general.architecture, general.quantization_version
+
+# After this 24-byte header, the file structure continues with:
+#
+# 1. Metadata section (metadata_kv_count entries):
+#    Each entry contains:
+#      - String: key name (length-prefixed)
+#      - u32: value type (0=u8, 1=i8, 2=u16, 3=i16, 4=u32, 5=i32, etc.)
+#      - Type-specific value data
+#
+#    Common metadata keys:
+#      general.architecture: "llama", "falcon", "gpt2", etc.
+#      general.name: Model name string
+#      general.quantization_version: Quantization format version
+#      general.file_type: File type (mostly deprecated, use quantization)
+#      tokenizer.ggml.model: Tokenizer type
+#      tokenizer.ggml.tokens: Token strings array
+#      tokenizer.ggml.scores: Token scores/probabilities
+#      <architecture>.block_count: Number of transformer blocks
+#      <architecture>.context_length: Maximum context size
+#      <architecture>.embedding_length: Embedding dimension
+#      <architecture>.attention.head_count: Number of attention heads
+#
+# 2. Tensor information section (tensor_count entries):
+#    Each entry contains:
+#      - String: tensor name (e.g., "token_embd.weight", "blk.0.attn_q.weight")
+#      - u32: number of dimensions (usually 1-4)
+#      - u64[n_dims]: shape of tensor (dimension sizes)
+#      - u32: tensor type (GGML_TYPE_F32, GGML_TYPE_Q4_0, etc.)
+#      - u64: offset to tensor data (from start of data section)
+#
+#    Tensor types (quantization formats):
+#      0: GGML_TYPE_F32 (32-bit float)
+#      1: GGML_TYPE_F16 (16-bit float)
+#      2: GGML_TYPE_Q4_0 (4-bit quantization, block size 32)
+#      3: GGML_TYPE_Q4_1 (4-bit quantization with min/max)
+#      6: GGML_TYPE_Q5_0 (5-bit quantization)
+#      7: GGML_TYPE_Q5_1 (5-bit quantization with min/max)
+#      8: GGML_TYPE_Q8_0 (8-bit quantization)
+#      9: GGML_TYPE_Q8_1 (8-bit quantization with min/max)
+#      10: GGML_TYPE_Q2_K (2-bit K-quant)
+#      11: GGML_TYPE_Q3_K (3-bit K-quant)
+#      12: GGML_TYPE_Q4_K (4-bit K-quant)
+#      13: GGML_TYPE_Q5_K (5-bit K-quant)
+#      14: GGML_TYPE_Q6_K (6-bit K-quant)
+#      15: GGML_TYPE_Q8_K (8-bit K-quant)
+#      (and more advanced quant formats)
+#
+# 3. Padding to alignment (default 32 bytes)
+#
+# 4. Tensor data section:
+#    Binary data for all tensors, in the order specified by tensor info
+#    Each tensor data is aligned according to the alignment value
+#
+# The GGUF format is designed for memory-mapped I/O and efficient loading.
+# Tensors can be quantized to reduce model size (Q4_0 is common, ~4GB for 7B models)

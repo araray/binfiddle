@@ -1,0 +1,210 @@
+# ELF 64-bit Executable Header
+# Specification: Tool Interface Standard (TIS) Executable and Linking Format (ELF) Specification Version 1.2
+# Platform: Linux, BSD, Solaris - 64-bit architectures
+# Purpose: Parsing the ELF64 file header (Elf64_Ehdr)
+# 
+# This template parses the ELF header for 64-bit executables, shared objects, and object files.
+# The ELF header always starts at offset 0 and contains critical metadata about the binary.
+#
+# Reference: https://refspecs.linuxfoundation.org/elf/elf.pdf
+# See also: /usr/include/elf.h
+
+name: ELF 64-bit Header
+description: |
+  Complete parsing of ELF64 executable file header including magic bytes,
+  architecture, entry point, and program/section header table locations.
+  Supports little-endian and big-endian binaries.
+endian: little  # Most common; will be overridden by e_ident[EI_DATA]
+
+fields:
+  # ============================================================================
+  # ELF Identification (e_ident[EI_NIDENT] - 16 bytes)
+  # ============================================================================
+  
+  - name: e_ident_magic
+    offset: 0x00
+    size: 4
+    type: hex_string
+    description: "ELF magic number: 0x7F followed by 'ELF' in ASCII"
+    assert: "7f454c46"
+    
+  - name: e_ident_class
+    offset: 0x04
+    size: 1
+    type: u8
+    description: "File class: 32-bit (1) or 64-bit (2)"
+    enum:
+      0: "ELFCLASSNONE (Invalid)"
+      1: "ELFCLASS32 (32-bit objects)"
+      2: "ELFCLASS64 (64-bit objects)"
+    assert: "02"  # Must be 64-bit for this template
+      
+  - name: e_ident_data
+    offset: 0x05
+    size: 1
+    type: u8
+    description: "Data encoding: little-endian (1) or big-endian (2)"
+    enum:
+      0: "ELFDATANONE (Invalid)"
+      1: "ELFDATA2LSB (Little-endian)"
+      2: "ELFDATA2MSB (Big-endian)"
+      
+  - name: e_ident_version
+    offset: 0x06
+    size: 1
+    type: u8
+    description: "ELF header version (always 1 for current spec)"
+    assert: "01"
+    
+  - name: e_ident_osabi
+    offset: 0x07
+    size: 1
+    type: u8
+    description: "Operating system and ABI identification"
+    enum:
+      0: "ELFOSABI_NONE / SYSV (UNIX System V ABI)"
+      1: "ELFOSABI_HPUX (HP-UX)"
+      2: "ELFOSABI_NETBSD (NetBSD)"
+      3: "ELFOSABI_LINUX (Linux with glibc)"
+      4: "ELFOSABI_SOLARIS (Solaris)"
+      6: "ELFOSABI_AIX (AIX)"
+      7: "ELFOSABI_IRIX (IRIX)"
+      8: "ELFOSABI_FREEBSD (FreeBSD)"
+      9: "ELFOSABI_TRU64 (Tru64 UNIX)"
+      10: "ELFOSABI_MODESTO (Novell Modesto)"
+      11: "ELFOSABI_OPENBSD (OpenBSD)"
+      64: "ELFOSABI_ARM_AEABI (ARM EABI)"
+      97: "ELFOSABI_ARM (ARM)"
+      255: "ELFOSABI_STANDALONE (Standalone/embedded)"
+      
+  - name: e_ident_abiversion
+    offset: 0x08
+    size: 1
+    type: u8
+    description: "ABI version (interpretation depends on OSABI)"
+    
+  - name: e_ident_pad
+    offset: 0x09
+    size: 7
+    type: hex_string
+    description: "Padding bytes (reserved for future use, should be zero)"
+
+  # ============================================================================
+  # ELF Header Fields (architecture-dependent)
+  # ============================================================================
+
+  - name: e_type
+    offset: 0x10
+    size: 2
+    type: u16
+    description: "Object file type"
+    enum:
+      0: "ET_NONE (No file type)"
+      1: "ET_REL (Relocatable file / .o)"
+      2: "ET_EXEC (Executable file)"
+      3: "ET_DYN (Shared object file / .so / PIE)"
+      4: "ET_CORE (Core dump file)"
+      65024: "ET_LOOS (OS-specific range start)"
+      65279: "ET_HIOS (OS-specific range end)"
+      65280: "ET_LOPROC (Processor-specific start)"
+      65535: "ET_HIPROC (Processor-specific end)"
+      
+  - name: e_machine
+    offset: 0x12
+    size: 2
+    type: u16
+    description: "Target instruction set architecture"
+    enum:
+      0: "EM_NONE (No machine)"
+      1: "EM_M32 (AT&T WE 32100)"
+      2: "EM_SPARC (SPARC)"
+      3: "EM_386 (Intel x86)"
+      4: "EM_68K (Motorola 68000)"
+      5: "EM_88K (Motorola 88000)"
+      7: "EM_860 (Intel 80860)"
+      8: "EM_MIPS (MIPS I Architecture)"
+      9: "EM_S370 (IBM System/370)"
+      10: "EM_MIPS_RS3_LE (MIPS RS3000 Little-endian)"
+      15: "EM_PARISC (HP PA-RISC)"
+      20: "EM_PPC (PowerPC)"
+      21: "EM_PPC64 (PowerPC 64-bit)"
+      22: "EM_S390 (IBM S390)"
+      40: "EM_ARM (ARM 32-bit)"
+      42: "EM_SH (Hitachi SH)"
+      43: "EM_SPARCV9 (SPARC Version 9)"
+      50: "EM_IA_64 (Intel IA-64)"
+      62: "EM_X86_64 (AMD x86-64)"
+      183: "EM_AARCH64 (ARM 64-bit / AArch64)"
+      243: "EM_RISCV (RISC-V)"
+      
+  - name: e_version
+    offset: 0x14
+    size: 4
+    type: u32
+    description: "Object file version (1 for current)"
+    assert: "01000000"  # 1 in little-endian
+    
+  - name: e_entry
+    offset: 0x18
+    size: 8
+    type: u64
+    description: "Virtual address of program entry point (0 for non-executables)"
+    display: hex
+    
+  - name: e_phoff
+    offset: 0x20
+    size: 8
+    type: u64
+    description: "Program header table file offset in bytes (0 if no PHT)"
+    display: hex
+    
+  - name: e_shoff
+    offset: 0x28
+    size: 8
+    type: u64
+    description: "Section header table file offset in bytes (0 if no SHT)"
+    display: hex
+    
+  - name: e_flags
+    offset: 0x30
+    size: 4
+    type: u32
+    description: "Processor-specific flags (interpretation varies by e_machine)"
+    display: hex
+    
+  - name: e_ehsize
+    offset: 0x34
+    size: 2
+    type: u16
+    description: "ELF header size in bytes (should be 64 for ELF64)"
+    assert: "4000"  # 64 in little-endian
+    
+  - name: e_phentsize
+    offset: 0x36
+    size: 2
+    type: u16
+    description: "Size of one program header entry (should be 56 for ELF64)"
+    
+  - name: e_phnum
+    offset: 0x38
+    size: 2
+    type: u16
+    description: "Number of program header entries (0-65535)"
+    
+  - name: e_shentsize
+    offset: 0x3A
+    size: 2
+    type: u16
+    description: "Size of one section header entry (should be 64 for ELF64)"
+    
+  - name: e_shnum
+    offset: 0x3C
+    size: 2
+    type: u16
+    description: "Number of section header entries (0-65535, or 0 for extended)"
+    
+  - name: e_shstrndx
+    offset: 0x3E
+    size: 2
+    type: u16
+    description: "Section header table index of .shstrtab (section name string table)"

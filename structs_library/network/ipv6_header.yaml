@@ -1,0 +1,164 @@
+# IPv6 (Internet Protocol version 6) Header
+# Specification: RFC 8200 - Internet Protocol, Version 6 (IPv6) Specification
+# Platform: Network - all platforms
+# Purpose: Parsing IPv6 packet headers
+#
+# IPv6 is the successor to IPv4, providing vastly larger address space
+# (128-bit addresses vs 32-bit), simplified header structure, and
+# built-in security and quality-of-service features.
+#
+# Fixed header is 40 bytes (vs IPv4's variable 20-60 bytes).
+# Extension headers provide additional functionality (routing, fragmentation, etc.).
+#
+# Usage: Network packet analysis, protocol development, forensics
+# Reference: https://www.rfc-editor.org/rfc/rfc8200
+# See also: Wireshark, tcpdump, scapy
+
+name: IPv6 Packet Header
+description: |
+  IPv6 fixed header (40 bytes). Contains version, traffic class,
+  flow label, payload length, next header type, hop limit, and
+  128-bit source/destination addresses. Provides global addressing
+  and improved routing efficiency.
+endian: big  # Network protocols use big-endian (network byte order)
+
+fields:
+  - name: version_traffic_class_flow_label
+    offset: 0x00
+    size: 4
+    type: u32
+    description: "Version (4 bits), Traffic Class (8 bits), Flow Label (20 bits)"
+    display: hex
+    # Bits 0-3: Version (always 6 for IPv6)
+    #   version = (value >> 28) & 0xF
+    # Bits 4-11: Traffic Class (DSCP + ECN for QoS)
+    #   traffic_class = (value >> 20) & 0xFF
+    #   DSCP (6 bits): Differentiated Services Code Point
+    #   ECN (2 bits): Explicit Congestion Notification
+    # Bits 12-31: Flow Label (identifies packet flows for QoS)
+    #   flow_label = value & 0xFFFFF
+    # Extract: version = byte[0] >> 4 (should be 6)
+    
+  - name: payload_length
+    offset: 0x04
+    size: 2
+    type: u16
+    description: "Payload length in bytes (excluding this 40-byte header)"
+    # Length of data following the IPv6 header
+    # Includes extension headers + upper-layer data (TCP/UDP/ICMPv6)
+    # Maximum: 65535 bytes (but jumbo payload option allows more)
+    # If 0, indicates Jumbo Payload Hop-by-Hop option (RFC 2675)
+    
+  - name: next_header
+    offset: 0x06
+    size: 1
+    type: u8
+    description: "Next header type (protocol number or extension header)"
+    enum:
+      0: "Hop-by-Hop Options"
+      6: "TCP"
+      17: "UDP"
+      43: "Routing Header"
+      44: "Fragment Header"
+      50: "Encapsulating Security Payload (ESP)"
+      51: "Authentication Header (AH)"
+      58: "ICMPv6"
+      59: "No Next Header"
+      60: "Destination Options"
+      132: "SCTP"
+      135: "Mobility Header"
+    # Same values as IPv4 Protocol field for compatibility
+    # Extension headers: 0, 43, 44, 50, 51, 60, 135
+    # Upper-layer protocols: 6 (TCP), 17 (UDP), 58 (ICMPv6), etc.
+    
+  - name: hop_limit
+    offset: 0x07
+    size: 1
+    type: u8
+    description: "Hop limit (decremented by each router, packet dropped at 0)"
+    # Equivalent to IPv4 TTL (Time To Live)
+    # Typical values: 64 (Linux), 128 (Windows), 255 (routers)
+    # Prevents infinite routing loops
+    
+  - name: source_address
+    offset: 0x08
+    size: 16
+    type: hex_string
+    description: "Source IPv6 address (128 bits)"
+    # Format: 8 groups of 4 hex digits separated by colons
+    # Example: 2001:0db8:85a3:0000:0000:8a2e:0370:7334
+    # Compressed: 2001:db8:85a3::8a2e:370:7334 (:: replaces zeros)
+    #
+    # Common address types:
+    #   :: (0:0:0:0:0:0:0:0) - Unspecified
+    #   ::1 (0:0:0:0:0:0:0:1) - Loopback
+    #   fe80::/10 - Link-local
+    #   fc00::/7 - Unique local (private)
+    #   2000::/3 - Global unicast
+    #   ff00::/8 - Multicast
+    
+  - name: destination_address
+    offset: 0x18
+    size: 16
+    type: hex_string
+    description: "Destination IPv6 address (128 bits)"
+    # Same format as source_address
+    # Can be unicast, anycast, or multicast
+    #
+    # Special multicast addresses:
+    #   ff02::1 - All nodes on link
+    #   ff02::2 - All routers on link
+    #   ff02::1:ffxx:xxxx - Solicited-node multicast (Neighbor Discovery)
+
+# After this 40-byte header, optional extension headers and payload follow
+#
+# IPv6 Extension Headers (processed in order):
+#   1. Hop-by-Hop Options (must be first if present)
+#   2. Destination Options (before routing header)
+#   3. Routing Header
+#   4. Fragment Header
+#   5. Authentication Header (AH)
+#   6. Encapsulating Security Payload (ESP)
+#   7. Destination Options (before upper-layer header)
+#   8. Upper-Layer Header (TCP, UDP, ICMPv6, etc.)
+#
+# Each extension header has:
+#   - Next Header field (1 byte): type of next header
+#   - Header Extension Length (1 byte): length in 8-byte units - 1
+#   - Header-specific data
+#
+# Common extension headers:
+#
+# Hop-by-Hop Options (0):
+#   - Processed by every router on path
+#   - Used for: Jumbo Payload, Router Alert, etc.
+#
+# Routing Header (43):
+#   - Specifies intermediate nodes (like IPv4 source routing)
+#   - Type 0 deprecated due to security issues
+#   - Type 2 used for mobile IPv6
+#
+# Fragment Header (44):
+#   - Enables fragmentation at source (routers don't fragment)
+#   - Contains: Fragment Offset, M flag, Identification
+#   - Minimum MTU is 1280 bytes (vs 68 for IPv4)
+#
+# Destination Options (60):
+#   - Processed only by destination
+#   - Used for: Home Address option (mobile IPv6), etc.
+#
+# Security considerations:
+#   - IPsec (AH/ESP) recommended for all IPv6 deployments
+#   - Extension header inspection can bypass firewalls
+#   - Fragment header can enable reassembly attacks
+#   - Routing header Type 0 enables amplification attacks
+#   - Large number of extension headers can cause DoS
+#
+# IPv6 vs IPv4 differences:
+#   - Fixed 40-byte header (vs variable 20-60)
+#   - No header checksum (performance improvement)
+#   - No fragmentation by routers (only at source)
+#   - Built-in support for IPsec
+#   - Simplified header processing
+#   - Flow labels for QoS
+#   - Neighbor Discovery replaces ARP

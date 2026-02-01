@@ -1,0 +1,238 @@
+# .NET Assembly PE/COFF Header with CLI Header
+# Specification: ECMA-335 Common Language Infrastructure (CLI)
+# Platform: Windows, Linux (Mono), macOS (.NET Core/5+)
+# Purpose: Parsing .NET assemblies (.exe, .dll)
+#
+# .NET assemblies are PE files with additional CLI metadata.
+# They contain MSIL (Microsoft Intermediate Language) bytecode
+# instead of native machine code.
+#
+# Structure:
+#   1. Standard PE/COFF header (DOS header + PE header)
+#   2. CLI Header (in .text section, pointed to by PE data directory)
+#   3. Metadata tables (types, methods, fields, properties, etc.)
+#   4. IL code
+#   5. Resources
+#
+# Usage: Reverse engineering .NET applications, malware analysis
+# Reference: ECMA-335 specification
+# See also: ildasm, dnSpy, ILSpy, dotPeek
+
+name: .NET CLI Header
+description: |
+  .NET Common Language Infrastructure header within PE file.
+  Located in .text section at RVA specified in PE optional header
+  data directory entry 14 (IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR).
+  Contains metadata about the .NET assembly.
+endian: little  # .NET uses little-endian
+
+fields:
+  - name: cb
+    offset: 0x00
+    size: 4
+    type: u32
+    description: "Size of CLI header in bytes (should be 72 / 0x48)"
+    
+  - name: major_runtime_version
+    offset: 0x04
+    size: 2
+    type: u16
+    description: "Major version of CLR required (usually 2)"
+    
+  - name: minor_runtime_version
+    offset: 0x06
+    size: 2
+    type: u16
+    description: "Minor version of CLR required (usually 5)"
+    # Version 2.5 = .NET Framework 2.0+, .NET Core, .NET 5+
+    
+  - name: metadata_rva
+    offset: 0x08
+    size: 4
+    type: u32
+    description: "RVA of metadata root"
+    display: hex
+    # Points to metadata tables containing type information
+    
+  - name: metadata_size
+    offset: 0x0C
+    size: 4
+    type: u32
+    description: "Size of metadata in bytes"
+    display: hex
+    
+  - name: flags
+    offset: 0x10
+    size: 4
+    type: u32
+    description: "Runtime flags (bitwise OR)"
+    display: hex
+    # COMIMAGE_FLAGS_ILONLY (0x00000001) - Pure IL, no native code
+    # COMIMAGE_FLAGS_32BITREQUIRED (0x00000002) - Requires 32-bit runtime
+    # COMIMAGE_FLAGS_IL_LIBRARY (0x00000004) - IL library
+    # COMIMAGE_FLAGS_STRONGNAMESIGNED (0x00000008) - Strong name signed
+    # COMIMAGE_FLAGS_NATIVE_ENTRYPOINT (0x00000010) - Entry point is native
+    # COMIMAGE_FLAGS_TRACKDEBUGDATA (0x00010000) - Track debug data
+    # COMIMAGE_FLAGS_32BITPREFERRED (0x00020000) - Prefer 32-bit execution
+    
+  - name: entry_point_token_or_rva
+    offset: 0x14
+    size: 4
+    type: u32
+    description: "Metadata token of entry point method or RVA of native entry point"
+    display: hex
+    # If COMIMAGE_FLAGS_NATIVE_ENTRYPOINT is set: RVA
+    # Otherwise: metadata token (0x06xxxxxx for MethodDef)
+    
+  - name: resources_rva
+    offset: 0x18
+    size: 4
+    type: u32
+    description: "RVA of managed resources (0 if none)"
+    display: hex
+    
+  - name: resources_size
+    offset: 0x1C
+    size: 4
+    type: u32
+    description: "Size of managed resources in bytes"
+    display: hex
+    
+  - name: strong_name_signature_rva
+    offset: 0x20
+    size: 4
+    type: u32
+    description: "RVA of strong name signature (0 if not signed)"
+    display: hex
+    
+  - name: strong_name_signature_size
+    offset: 0x24
+    size: 4
+    type: u32
+    description: "Size of strong name signature in bytes"
+    display: hex
+    
+  - name: code_manager_table_rva
+    offset: 0x28
+    size: 4
+    type: u32
+    description: "RVA of code manager table (always 0)"
+    display: hex
+    
+  - name: code_manager_table_size
+    offset: 0x2C
+    size: 4
+    type: u32
+    description: "Size of code manager table (always 0)"
+    display: hex
+    
+  - name: vtable_fixups_rva
+    offset: 0x30
+    size: 4
+    type: u32
+    description: "RVA of VTable fixups (for mixed-mode assemblies)"
+    display: hex
+    
+  - name: vtable_fixups_size
+    offset: 0x34
+    size: 4
+    type: u32
+    description: "Size of VTable fixups in bytes"
+    display: hex
+    
+  - name: export_address_table_jumps_rva
+    offset: 0x38
+    size: 4
+    type: u32
+    description: "RVA of export address table jumps (always 0)"
+    display: hex
+    
+  - name: export_address_table_jumps_size
+    offset: 0x3C
+    size: 4
+    type: u32
+    description: "Size of export address table jumps (always 0)"
+    display: hex
+    
+  - name: managed_native_header_rva
+    offset: 0x40
+    size: 4
+    type: u32
+    description: "RVA of precompiled header (NGen, ReadyToRun)"
+    display: hex
+    
+  - name: managed_native_header_size
+    offset: 0x44
+    size: 4
+    type: u32
+    description: "Size of precompiled header in bytes"
+    display: hex
+
+# After CLI header, the metadata root follows at metadata_rva:
+#
+# Metadata Root Structure:
+#   u32 Signature (0x424A5342 = "BSJB")
+#   u16 MajorVersion
+#   u16 MinorVersion
+#   u32 Reserved (0)
+#   u32 VersionLength
+#   char[VersionLength] Version string (e.g., "v4.0.30319")
+#   u16 Flags
+#   u16 NumberOfStreams
+#   Stream headers (variable)
+#
+# Metadata Streams:
+#   #~ or #- : Metadata tables (types, methods, fields, etc.)
+#   #Strings : Heap of strings referenced by metadata
+#   #US : User string heap
+#   #GUID : Heap of GUIDs
+#   #Blob : Heap of binary data (signatures, custom attributes)
+#
+# Metadata Tables (in #~ stream):
+#   0x00: Module
+#   0x01: TypeRef (type references)
+#   0x02: TypeDef (type definitions)
+#   0x04: Field
+#   0x06: MethodDef (method definitions)
+#   0x08: Param
+#   0x09: InterfaceImpl
+#   0x0A: MemberRef
+#   0x0B: Constant
+#   0x0C: CustomAttribute
+#   0x0D: FieldMarshal
+#   0x0E: DeclSecurity
+#   0x0F: ClassLayout
+#   0x10: FieldLayout
+#   0x11: StandAloneSig
+#   0x12: EventMap
+#   0x14: Event
+#   0x15: PropertyMap
+#   0x17: Property
+#   0x18: MethodSemantics
+#   0x19: MethodImpl
+#   0x1A: ModuleRef
+#   0x1B: TypeSpec
+#   0x1C: ImplMap (P/Invoke)
+#   0x1D: FieldRVA
+#   0x20: Assembly
+#   0x21: AssemblyProcessor
+#   0x22: AssemblyOS
+#   0x23: AssemblyRef
+#   0x24: AssemblyRefProcessor
+#   0x25: AssemblyRefOS
+#   0x26: File
+#   0x27: ExportedType
+#   0x28: ManifestResource
+#   0x29: NestedClass
+#   0x2A: GenericParam
+#   0x2B: MethodSpec
+#   0x2C: GenericParamConstraint
+#
+# Security considerations for forensics/CTF:
+#   - Check flags for ILONLY (obfuscation often uses native code)
+#   - Strong name signature can be verified or stripped
+#   - Entry point token reveals main method
+#   - Metadata tables contain all type/method information
+#   - Resources may contain embedded payloads
+#   - Mixed-mode assemblies can hide native code
+#   - Check for unusual metadata table combinations (obfuscation)

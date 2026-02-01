@@ -1,0 +1,116 @@
+# GZIP (GNU zip) Compressed File Format
+# Specification: RFC 1952 - GZIP file format specification version 4.3
+# Purpose: Parsing GZIP header containing compression method, flags, timestamp
+#
+# GZIP is a single-file compression format using DEFLATE algorithm.
+# Commonly used for web content (.gz), tarballs (.tar.gz), and log compression.
+#
+# Reference: https://datatracker.ietf.org/doc/html/rfc1952
+# MIME type: application/gzip
+
+name: GZIP Compressed File Header
+description: |
+  GZIP file header with compression method, modification time, OS type,
+  and optional filename/comment. Uses DEFLATE compression algorithm.
+endian: little  # GZIP uses little-endian for multi-byte fields
+
+fields:
+  # ============================================================================
+  # GZIP Header - 10 bytes minimum + optional fields
+  # ============================================================================
+  
+  - name: magic_number
+    offset: 0x00
+    size: 2
+    type: hex_string
+    description: "GZIP magic number: 0x1f8b"
+    assert: "1f8b"
+    
+  - name: compression_method
+    offset: 0x02
+    size: 1
+    type: u8
+    description: "Compression method"
+    assert: "08"
+    enum:
+      8: "DEFLATE (only method defined in RFC 1952)"
+    
+  - name: flags
+    offset: 0x03
+    size: 1
+    type: u8
+    description: "Flags byte indicating optional fields"
+    display: hex
+    # Bit 0 (FTEXT): File is probably ASCII text
+    # Bit 1 (FHCRC): CRC16 for header is present
+    # Bit 2 (FEXTRA): Extra field is present
+    # Bit 3 (FNAME): Original filename is present
+    # Bit 4 (FCOMMENT): File comment is present
+    # Bits 5-7: Reserved, must be zero
+    
+  - name: modification_time
+    offset: 0x04
+    size: 4
+    type: u32
+    description: "Unix timestamp of last modification (0 if not available)"
+    display: hex
+    
+  - name: extra_flags
+    offset: 0x08
+    size: 1
+    type: u8
+    description: "Extra flags for compression algorithm"
+    enum:
+      2: "Maximum compression (slowest algorithm)"
+      4: "Fastest compression algorithm"
+    
+  - name: operating_system
+    offset: 0x09
+    size: 1
+    type: u8
+    description: "Operating system where compression took place"
+    enum:
+      0: "FAT filesystem (MS-DOS, OS/2, NT/Win32)"
+      1: "Amiga"
+      2: "VMS (or OpenVMS)"
+      3: "Unix"
+      4: "VM/CMS"
+      5: "Atari TOS"
+      6: "HPFS filesystem (OS/2, NT)"
+      7: "Macintosh"
+      8: "Z-System"
+      9: "CP/M"
+      10: "TOPS-20"
+      11: "NTFS filesystem (NT)"
+      12: "QDOS"
+      13: "Acorn RISCOS"
+      255: "Unknown"
+
+  # ============================================================================
+  # Optional Fields (present if corresponding flag bit is set)
+  # Offsets are variable and must be calculated based on flags
+  # ============================================================================
+
+  # If FEXTRA (bit 2) set:
+  #   XLEN (2 bytes) - Length of extra field
+  #   Extra field data (XLEN bytes)
+
+  # If FNAME (bit 3) set:
+  #   Original filename (null-terminated ASCII string)
+
+  # If FCOMMENT (bit 4) set:
+  #   File comment (null-terminated ASCII string)
+
+  # If FHCRC (bit 1) set:
+  #   CRC16 (2 bytes) - CRC-16 of header bytes up to this point
+
+  # ============================================================================
+  # Compressed Data - Follows header and optional fields
+  # Compressed using DEFLATE algorithm (RFC 1951)
+  # ============================================================================
+
+  # ============================================================================
+  # Footer - 8 bytes at end of file
+  # CRC32 (4 bytes) - CRC-32 of uncompressed data
+  # ISIZE (4 bytes) - Size of uncompressed data modulo 2^32
+  # ============================================================================

@@ -1,0 +1,165 @@
+# XZ Compressed File Format
+# Specification: The .xz File Format (version 1.0.4)
+# Purpose: Parsing XZ container header and stream structure
+#
+# XZ is a modern compression format using LZMA2 algorithm.
+# Provides excellent compression ratio with reasonable speed.
+# Used for .xz and .tar.xz files, replacing bzip2 in many Linux distributions.
+#
+# Reference: https://tukaani.org/xz/xz-file-format.txt
+# MIME type: application/x-xz
+
+name: XZ Compressed File Header
+description: |
+  XZ file stream header with magic bytes, stream flags, and checksum.
+  Uses LZMA2 compression algorithm with variable block sizes.
+endian: little  # XZ uses little-endian for checksums and sizes
+
+fields:
+  # ============================================================================
+  # Stream Header - 12 bytes
+  # ============================================================================
+  
+  - name: magic
+    offset: 0x00
+    size: 6
+    type: hex_string
+    description: "XZ magic signature (0xFD '7zXZ' 0x00)"
+    assert: "fd377a585a00"
+    
+  - name: stream_flags
+    offset: 0x06
+    size: 2
+    type: hex_string
+    description: "Stream Flags (2 bytes)"
+    display: hex
+    # Byte 0:
+    #   Bits 7-4: Reserved (0)
+    #   Bits 3-0: Check type
+    #     0x00 = None
+    #     0x01 = CRC32
+    #     0x04 = CRC64
+    #     0x0A = SHA-256
+    # Byte 1: Reserved (0)
+    
+  - name: stream_header_crc32
+    offset: 0x08
+    size: 4
+    type: u32
+    description: "CRC32 of Stream Flags"
+    display: hex
+
+  # ============================================================================
+  # Block Header - Variable size
+  # Offset 0x0C, size must be multiple of 4 bytes
+  # ============================================================================
+
+  # Block Header format:
+  #   Block Header Size (1 byte): (real_size / 4) - 1
+  #     Real size = (value + 1) * 4, range 8-1024 bytes
+  #   
+  #   Block Flags (1 byte):
+  #     Bits 7-6: Number of filters (0-3)
+  #     Bits 5-2: Reserved (0)
+  #     Bit 1: Compressed Size present
+  #     Bit 0: Uncompressed Size present
+  #   
+  #   Compressed Size (0-9 bytes): Variable-length integer if present
+  #   Uncompressed Size (0-9 bytes): Variable-length integer if present
+  #   
+  #   Filter Flags (variable): One entry per filter
+  #     Filter ID (variable-length integer):
+  #       0x21 = LZMA2 (most common)
+  #       0x03 = Delta
+  #       0x04-0x08 = BCJ (x86, PowerPC, IA64, ARM, ARMThumb, SPARC)
+  #     Size of Filter Properties (variable-length integer)
+  #     Filter Properties (variable, depends on filter)
+  #   
+  #   Padding (0-3 bytes): Null bytes to 4-byte boundary
+  #   
+  #   CRC32 (4 bytes): CRC32 of Block Header (excluding CRC field)
+
+  # ============================================================================
+  # Block Data - Variable size
+  # ============================================================================
+
+  # Compressed data encoded using filters specified in Block Header
+  # Most commonly LZMA2 compressed data
+  # Padded to multiple of 4 bytes
+
+  # ============================================================================
+  # Block Padding - 0-3 bytes
+  # ============================================================================
+
+  # Null bytes to align next block to 4-byte boundary
+
+  # ============================================================================
+  # Check - Variable size
+  # ============================================================================
+
+  # Integrity check of uncompressed data
+  # Size depends on Check Type in Stream Flags:
+  #   None: 0 bytes
+  #   CRC32: 4 bytes
+  #   CRC64: 8 bytes
+  #   SHA-256: 32 bytes
+
+  # ============================================================================
+  # Additional Blocks (if present)
+  # ============================================================================
+
+  # [Block Header]
+  # [Block Data]
+  # [Block Padding]
+  # [Check]
+  # ...repeat for each block...
+
+  # ============================================================================
+  # Index - Variable size
+  # ============================================================================
+
+  # Index of all blocks in the stream:
+  #   Index Indicator (1 byte): 0x00
+  #   Number of Records (variable-length integer)
+  #   
+  #   For each block:
+  #     Unpadded Size (variable-length integer)
+  #     Uncompressed Size (variable-length integer)
+  #   
+  #   Index Padding (0-3 bytes): Null bytes to 4-byte boundary
+  #   CRC32 (4 bytes): CRC32 of Index (excluding CRC field)
+
+  # ============================================================================
+  # Stream Footer - 12 bytes
+  # ============================================================================
+
+  # Mirror of Stream Header for verification:
+  #   CRC32 (4 bytes): CRC32 of Stream Flags
+  #   Backward Size (4 bytes): (Index_size / 4) - 1
+  #   Stream Flags (2 bytes): Same as Stream Header
+  #   Magic (2 bytes): 'YZ' (0x59 0x5A)
+
+  # ============================================================================
+  # Stream Padding (optional)
+  # ============================================================================
+
+  # Null bytes between streams (for concatenated XZ files)
+  # Must be multiple of 4 bytes
+
+  # ============================================================================
+  # Multi-Stream Files
+  # ============================================================================
+
+  # XZ files can contain multiple independent streams concatenated
+  # Each stream has its own header, blocks, index, and footer
+  # Allows parallelization and independent extraction
+
+  # ============================================================================
+  # LZMA2 Properties (most common filter)
+  # ============================================================================
+
+  # LZMA2 Filter Properties (1 byte):
+  #   Bits 7-6: Reserved (0)
+  #   Bits 5-0: Dictionary size code
+  #     Dictionary size = 2^(code + 11) or 2^(code + 11) + 2^(code + 10)
+  #     Range: 4 KiB - 4 GiB

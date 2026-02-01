@@ -1,0 +1,188 @@
+# Android DEX (Dalvik Executable) File Header
+# Specification: Android Open Source Project - Dalvik Executable Format
+# Platform: Android - all architectures (ARM, ARM64, x86, x86_64)
+# Purpose: Parsing DEX file headers from Android APK files
+#
+# DEX files contain compiled Java/Kotlin bytecode for Android applications.
+# They are the primary executable format for Android apps.
+# Header is 112 bytes (0x70) for DEX version 035 and later.
+#
+# Usage: Found in APK files as classes.dex, classes2.dex, etc.
+# Reference: https://source.android.com/devices/tech/dalvik/dex-format
+# See also: dexdump, baksmali/smali
+
+name: Android DEX File Header
+description: |
+  Dalvik Executable format header containing magic bytes, version,
+  checksums, file size, and offsets to various data structures
+  (strings, types, methods, classes). Essential for Android app analysis.
+endian: little  # DEX format is always little-endian
+
+fields:
+  - name: magic
+    offset: 0x00
+    size: 8
+    type: hex_string
+    description: "DEX magic number: 'dex\\n' followed by version and null"
+    # Common versions:
+    # 64 65 78 0a 30 33 35 00 = "dex\n035\0" (Android 5.0+)
+    # 64 65 78 0a 30 33 37 00 = "dex\n037\0" (Android 7.0+)
+    # 64 65 78 0a 30 33 38 00 = "dex\n038\0" (Android 8.0+)
+    # 64 65 78 0a 30 33 39 00 = "dex\n039\0" (Android 10.0+)
+    
+  - name: checksum
+    offset: 0x08
+    size: 4
+    type: u32
+    description: "Adler32 checksum of rest of file (all but magic and this field)"
+    display: hex
+    # Used to verify file integrity
+    
+  - name: signature
+    offset: 0x0C
+    size: 20
+    type: hex_string
+    description: "SHA-1 signature of rest of file (all but magic, checksum, and this field)"
+    # Used for file identification and integrity verification
+    # First 20 bytes of SHA-1 hash
+    
+  - name: file_size
+    offset: 0x20
+    size: 4
+    type: u32
+    description: "Size of entire DEX file in bytes"
+    display: hex
+    
+  - name: header_size
+    offset: 0x24
+    size: 4
+    type: u32
+    description: "Size of this header (0x70 = 112 bytes for standard DEX)"
+    assert: "70000000"
+    
+  - name: endian_tag
+    offset: 0x28
+    size: 4
+    type: u32
+    description: "Endianness marker (0x12345678 = little-endian, 0x78563412 = big-endian)"
+    assert: "78563412"
+    # DEX is always little-endian, so this should always be 0x12345678
+    # when read as little-endian u32
+    
+  - name: link_size
+    offset: 0x2C
+    size: 4
+    type: u32
+    description: "Size of link section (0 if statically linked)"
+    display: hex
+    
+  - name: link_off
+    offset: 0x30
+    size: 4
+    type: u32
+    description: "Offset to link section (0 if link_size is 0)"
+    display: hex
+    
+  - name: map_off
+    offset: 0x34
+    size: 4
+    type: u32
+    description: "Offset to map list (must be non-zero)"
+    display: hex
+    # Points to a map_list structure containing offsets/sizes of all sections
+    
+  - name: string_ids_size
+    offset: 0x38
+    size: 4
+    type: u32
+    description: "Number of strings in string ID list"
+    # String table contains all string constants used in DEX file
+    
+  - name: string_ids_off
+    offset: 0x3C
+    size: 4
+    type: u32
+    description: "Offset to string ID list (0 if string_ids_size is 0)"
+    display: hex
+    
+  - name: type_ids_size
+    offset: 0x40
+    size: 4
+    type: u32
+    description: "Number of types in type ID list (max 65535)"
+    # Types include classes, primitives, arrays, etc.
+    
+  - name: type_ids_off
+    offset: 0x44
+    size: 4
+    type: u32
+    description: "Offset to type ID list (0 if type_ids_size is 0)"
+    display: hex
+    
+  - name: proto_ids_size
+    offset: 0x48
+    size: 4
+    type: u32
+    description: "Number of method prototypes in proto ID list (max 65535)"
+    # Prototypes define method signatures (return type + parameters)
+    
+  - name: proto_ids_off
+    offset: 0x4C
+    size: 4
+    type: u32
+    description: "Offset to proto ID list (0 if proto_ids_size is 0)"
+    display: hex
+    
+  - name: field_ids_size
+    offset: 0x50
+    size: 4
+    type: u32
+    description: "Number of fields in field ID list"
+    
+  - name: field_ids_off
+    offset: 0x54
+    size: 4
+    type: u32
+    description: "Offset to field ID list (0 if field_ids_size is 0)"
+    display: hex
+    
+  - name: method_ids_size
+    offset: 0x58
+    size: 4
+    type: u32
+    description: "Number of methods in method ID list"
+    
+  - name: method_ids_off
+    offset: 0x5C
+    size: 4
+    type: u32
+    description: "Offset to method ID list (0 if method_ids_size is 0)"
+    display: hex
+    
+  - name: class_defs_size
+    offset: 0x60
+    size: 4
+    type: u32
+    description: "Number of class definitions in class def list"
+    
+  - name: class_defs_off
+    offset: 0x64
+    size: 4
+    type: u32
+    description: "Offset to class def list (0 if class_defs_size is 0)"
+    display: hex
+    
+  - name: data_size
+    offset: 0x68
+    size: 4
+    type: u32
+    description: "Size of data section in bytes (must be even)"
+    display: hex
+    
+  - name: data_off
+    offset: 0x6C
+    size: 4
+    type: u32
+    description: "Offset to data section"
+    display: hex
+    # Data section contains method bytecode, annotations, encoded arrays, etc.

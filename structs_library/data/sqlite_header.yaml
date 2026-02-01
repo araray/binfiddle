@@ -1,0 +1,209 @@
+# SQLite Database File Format
+# Specification: SQLite Database File Format (version 3)
+# Purpose: Parsing SQLite database file header (first 100 bytes)
+#
+# SQLite is a self-contained, serverless SQL database engine.
+# Each .db/.sqlite/.sqlite3 file contains a complete database.
+# File structure: Header (100 bytes) + Pages (size defined in header)
+#
+# Reference: https://www.sqlite.org/fileformat.html
+# MIME type: application/vnd.sqlite3
+
+name: SQLite Database File Header
+description: |
+  SQLite database file header (version 3) containing magic string,
+  page size, file format version, encoding, and schema information.
+endian: big  # SQLite uses big-endian for multi-byte integers in header
+
+fields:
+  # ============================================================================
+  # SQLite Database Header - 100 bytes
+  # Always at the beginning of the file (page 1, offset 0)
+  # ============================================================================
+  
+  - name: header_string
+    offset: 0x00
+    size: 16
+    type: hex_string
+    description: "SQLite format magic string: 'SQLite format 3\\0' (null-terminated)"
+    assert: "53514c69746520666f726d6174203300"
+    
+  - name: page_size
+    offset: 0x10
+    size: 2
+    type: u16
+    description: "Database page size in bytes (power of 2, 512-65536, or 1=65536)"
+    # Common values: 1024, 4096, 8192, 32768
+    
+  - name: file_format_write_version
+    offset: 0x12
+    size: 1
+    type: u8
+    description: "File format write version (1=legacy, 2=WAL)"
+    enum:
+      1: "Legacy rollback journal mode"
+      2: "Write-Ahead Log (WAL) mode"
+    
+  - name: file_format_read_version
+    offset: 0x13
+    size: 1
+    type: u8
+    description: "File format read version (1=legacy, 2=WAL)"
+    enum:
+      1: "Legacy rollback journal mode"
+      2: "Write-Ahead Log (WAL) mode"
+    
+  - name: bytes_of_unused_reserved_space
+    offset: 0x14
+    size: 1
+    type: u8
+    description: "Bytes of unused reserved space at end of each page (usually 0)"
+    
+  - name: maximum_embedded_payload_fraction
+    offset: 0x15
+    size: 1
+    type: u8
+    description: "Maximum embedded payload fraction (must be 64)"
+    assert: "40"
+    
+  - name: minimum_embedded_payload_fraction
+    offset: 0x16
+    size: 1
+    type: u8
+    description: "Minimum embedded payload fraction (must be 32)"
+    assert: "20"
+    
+  - name: leaf_payload_fraction
+    offset: 0x17
+    size: 1
+    type: u8
+    description: "Leaf payload fraction (must be 32)"
+    assert: "20"
+    
+  - name: file_change_counter
+    offset: 0x18
+    size: 4
+    type: u32
+    description: "File change counter (incremented on each write transaction)"
+    
+  - name: database_size_in_pages
+    offset: 0x1C
+    size: 4
+    type: u32
+    description: "Size of database file in pages (0 if header is incomplete)"
+    
+  - name: first_freelist_trunk_page
+    offset: 0x20
+    size: 4
+    type: u32
+    description: "Page number of first freelist trunk page (0 if none)"
+    
+  - name: total_freelist_pages
+    offset: 0x24
+    size: 4
+    type: u32
+    description: "Total number of freelist pages"
+    
+  - name: schema_cookie
+    offset: 0x28
+    size: 4
+    type: u32
+    description: "Schema cookie (incremented when schema changes)"
+    
+  - name: schema_format_number
+    offset: 0x2C
+    size: 4
+    type: u32
+    description: "Schema format number (1, 2, 3, or 4)"
+    enum:
+      1: "Format 1 (legacy)"
+      2: "Format 2 (adds DESC indexes)"
+      3: "Format 3 (adds CREATE TABLE AS SELECT)"
+      4: "Format 4 (current, adds hidden columns)"
+    
+  - name: default_page_cache_size
+    offset: 0x30
+    size: 4
+    type: u32
+    description: "Suggested cache size in pages (0=default)"
+    
+  - name: largest_root_btree_page
+    offset: 0x34
+    size: 4
+    type: u32
+    description: "Page number of largest root b-tree page (auto-vacuum/incremental-vacuum)"
+    
+  - name: text_encoding
+    offset: 0x38
+    size: 4
+    type: u32
+    description: "Database text encoding"
+    enum:
+      1: "UTF-8"
+      2: "UTF-16le (little-endian)"
+      3: "UTF-16be (big-endian)"
+    
+  - name: user_version
+    offset: 0x3C
+    size: 4
+    type: u32
+    description: "User version number (application-defined, via PRAGMA user_version)"
+    
+  - name: incremental_vacuum_mode
+    offset: 0x40
+    size: 4
+    type: u32
+    description: "Incremental-vacuum mode (0=disabled, non-zero=enabled)"
+    
+  - name: application_id
+    offset: 0x44
+    size: 4
+    type: u32
+    description: "Application ID (set via PRAGMA application_id)"
+    display: hex
+    
+  - name: reserved_for_expansion
+    offset: 0x48
+    size: 20
+    type: hex_string
+    description: "Reserved for expansion (must be zero)"
+    
+  - name: version_valid_for_number
+    offset: 0x5C
+    size: 4
+    type: u32
+    description: "Version-valid-for number (matches file_change_counter when header valid)"
+    
+  - name: sqlite_version_number
+    offset: 0x60
+    size: 4
+    type: u32
+    description: "SQLite version number that wrote the database (e.g., 3046000 = 3.46.0)"
+
+  # ============================================================================
+  # Database Pages - Start at offset 0x64 (100 bytes)
+  # First page (page 1) continues after the 100-byte header
+  # Page 1 contains the database schema (sqlite_schema table)
+  # 
+  # Each page has a header:
+  #   Page type (1 byte): 0x02=interior index, 0x05=interior table,
+  #                       0x0A=leaf index, 0x0D=leaf table, 0x00=freelist
+  #   First freeblock offset (2 bytes)
+  #   Number of cells (2 bytes)
+  #   Cell content area start (2 bytes)
+  #   Fragmented free bytes (1 byte)
+  #   Right-most pointer (4 bytes, interior pages only)
+  # ============================================================================
+
+  # ============================================================================
+  # sqlite_schema Table (stored in page 1):
+  # Contains CREATE statements for all tables, indexes, views, triggers
+  # Columns: type, name, tbl_name, rootpage, sql
+  # ============================================================================
+
+  # ============================================================================
+  # Additional Files:
+  # - database.db-wal: Write-Ahead Log (WAL mode)
+  # - database.db-shm: Shared memory file (WAL mode)
+  # - database.db-journal: Rollback journal (legacy mode)
+  # ============================================================================

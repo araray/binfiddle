@@ -1,0 +1,116 @@
+# MP4 (MPEG-4 Part 14) / ISO Base Media File Format
+# Specification: ISO/IEC 14496-12 (ISO Base Media File Format)
+# Purpose: Parsing MP4 container structure - ftyp and moov boxes
+#
+# MP4 is a container format based on Apple's QuickTime MOV.
+# Structure: Series of hierarchical boxes (atoms), starting with ftyp
+#
+# Reference: https://www.iso.org/standard/68960.html
+# MIME type: video/mp4, audio/mp4
+
+name: MP4 / ISO Base Media Format Header
+description: |
+  MP4 file format with ftyp (file type) box containing brand identifiers
+  and compatibility information. Shows structure of atom-based container.
+endian: big  # MP4/ISO BMFF uses big-endian
+
+fields:
+  # ============================================================================
+  # File Type Box (ftyp) - Variable size, typically 20-32 bytes
+  # Always the first box in the file
+  # ============================================================================
+  
+  - name: ftyp_size
+    offset: 0x00
+    size: 4
+    type: u32
+    description: "ftyp box size in bytes (includes size and type fields)"
+    
+  - name: ftyp_type
+    offset: 0x04
+    size: 4
+    type: hex_string
+    description: "Box type: 'ftyp' in ASCII"
+    assert: "66747970"
+    
+  - name: major_brand
+    offset: 0x08
+    size: 4
+    type: hex_string
+    description: "Major brand identifier (file compatibility)"
+    # Common values:
+    # "isom" (69736f6d) - ISO Base Media File Format
+    # "mp41" (6d703431) - MP4 version 1
+    # "mp42" (6d703432) - MP4 version 2
+    # "M4V " (4d345620) - Apple iTunes Video
+    # "M4A " (4d344120) - Apple iTunes Audio (AAC)
+    # "qt  " (71742020) - QuickTime
+    # "3gp4" (33677034) - 3GPP Release 4
+    # "3gp5" (33677035) - 3GPP Release 5
+    # "3g2a" (33673261) - 3GPP2
+    # "mmp4" (6d6d7034) - Mobile MP4
+    # "avc1" (61766331) - H.264/AVC
+    # "dash" (64617368) - MPEG-DASH
+    
+  - name: minor_version
+    offset: 0x0C
+    size: 4
+    type: u32
+    description: "Minor version number (informational)"
+    display: hex
+    
+  - name: compatible_brand_1
+    offset: 0x10
+    size: 4
+    type: hex_string
+    description: "First compatible brand identifier"
+    
+  - name: compatible_brand_2
+    offset: 0x14
+    size: 4
+    type: hex_string
+    description: "Second compatible brand identifier"
+    
+  # Additional compatible brands may follow (variable number)
+  # Total brands = (ftyp_size - 16) / 4
+
+  # ============================================================================
+  # Subsequent boxes (not at fixed offsets, follow ftyp_size)
+  # 
+  # Common top-level boxes:
+  #   moov - Movie metadata container (required)
+  #     mvhd - Movie header (timescale, duration)
+  #     trak - Track container (one per audio/video/subtitle track)
+  #       tkhd - Track header
+  #       mdia - Media container
+  #         mdhd - Media header
+  #         hdlr - Handler reference (track type: vide, soun, hint)
+  #         minf - Media information
+  #           stbl - Sample table (describes samples/frames)
+  #             stsd - Sample descriptions (codec info)
+  #             stts - Time-to-sample mapping
+  #             stsc - Sample-to-chunk mapping
+  #             stsz - Sample sizes
+  #             stco/co64 - Chunk offsets
+  #   free/skip - Free space (padding)
+  #   mdat - Media data (actual audio/video samples)
+  #   udta - User data
+  #   meta - Metadata
+  #
+  # Box structure:
+  #   Size (4 bytes) - If 1, actual size in next 8 bytes (64-bit)
+  #   Type (4 bytes) - FourCC code
+  #   [Extended Size (8 bytes)] - Present if Size field = 1
+  #   [User Type (16 bytes)] - Present if Type = "uuid"
+  #   Data (variable) - Box-specific data
+  # ============================================================================
+
+  # ============================================================================
+  # Example: Reading next box after ftyp
+  # Offset is ftyp_size (from offset 0x00)
+  # This is typically moov or mdat box
+  # ============================================================================
+
+  # Note: To fully parse MP4, you must traverse the box hierarchy,
+  # using each box's size field to find the next box.
+  # This template shows only the fixed ftyp box.

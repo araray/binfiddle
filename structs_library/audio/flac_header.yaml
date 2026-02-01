@@ -1,0 +1,173 @@
+# FLAC (Free Lossless Audio Codec) File Format
+# Specification: FLAC Format Specification
+# Purpose: Parsing FLAC file stream marker and metadata blocks
+#
+# FLAC is a lossless audio compression format with fast encoding/decoding.
+# Structure: Stream marker + Metadata blocks + Audio frames
+#
+# Reference: https://xiph.org/flac/format.html
+# MIME type: audio/flac
+
+name: FLAC Audio File Header
+description: |
+  FLAC stream marker and STREAMINFO metadata block containing
+  sample rate, channels, bit depth, and total samples.
+endian: big  # FLAC uses big-endian byte order
+
+fields:
+  # ============================================================================
+  # FLAC Stream Marker - 4 bytes
+  # Always "fLaC" in ASCII (0x664C6143)
+  # ============================================================================
+  
+  - name: stream_marker
+    offset: 0x00
+    size: 4
+    type: hex_string
+    description: "FLAC stream marker: 'fLaC' in ASCII"
+    assert: "664c6143"
+
+  # ============================================================================
+  # STREAMINFO Metadata Block - 38 bytes (after 4-byte header)
+  # This is always the first metadata block
+  # ============================================================================
+
+  # Metadata Block Header - 4 bytes
+  
+  - name: metadata_block_header
+    offset: 0x04
+    size: 1
+    type: u8
+    description: "Metadata block header byte (bit 7=last block flag, bits 0-6=block type)"
+    display: hex
+    # Bit 7: 1 if last metadata block, 0 otherwise
+    # Bits 6-0: Block type
+    #   0 = STREAMINFO (required, always first)
+    #   1 = PADDING
+    #   2 = APPLICATION
+    #   3 = SEEKTABLE
+    #   4 = VORBIS_COMMENT
+    #   5 = CUESHEET
+    #   6 = PICTURE
+    #   127 = invalid
+    
+  - name: metadata_block_length
+    offset: 0x05
+    size: 3
+    type: bytes
+    description: "Metadata block length in bytes (24-bit big-endian, excluding header)"
+    # For STREAMINFO, this is always 34 bytes
+
+  # STREAMINFO Data - 34 bytes
+
+  - name: minimum_block_size
+    offset: 0x08
+    size: 2
+    type: u16
+    description: "Minimum block size in samples (excluding last block)"
+    
+  - name: maximum_block_size
+    offset: 0x0A
+    size: 2
+    type: u16
+    description: "Maximum block size in samples (excluding last block)"
+    
+  - name: minimum_frame_size
+    offset: 0x0C
+    size: 3
+    type: bytes
+    description: "Minimum frame size in bytes (24-bit, 0=unknown)"
+    
+  - name: maximum_frame_size
+    offset: 0x0F
+    size: 3
+    type: bytes
+    description: "Maximum frame size in bytes (24-bit, 0=unknown)"
+    
+  - name: sample_rate_and_channels_high
+    offset: 0x12
+    size: 2
+    type: u16
+    description: "Sample rate (bits 19-4 of 20-bit value) and channels (bits 3-1)"
+    display: hex
+    # Bits 19-0: Sample rate in Hz (20 bits)
+    # Bits 22-20: (channels - 1) where channels 1-8
+    # Bits 23-19: Sample rate high bits
+    
+  - name: sample_rate_low_and_bit_depth_high
+    offset: 0x14
+    size: 1
+    type: u8
+    description: "Sample rate low bits and bit depth high bits"
+    display: hex
+    # Bits 7-4: Sample rate bits 3-0 (completes 20-bit sample rate)
+    # Bits 3-0: (bits per sample - 1) high 4 bits
+    
+  - name: bit_depth_low_and_total_samples_high
+    offset: 0x15
+    size: 1
+    type: u8
+    description: "Bit depth low bit and total samples highest byte"
+    display: hex
+    # Bit 7: (bits per sample - 1) bit 0 (completes 5-bit value, giving 4-32 bits)
+    # Bits 6-0: Total samples high 7 bits (of 36-bit value)
+    
+  - name: total_samples_middle
+    offset: 0x16
+    size: 4
+    type: u32
+    description: "Total samples middle bytes (bits 28-0 of 36-bit total)"
+    display: hex
+    # Total samples in stream (0=unknown)
+    # Combined with previous byte: 36-bit value
+    
+  - name: md5_signature
+    offset: 0x1A
+    size: 16
+    type: hex_string
+    description: "MD5 signature of unencoded audio data (128 bits)"
+
+  # ============================================================================
+  # Additional Metadata Blocks (optional, follow STREAMINFO)
+  # ============================================================================
+  
+  # Each metadata block has same 4-byte header structure:
+  #   Byte 0: Last block flag (bit 7) + Block type (bits 6-0)
+  #   Bytes 1-3: Block length (24-bit big-endian)
+  #   Data: Variable length specified by block length
+  #
+  # VORBIS_COMMENT block (type 4):
+  #   Contains key=value pairs for metadata (artist, title, album, etc.)
+  #   Format mirrors Vorbis comment specification
+  #
+  # PICTURE block (type 6):
+  #   Contains embedded album art
+  #   Picture type (4), MIME type length (4), MIME type (variable),
+  #   Description length (4), Description (variable), Width (4), Height (4),
+  #   Color depth (4), Colors used (4), Picture data length (4), Picture data
+  #
+  # SEEKTABLE block (type 3):
+  #   Contains seek points for fast random access
+  #   Each entry: Sample number (8), Offset (8), Number of samples (2)
+
+  # ============================================================================
+  # Audio Frames - Follow metadata blocks
+  # ============================================================================
+  
+  # Each frame has:
+  #   Frame header (variable 2-16 bytes):
+  #     Sync code (14 bits: 0x3FFE)
+  #     Reserved (1 bit: 0)
+  #     Blocking strategy (1 bit)
+  #     Block size (4 bits)
+  #     Sample rate (4 bits)
+  #     Channel assignment (4 bits)
+  #     Sample size (3 bits)
+  #     Reserved (1 bit: 0)
+  #     Frame/sample number (8-56 bits, UTF-8 coded)
+  #     Block size (0-16 bits, if specified)
+  #     Sample rate (0-16 bits, if specified)
+  #     CRC-8 (8 bits)
+  #   Subframes (one per channel)
+  #   Padding (0-7 bits to byte align)
+  #   Frame footer: CRC-16 (16 bits)

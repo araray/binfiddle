@@ -1,0 +1,175 @@
+# TAR (Tape Archive) File Format
+# Specification: POSIX.1-2001 (pax) and GNU tar extensions
+# Purpose: Parsing TAR file header containing file metadata
+#
+# TAR is an uncompressed archive format (often combined with gzip/bzip2/xz).
+# Each file entry consists of 512-byte header + file data (rounded to 512 bytes).
+# Formats: V7, POSIX ustar, GNU tar, POSIX pax
+#
+# Reference: https://www.gnu.org/software/tar/manual/html_node/Standard.html
+# MIME type: application/x-tar
+
+name: TAR Archive Header (POSIX ustar)
+description: |
+  TAR (ustar format) file header containing filename, permissions, ownership,
+  size, modification time, and file type. Each entry is 512 bytes.
+endian: big  # TAR uses octal ASCII strings, conceptually big-endian
+
+fields:
+  # ============================================================================
+  # POSIX ustar Header - 512 bytes
+  # All numeric fields are octal ASCII strings (null or space terminated)
+  # ============================================================================
+  
+  - name: filename
+    offset: 0x00
+    size: 100
+    type: string
+    description: "Filename (null-terminated, max 100 chars including path)"
+    
+  - name: file_mode
+    offset: 0x64
+    size: 8
+    type: string
+    description: "File permissions (octal, e.g., '0000644' for rw-r--r--)"
+    
+  - name: owner_uid
+    offset: 0x6C
+    size: 8
+    type: string
+    description: "Owner user ID (octal)"
+    
+  - name: owner_gid
+    offset: 0x74
+    size: 8
+    type: string
+    description: "Owner group ID (octal)"
+    
+  - name: file_size
+    offset: 0x7C
+    size: 12
+    type: string
+    description: "File size in bytes (octal, e.g., '00000001234' = 668 bytes)"
+    
+  - name: mtime
+    offset: 0x88
+    size: 12
+    type: string
+    description: "Modification time (Unix timestamp in octal)"
+    
+  - name: checksum
+    offset: 0x94
+    size: 8
+    type: string
+    description: "Header checksum (octal sum of all header bytes, treating checksum field as spaces)"
+    
+  - name: type_flag
+    offset: 0x9C
+    size: 1
+    type: u8
+    description: "File type indicator (ASCII character)"
+    enum:
+      48: "'0' or NUL - Normal file"
+      49: "'1' - Hard link"
+      50: "'2' - Symbolic link"
+      51: "'3' - Character special device"
+      52: "'4' - Block special device"
+      53: "'5' - Directory"
+      54: "'6' - FIFO (named pipe)"
+      55: "'7' - Contiguous file"
+      68: "'D' - GNU tar directory (deprecated)"
+      75: "'K' - GNU tar long link name"
+      76: "'L' - GNU tar long file name"
+      77: "'M' - GNU tar multi-volume continuation"
+      78: "'N' - GNU tar old-style long name"
+      83: "'S' - GNU tar sparse file"
+      86: "'V' - GNU tar volume header"
+      88: "'X' - POSIX.1-2001 extended header (pax)"
+      103: "'g' - POSIX.1-2001 global extended header"
+    
+  - name: link_name
+    offset: 0x9D
+    size: 100
+    type: string
+    description: "Name of linked file (for hard/symbolic links)"
+
+  # ============================================================================
+  # POSIX ustar Extension Fields - 155 bytes
+  # ============================================================================
+
+  - name: ustar_magic
+    offset: 0x101
+    size: 6
+    type: hex_string
+    description: "ustar indicator: 'ustar' followed by NUL (0x757374617200)"
+    # "ustar\0" for POSIX ustar, "ustar  " (spaces) for GNU tar
+    
+  - name: ustar_version
+    offset: 0x107
+    size: 2
+    type: hex_string
+    description: "ustar version: '00' for POSIX ustar"
+    
+  - name: owner_user_name
+    offset: 0x109
+    size: 32
+    type: string
+    description: "Owner user name (null-terminated)"
+    
+  - name: owner_group_name
+    offset: 0x129
+    size: 32
+    type: string
+    description: "Owner group name (null-terminated)"
+    
+  - name: device_major_number
+    offset: 0x149
+    size: 8
+    type: string
+    description: "Device major number (octal, for character/block special files)"
+    
+  - name: device_minor_number
+    offset: 0x151
+    size: 8
+    type: string
+    description: "Device minor number (octal, for character/block special files)"
+    
+  - name: filename_prefix
+    offset: 0x159
+    size: 155
+    type: string
+    description: "Filename prefix (for files > 100 chars, concatenate prefix + '/' + filename)"
+
+  # Padding to 512 bytes (offset 0x1F4 to 0x1FF)
+
+  # ============================================================================
+  # File Data - Follows header, padded to 512-byte boundary
+  # Size given by file_size field (octal string converted to decimal)
+  # If file_size is not a multiple of 512, padding bytes (nulls) are added
+  # ============================================================================
+
+  # ============================================================================
+  # Next Entry - Another 512-byte header follows file data (with padding)
+  # End of Archive - Marked by two consecutive blocks of 512 null bytes
+  # ============================================================================
+
+  # ============================================================================
+  # GNU tar Extensions (if ustar_magic = "ustar  "):
+  # - Long filenames: Type 'L' entry precedes actual file, contains long name
+  # - Long link names: Type 'K' entry precedes link, contains long link name
+  # - Sparse files: Type 'S', uses extended header for sparse map
+  # - Incremental backups: Type 'D' for directories
+  # ============================================================================
+
+  # ============================================================================
+  # POSIX pax Extended Headers (type_flag = 'x' or 'g'):
+  # Contains key=value pairs for extended attributes:
+  #   path=<full path>
+  #   linkpath=<full link path>
+  #   size=<size in decimal>
+  #   mtime=<high-precision timestamp>
+  #   uid=<large UID>
+  #   gid=<large GID>
+  #   uname=<user name>
+  #   gname=<group name>
+  # ============================================================================

@@ -1,0 +1,187 @@
+# ZIP Archive File Format
+# Specification: PKZIP Application Note (.ZIP File Format Specification)
+# Purpose: Parsing ZIP local file header and central directory entries
+#
+# ZIP is a ubiquitous archive and compression format supporting multiple compression methods.
+# Structure: Local file headers + file data + Central directory + End of central directory
+#
+# Reference: https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT
+# MIME type: application/zip
+
+name: ZIP Archive Header
+description: |
+  ZIP local file header containing compression method, CRC-32, sizes,
+  and filename. Shows structure of ZIP file entries.
+endian: little  # ZIP uses little-endian byte order
+
+fields:
+  # ============================================================================
+  # Local File Header - Variable size (30 bytes + filename + extra field)
+  # ============================================================================
+  
+  - name: local_file_header_signature
+    offset: 0x00
+    size: 4
+    type: hex_string
+    description: "Local file header signature: 0x04034b50 (PK\\x03\\x04)"
+    assert: "504b0304"
+    
+  - name: version_needed
+    offset: 0x04
+    size: 2
+    type: u16
+    description: "Version needed to extract (minimum PKZIP version)"
+    # Format: major*10 + minor (e.g., 20 = 2.0)
+    
+  - name: general_purpose_bit_flag
+    offset: 0x06
+    size: 2
+    type: u16
+    description: "General purpose bit flags"
+    display: hex
+    # Bit 0: Encrypted file
+    # Bit 1-2: Compression option flags (method-dependent)
+    # Bit 3: CRC-32 and sizes in data descriptor (after file data)
+    # Bit 4: Enhanced deflating
+    # Bit 5: Compressed patched data
+    # Bit 6: Strong encryption
+    # Bit 11: UTF-8 encoding for filename and comment
+    # Bit 13: Encrypted central directory
+    
+  - name: compression_method
+    offset: 0x08
+    size: 2
+    type: u16
+    description: "Compression method"
+    enum:
+      0: "Stored (no compression)"
+      1: "Shrunk"
+      2: "Reduced with compression factor 1"
+      3: "Reduced with compression factor 2"
+      4: "Reduced with compression factor 3"
+      5: "Reduced with compression factor 4"
+      6: "Imploded"
+      8: "Deflated (most common)"
+      9: "Enhanced Deflate (Deflate64)"
+      10: "PKWare DCL Imploded"
+      12: "BZIP2"
+      14: "LZMA"
+      18: "IBM TERSE"
+      19: "IBM LZ77 z Architecture"
+      93: "Zstandard"
+      94: "MP3"
+      95: "XZ"
+      96: "JPEG"
+      97: "WavPack"
+      98: "PPMd"
+      99: "AE-x encryption marker"
+    
+  - name: last_mod_file_time
+    offset: 0x0A
+    size: 2
+    type: u16
+    description: "Last modification time (MS-DOS format)"
+    display: hex
+    # Bits 15-11: Hours (0-23), 10-5: Minutes (0-59), 4-0: Seconds/2 (0-29)
+    
+  - name: last_mod_file_date
+    offset: 0x0C
+    size: 2
+    type: u16
+    description: "Last modification date (MS-DOS format)"
+    display: hex
+    # Bits 15-9: Year (from 1980), 8-5: Month (1-12), 4-0: Day (1-31)
+    
+  - name: crc32
+    offset: 0x0E
+    size: 4
+    type: u32
+    description: "CRC-32 checksum of uncompressed data"
+    display: hex
+    
+  - name: compressed_size
+    offset: 0x12
+    size: 4
+    type: u32
+    description: "Compressed file size in bytes"
+    display: hex
+    
+  - name: uncompressed_size
+    offset: 0x16
+    size: 4
+    type: u32
+    description: "Uncompressed file size in bytes"
+    display: hex
+    
+  - name: filename_length
+    offset: 0x1A
+    size: 2
+    type: u16
+    description: "Length of filename field following this header"
+    
+  - name: extra_field_length
+    offset: 0x1C
+    size: 2
+    type: u16
+    description: "Length of extra field following filename"
+
+  # ============================================================================
+  # Variable-length fields (not at fixed offsets)
+  # ============================================================================
+  # 
+  # Filename (offset: 0x1E, size: filename_length)
+  #   ASCII or UTF-8 (if bit 11 of flags set)
+  #
+  # Extra field (offset: 0x1E + filename_length, size: extra_field_length)
+  #   Contains extensible data blocks (timestamps, Unix permissions, etc.)
+  #   Each block: Header ID (2), Data Size (2), Data (variable)
+  #
+  # Compressed data (offset: 0x1E + filename_length + extra_field_length)
+  #   Size: compressed_size bytes
+  #
+  # Data descriptor (optional, if bit 3 of flags set)
+  #   Signature: 0x08074b50 (optional)
+  #   CRC-32 (4), Compressed size (4), Uncompressed size (4)
+  #   Used when sizes/CRC not known when header written (streaming)
+  # ============================================================================
+
+  # ============================================================================
+  # Additional local file headers follow for each file in archive
+  # ============================================================================
+
+  # ============================================================================
+  # Central Directory (at end of all file data)
+  # 
+  # Central directory file header (one per file):
+  #   Signature: 0x02014b50 (PK\\x01\\x02)
+  #   Version made by (2)
+  #   Version needed (2)
+  #   Flags (2)
+  #   Compression method (2)
+  #   Modification time (2)
+  #   Modification date (2)
+  #   CRC-32 (4)
+  #   Compressed size (4)
+  #   Uncompressed size (4)
+  #   Filename length (2)
+  #   Extra field length (2)
+  #   Comment length (2)
+  #   Disk number start (2)
+  #   Internal file attributes (2)
+  #   External file attributes (4)
+  #   Relative offset of local header (4)
+  #   Filename (variable)
+  #   Extra field (variable)
+  #   File comment (variable)
+  #
+  # End of central directory record:
+  #   Signature: 0x06054b50 (PK\\x05\\x06)
+  #   Disk number (2)
+  #   Disk with central directory (2)
+  #   Central directory entries on this disk (2)
+  #   Total central directory entries (2)
+  #   Central directory size (4)
+  #   Central directory offset (4)
+  #   Comment length (2)
+  #   Comment (variable)
+  # ============================================================================

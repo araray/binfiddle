@@ -1,0 +1,124 @@
+# Docker Image Layer Manifest (manifest.json)
+# Specification: OCI Image Format Specification / Docker Image Spec v1.2
+# Platform: Docker, containerd, Podman - all container runtimes
+# Purpose: Parsing Docker image layer manifests
+#
+# Docker images are stored as layers in tar archives. Each image has a
+# manifest.json file describing the image configuration and layers.
+# This is a JSON format, not a binary format, but critical for forensics.
+#
+# Docker image structure:
+#   image.tar/
+#     ├── manifest.json          (this file - image metadata)
+#     ├── <hash>/
+#     │   ├── VERSION           (layer format version)
+#     │   ├── json              (layer configuration)
+#     │   └── layer.tar         (actual filesystem layer)
+#     ├── <hash>/               (next layer)
+#     │   └── ...
+#     └── <image-id>.json       (image configuration)
+#
+# The manifest.json is a JSON array describing the image(s) in the archive.
+#
+# Usage: Extracted from docker save output or registry pulls
+# Reference: https://github.com/moby/moby/blob/master/image/spec/v1.2.md
+# See also: docker save, skopeo, dive
+
+name: Docker Image Manifest
+description: |
+  Docker image manifest.json structure (JSON format).
+  This template describes the expected JSON structure, not binary format.
+  Parse as JSON text. Contains image configuration and layer references.
+endian: little  # N/A - JSON is text format
+
+# JSON Structure (example):
+# [
+#   {
+#     "Config": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.json",
+#     "RepoTags": ["myimage:latest"],
+#     "Layers": [
+#       "0123456789ab/layer.tar",
+#       "cdef01234567/layer.tar",
+#       ...
+#     ]
+#   }
+# ]
+#
+# Fields (each object in array represents one image):
+#
+# Config (string):
+#   - Filename of image configuration JSON file
+#   - Format: <sha256-hash>.json
+#   - Contains image metadata, environment, entrypoint, etc.
+#
+# RepoTags (array of strings):
+#   - Human-readable image tags
+#   - Format: ["repository:tag", ...]
+#   - Example: ["ubuntu:22.04", "myapp:v1.2.3"]
+#   - May be empty for intermediate/unnamed images
+#
+# Layers (array of strings):
+#   - Ordered list of filesystem layer paths
+#   - Format: ["<layer-id>/layer.tar", ...]
+#   - Layers applied in order (bottom to top)
+#   - Each layer is a tar archive with filesystem changes
+#
+# Optional fields:
+#
+# Parent (string):
+#   - Parent image ID (if this is a child image)
+#   - Format: <sha256-hash>
+#
+# Layer metadata (/layer-id/json):
+#   Each layer directory contains a json file with metadata:
+#   {
+#     "id": "layer-sha256-hash",
+#     "parent": "parent-layer-hash",
+#     "created": "2024-01-31T12:34:56.789Z",
+#     "container_config": { ... },
+#     "config": { ... }
+#   }
+#
+# Image configuration file (sha256.json):
+#   {
+#     "architecture": "amd64",
+#     "os": "linux",
+#     "config": {
+#       "Env": ["PATH=/usr/bin", ...],
+#       "Cmd": ["/bin/bash"],
+#       "WorkingDir": "/app",
+#       "ExposedPorts": {"80/tcp": {}},
+#       "Labels": {"version": "1.0"}
+#     },
+#     "rootfs": {
+#       "type": "layers",
+#       "diff_ids": ["sha256:abc...", "sha256:def..."]
+#     },
+#     "history": [
+#       {
+#         "created": "2024-01-31T12:34:56.789Z",
+#         "created_by": "/bin/sh -c apt-get update"
+#       }
+#     ]
+#   }
+#
+# Security considerations for forensics:
+#   - manifest.json can be tampered with
+#   - Layer hashes should be verified against actual tar contents
+#   - Config file contains sensitive environment variables
+#   - History reveals build commands (may expose secrets)
+#   - Check for suspicious layer sizes or timestamps
+#   - Examine RepoTags for typosquatting
+
+fields:
+  # This is a JSON format, so this template serves as documentation
+  # For actual parsing, use a JSON parser on manifest.json
+  # No binary fields to define
+  
+  - name: json_format_note
+    offset: 0x00
+    size: 1
+    type: u8
+    description: "Docker manifest.json is a JSON text file, not a binary format"
+    # Parse the file as JSON, not with this binary template
+    # This template exists for documentation and forensic reference

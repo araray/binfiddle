@@ -1,0 +1,111 @@
+# BZIP2 Compressed File Format
+# Specification: bzip2 and libbzip2 documentation
+# Purpose: Parsing BZIP2 file header and block structure
+#
+# BZIP2 uses the Burrows-Wheeler transform and Huffman coding for compression.
+# Better compression than gzip but slower. Used for .bz2 and .tar.bz2 files.
+#
+# Reference: https://github.com/dsnet/compress/blob/master/doc/bzip2-format.pdf
+# MIME type: application/x-bzip2
+
+name: BZIP2 Compressed File Header
+description: |
+  BZIP2 file header with magic bytes, version, and block size.
+  Followed by compressed blocks using Burrows-Wheeler transform.
+endian: big  # BZIP2 conceptually uses big-endian bit ordering
+
+fields:
+  # ============================================================================
+  # BZIP2 File Header - 4 bytes
+  # ============================================================================
+  
+  - name: magic
+    offset: 0x00
+    size: 2
+    type: hex_string
+    description: "BZIP2 magic signature: 'BZ' in ASCII"
+    assert: "425a"
+    
+  - name: version
+    offset: 0x02
+    size: 1
+    type: u8
+    description: "BZIP2 version"
+    assert: "68"
+    enum:
+      104: "'h' - bzip2 version (current)"
+      48: "'0' - bzip1 (obsolete, rarely seen)"
+    
+  - name: block_size
+    offset: 0x03
+    size: 1
+    type: u8
+    description: "Block size in 100KB units (ASCII '1'-'9')"
+    enum:
+      49: "'1' - 100 KB block size"
+      50: "'2' - 200 KB block size"
+      51: "'3' - 300 KB block size"
+      52: "'4' - 400 KB block size"
+      53: "'5' - 500 KB block size"
+      54: "'6' - 600 KB block size"
+      55: "'7' - 700 KB block size"
+      56: "'8' - 800 KB block size"
+      57: "'9' - 900 KB block size (best compression)"
+
+  # ============================================================================
+  # Compressed Blocks - Variable size and count
+  # Offset 0x04, continues until end-of-stream marker
+  # ============================================================================
+
+  # Each compressed block starts with:
+  #   Block header (48 bits):
+  #     Magic: 0x314159265359 (BCD of π)
+  #     CRC-32: 32-bit CRC of uncompressed block
+  #     Randomized: 1-bit flag (rarely used)
+  #     Orig Ptr: 24-bit pointer used by BW transform decoder
+  #
+  # Followed by:
+  #   Huffman used map (16 bits): Bitmap of 16 ranges of 16 symbols each
+  #   Huffman used bitmap (0-256 bits): Bitmap of symbols used
+  #   Huffman selectors (variable): Number of selectors and selector list
+  #   Huffman trees (variable): Huffman code trees
+  #   Block data (variable): Huffman-coded data
+
+  # ============================================================================
+  # End-of-Stream Marker - 10 bytes (80 bits)
+  # ============================================================================
+
+  # End marker:
+  #   Magic: 0x177245385090 (BCD of √π)
+  #   CRC-32: Combined CRC of all blocks
+
+  # ============================================================================
+  # BZIP2 Stream Structure
+  # ============================================================================
+
+  # Magic 'BZ'
+  # Version 'h'
+  # Block size '1'-'9'
+  # [Compressed Block 1]
+  #   Block Magic 0x314159265359
+  #   Block CRC-32
+  #   Randomized flag + Orig Ptr
+  #   Huffman maps and trees
+  #   Compressed data
+  # [Compressed Block 2]
+  #   ...
+  # [Compressed Block N]
+  #   ...
+  # End-of-Stream Magic 0x177245385090
+  # Stream CRC-32
+
+  # ============================================================================
+  # Notes
+  # ============================================================================
+
+  # - Block size affects compression ratio and memory usage
+  # - Larger blocks (9) give better compression but use more memory
+  # - Each block is independent and can be decompressed separately
+  # - Multiple blocks allow parallel decompression
+  # - CRC-32 checks detect corruption
+  # - Burrows-Wheeler transform provides good compression for text

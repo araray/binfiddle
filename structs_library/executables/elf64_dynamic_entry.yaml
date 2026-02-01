@@ -1,0 +1,100 @@
+# ELF 64-bit Dynamic Section Entry
+# Specification: Tool Interface Standard (TIS) Executable and Linking Format (ELF) Specification Version 1.2
+# Platform: Linux, BSD, Solaris - 64-bit architectures
+# Purpose: Parsing entries in the .dynamic section (Elf64_Dyn)
+#
+# The .dynamic section contains information needed by the dynamic linker/loader.
+# Critical for shared objects (.so files) and dynamically linked executables.
+# Each entry is 16 bytes for ELF64.
+#
+# Usage: Found in PT_DYNAMIC segment or SHT_DYNAMIC section
+# Terminated by DT_NULL entry
+# Reference: https://refspecs.linuxfoundation.org/elf/elf.pdf
+# See also: readelf -d, /usr/include/elf.h
+
+name: ELF 64-bit Dynamic Entry
+description: |
+  Dynamic section entry used by the dynamic linker to locate dependencies,
+  symbol tables, relocations, and initialization/finalization functions.
+  Essential for understanding .so file dependencies and runtime behavior.
+endian: little  # Should match ELF header's e_ident[EI_DATA]
+
+fields:
+  - name: d_tag
+    offset: 0x00
+    size: 8
+    type: i64
+    description: "Dynamic entry type - determines interpretation of d_un"
+    enum:
+      0: "DT_NULL (End of _DYNAMIC array)"
+      1: "DT_NEEDED (String table offset of needed library)"
+      2: "DT_PLTRELSZ (Size of PLT relocation entries)"
+      3: "DT_PLTGOT (Address of PLT/GOT)"
+      4: "DT_HASH (Address of symbol hash table)"
+      5: "DT_STRTAB (Address of string table)"
+      6: "DT_SYMTAB (Address of symbol table)"
+      7: "DT_RELA (Address of Rela relocation table)"
+      8: "DT_RELASZ (Size of Rela table)"
+      9: "DT_RELAENT (Size of one Rela entry)"
+      10: "DT_STRSZ (Size of string table)"
+      11: "DT_SYMENT (Size of one symbol table entry)"
+      12: "DT_INIT (Address of initialization function)"
+      13: "DT_FINI (Address of termination function)"
+      14: "DT_SONAME (String table offset of shared object name)"
+      15: "DT_RPATH (String table offset of library search path)"
+      16: "DT_SYMBOLIC (Alert linker to search this SO first)"
+      17: "DT_REL (Address of Rel relocation table)"
+      18: "DT_RELSZ (Size of Rel table)"
+      19: "DT_RELENT (Size of one Rel entry)"
+      20: "DT_PLTREL (Type of relocation in PLT: DT_REL or DT_RELA)"
+      21: "DT_DEBUG (For debugging; not defined)"
+      22: "DT_TEXTREL (Relocation might modify .text)"
+      23: "DT_JMPREL (Address of PLT relocation entries)"
+      24: "DT_BIND_NOW (Process relocations before execution)"
+      25: "DT_INIT_ARRAY (Address of init function array)"
+      26: "DT_FINI_ARRAY (Address of termination function array)"
+      27: "DT_INIT_ARRAYSZ (Size of init array)"
+      28: "DT_FINI_ARRAYSZ (Size of fini array)"
+      29: "DT_RUNPATH (String table offset of library search path)"
+      30: "DT_FLAGS (Flags - DF_ORIGIN, DF_SYMBOLIC, etc.)"
+      32: "DT_PREINIT_ARRAY (Address of preinit function array)"
+      33: "DT_PREINIT_ARRAYSZ (Size of preinit array)"
+      34: "DT_SYMTAB_SHNDX (Address of SHT_SYMTAB_SHNDX section)"
+      1879047935: "DT_LOOS (0x6FFFFFFF - OS-specific start)"
+      1879048181: "DT_GNU_HASH (0x6FFFFEF5 - GNU-style hash table)"
+      1879048185: "DT_TLSDESC_PLT (0x6FFFFEF9)"
+      1879048186: "DT_TLSDESC_GOT (0x6FFFFEFA)"
+      1879048187: "DT_GNU_CONFLICT (0x6FFFFEFB)"
+      1879048188: "DT_GNU_LIBLIST (0x6FFFFEFC)"
+      1879048189: "DT_CONFIG (0x6FFFFEFD)"
+      1879048190: "DT_DEPAUDIT (0x6FFFFEFE)"
+      1879048191: "DT_AUDIT (0x6FFFFEFF)"
+      1879048192: "DT_PLTPAD (0x6FFFFFF0)"
+      1879048193: "DT_MOVETAB (0x6FFFFFF1)"
+      1879048195: "DT_SYMINFO (0x6FFFFFF3)"
+      1879048700: "DT_VERSYM (0x6FFFFFF0)"
+      1879048814: "DT_RELACOUNT (0x6FFFFFF9)"
+      1879048815: "DT_RELCOUNT (0x6FFFFFFA)"
+      1879048816: "DT_FLAGS_1 (0x6FFFFFFB - State flags)"
+      1879048817: "DT_VERDEF (0x6FFFFFFC - Version definitions)"
+      1879048818: "DT_VERDEFNUM (0x6FFFFFFD - Number of version defs)"
+      1879048819: "DT_VERNEED (0x6FFFFFFE - Version dependencies)"
+      1879048820: "DT_VERNEEDNUM (0x6FFFFFFF - Number of version deps)"
+      1879048191: "DT_HIOS (0x6FFFFFFF - OS-specific end)"
+      1879048192: "DT_LOPROC (0x70000000 - Processor-specific start)"
+      2147483647: "DT_HIPROC (0x7FFFFFFF - Processor-specific end)"
+    display: hex
+    
+  - name: d_un
+    offset: 0x08
+    size: 8
+    type: u64
+    description: "Value or pointer (interpretation depends on d_tag)"
+    display: hex
+    # If d_tag indicates a pointer: virtual address
+    # If d_tag indicates a value: integer value
+    # If d_tag indicates a string offset: offset into DT_STRTAB
+    # Common interpretations:
+    # DT_NEEDED, DT_SONAME, DT_RPATH, DT_RUNPATH: offset into string table
+    # DT_STRTAB, DT_SYMTAB, DT_HASH, DT_GNU_HASH: virtual addresses
+    # DT_STRSZ, DT_SYMENT, DT_RELASZ, DT_RELAENT: sizes in bytes

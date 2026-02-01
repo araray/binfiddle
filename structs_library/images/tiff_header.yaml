@@ -1,0 +1,114 @@
+# TIFF (Tagged Image File Format)
+# Specification: TIFF Revision 6.0
+# Purpose: Parsing TIFF file header and Image File Directory (IFD)
+#
+# TIFF is a flexible raster image format supporting multiple images, compression,
+# and extensive metadata through tags. Used in professional photography and scanning.
+#
+# Reference: https://www.itu.int/itudoc/itu-t/com16/tiff-fx/docs/tiff6.pdf
+# MIME type: image/tiff
+
+name: TIFF Image File Header
+description: |
+  TIFF file header with byte order indicator, magic number, and first IFD offset.
+  Supports both little-endian (II) and big-endian (MM) byte orders.
+endian: little  # Will be overridden based on byte_order field
+
+fields:
+  # ============================================================================
+  # TIFF Header - 8 bytes
+  # ============================================================================
+  
+  - name: byte_order
+    offset: 0x00
+    size: 2
+    type: hex_string
+    description: "Byte order indicator"
+    enum:
+      "4949": "II - Intel byte order (little-endian)"
+      "4d4d": "MM - Motorola byte order (big-endian)"
+    
+  - name: magic_number
+    offset: 0x02
+    size: 2
+    type: u16
+    description: "TIFF magic number (always 42 decimal = 0x002A)"
+    # Will be 0x2A00 for little-endian or 0x002A for big-endian
+    
+  - name: first_ifd_offset
+    offset: 0x04
+    size: 4
+    type: u32
+    description: "Byte offset to first Image File Directory (IFD)"
+    display: hex
+
+  # ============================================================================
+  # Image File Directory (IFD) - Variable offset and size
+  # Location given by first_ifd_offset
+  # ============================================================================
+  
+  # IFD Structure:
+  #   Number of Directory Entries (2 bytes)
+  #   Directory Entries (12 bytes each)
+  #   Offset of Next IFD (4 bytes) - 0 if last IFD
+  #
+  # Directory Entry Structure (12 bytes):
+  #   Tag (2 bytes) - Identifies the field
+  #   Type (2 bytes) - Data type (1=BYTE, 2=ASCII, 3=SHORT, 4=LONG, 5=RATIONAL, etc.)
+  #   Count (4 bytes) - Number of values
+  #   Value/Offset (4 bytes) - Value if <=4 bytes, otherwise offset to value
+  #
+  # Common TIFF Tags:
+  #   254 (0x00FE) - NewSubfileType
+  #   256 (0x0100) - ImageWidth
+  #   257 (0x0101) - ImageLength (height)
+  #   258 (0x0102) - BitsPerSample
+  #   259 (0x0103) - Compression (1=None, 2=CCITT, 5=LZW, 7=JPEG, 32773=PackBits)
+  #   262 (0x0106) - PhotometricInterpretation (0=WhiteIsZero, 1=BlackIsZero, 2=RGB, 3=Palette, 4=Transparency, 5=CMYK, 6=YCbCr)
+  #   273 (0x0111) - StripOffsets
+  #   277 (0x0115) - SamplesPerPixel
+  #   278 (0x0116) - RowsPerStrip
+  #   279 (0x0117) - StripByteCounts
+  #   282 (0x011A) - XResolution
+  #   283 (0x011B) - YResolution
+  #   284 (0x011C) - PlanarConfiguration
+  #   296 (0x0128) - ResolutionUnit (1=None, 2=Inch, 3=Centimeter)
+  #   305 (0x0131) - Software
+  #   306 (0x0132) - DateTime
+  #   315 (0x013B) - Artist
+  #   320 (0x0140) - ColorMap (for palette images)
+  #   338 (0x0152) - ExtraSamples
+  #
+  # EXIF Tags (used in TIFF-based EXIF):
+  #   34665 (0x8769) - EXIF IFD Pointer
+  #   34853 (0x8825) - GPS IFD Pointer
+  #
+  # TIFF/EP (Electronic Photography) Tags:
+  #   330 (0x014A) - SubIFDs
+  #   34665 (0x8769) - EXIF IFD
+  #
+  # BigTIFF Extension (for files > 4GB):
+  #   Magic number: 43 instead of 42
+  #   Uses 8-byte offsets instead of 4-byte
+
+  # ============================================================================
+  # Image Data - Stored at offsets specified by StripOffsets/TileOffsets tags
+  # Can be compressed (LZW, JPEG, ZIP, etc.) or uncompressed
+  # ============================================================================
+
+  # ============================================================================
+  # Multi-Image TIFF Files
+  # ============================================================================
+  
+  # TIFF files can contain multiple images (pages, thumbnails, layers)
+  # Each image has its own IFD, linked via "Offset of Next IFD"
+  # Chain ends when "Offset of Next IFD" is 0
+
+  # ============================================================================
+  # TIFF Extensions
+  # ============================================================================
+  
+  # GeoTIFF: Adds geospatial metadata tags for maps and satellite imagery
+  # TIFF/IT: For graphic arts and prepress workflows
+  # TIFF/EP: For digital camera raw images
+  # DNG (Digital Negative): Adobe's open raw format based on TIFF/EP

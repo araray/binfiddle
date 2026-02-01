@@ -1,0 +1,177 @@
+# Mach-O 64-bit Executable Header
+# Specification: Apple Mach-O File Format Reference
+# Platform: macOS, iOS (64-bit ARM and x86-64)
+# Purpose: Parsing Mach-O object file header and load commands
+#
+# Mach-O is the native executable format for macOS, iOS, watchOS, and tvOS.
+# It supports universal binaries (fat binaries) containing multiple architectures.
+#
+# Reference: https://github.com/aidansteele/osx-abi-macho-file-format-reference
+# File types: executables, dylibs (.dylib), bundles (.bundle), kernel extensions (.kext)
+
+name: Mach-O 64-bit Header
+description: |
+  Mach-O 64-bit file header for macOS/iOS executables, dynamic libraries,
+  and object files. Includes CPU type, file type, and load command metadata.
+endian: little  # Intel is little-endian; ARM can be either
+
+fields:
+  # ============================================================================
+  # Mach Header 64 (mach_header_64) - 32 bytes
+  # ============================================================================
+  
+  - name: magic
+    offset: 0x00
+    size: 4
+    type: hex_string
+    description: "Mach-O magic number identifying file type and byte order"
+    enum:
+      "feedface": "MH_MAGIC (32-bit little-endian)"
+      "cefaedfe": "MH_CIGAM (32-bit big-endian)"
+      "feedfacf": "MH_MAGIC_64 (64-bit little-endian)"
+      "cffaedfe": "MH_CIGAM_64 (64-bit big-endian)"
+      "cafebabe": "FAT_MAGIC (Universal binary, big-endian)"
+      "bebafeca": "FAT_CIGAM (Universal binary, little-endian)"
+    assert: "cffaedfe"  # Expecting 64-bit little-endian
+    
+  - name: cputype
+    offset: 0x04
+    size: 4
+    type: i32
+    description: "CPU family (architecture)"
+    enum:
+      1: "CPU_TYPE_VAX"
+      6: "CPU_TYPE_MC680x0"
+      7: "CPU_TYPE_X86 / CPU_TYPE_I386"
+      8: "CPU_TYPE_MIPS"
+      10: "CPU_TYPE_MC98000"
+      11: "CPU_TYPE_HPPA"
+      12: "CPU_TYPE_ARM"
+      13: "CPU_TYPE_MC88000"
+      14: "CPU_TYPE_SPARC"
+      15: "CPU_TYPE_I860"
+      16: "CPU_TYPE_ALPHA"
+      18: "CPU_TYPE_POWERPC"
+      16777223: "CPU_TYPE_X86_64 (0x01000007)"
+      16777228: "CPU_TYPE_ARM64 (0x0100000C)"
+      16777234: "CPU_TYPE_POWERPC64 (0x01000012)"
+      
+  - name: cpusubtype
+    offset: 0x08
+    size: 4
+    type: i32
+    description: "CPU subtype (specific model/variant)"
+    display: hex
+    # x86_64: 3=ALL, 4=ARCH1, 8=HASWELL
+    # ARM64: 0=ALL, 1=V8, 2=E (efficiency cores)
+    
+  - name: filetype
+    offset: 0x0C
+    size: 4
+    type: u32
+    description: "Type of Mach-O file"
+    enum:
+      1: "MH_OBJECT (Relocatable object file .o)"
+      2: "MH_EXECUTE (Executable program)"
+      3: "MH_FVMLIB (Fixed VM shared library)"
+      4: "MH_CORE (Core dump file)"
+      5: "MH_PRELOAD (Preloaded executable)"
+      6: "MH_DYLIB (Dynamically bound shared library .dylib)"
+      7: "MH_DYLINKER (Dynamic link editor /usr/lib/dyld)"
+      8: "MH_BUNDLE (Dynamically bound bundle .bundle)"
+      9: "MH_DYLIB_STUB (Shared library stub)"
+      10: "MH_DSYM (Debug symbols companion file .dSYM)"
+      11: "MH_KEXT_BUNDLE (Kernel extension .kext)"
+      
+  - name: ncmds
+    offset: 0x10
+    size: 4
+    type: u32
+    description: "Number of load commands following the header"
+    
+  - name: sizeofcmds
+    offset: 0x14
+    size: 4
+    type: u32
+    description: "Total size of all load commands in bytes"
+    display: hex
+    
+  - name: flags
+    offset: 0x18
+    size: 4
+    type: u32
+    description: "Mach-O flags (bitfield)"
+    display: hex
+    # Flags:
+    # 0x1=MH_NOUNDEFS (No undefined refs)
+    # 0x2=MH_INCRLINK (Incremental link output)
+    # 0x4=MH_DYLDLINK (Input for dynamic linker)
+    # 0x8=MH_BINDATLOAD (Dyld binds undefined refs at load)
+    # 0x10=MH_PREBOUND (Dylib prebound)
+    # 0x20=MH_SPLIT_SEGS (Split R/W segments)
+    # 0x80=MH_TWOLEVEL (Two-level namespace)
+    # 0x100=MH_FORCE_FLAT (Force flat namespace)
+    # 0x200=MH_NOMULTIDEFS (No multiple definitions)
+    # 0x400=MH_NOFIXPREBINDING (Don't notify prebinding agent)
+    # 0x800=MH_PREBINDABLE (Can be prebound)
+    # 0x1000=MH_ALLMODSBOUND (All modules bound)
+    # 0x2000=MH_SUBSECTIONS_VIA_SYMBOLS (Safe to divide into sub-sections)
+    # 0x4000=MH_CANONICAL (Canonical Mach-O)
+    # 0x8000=MH_WEAK_DEFINES (Has weak symbol definitions)
+    # 0x10000=MH_BINDS_TO_WEAK (Uses weak symbols)
+    # 0x20000=MH_ALLOW_STACK_EXECUTION (Stack is executable)
+    # 0x80000=MH_PIE (Position Independent Executable)
+    # 0x100000=MH_DEAD_STRIPPABLE_DYLIB (Can strip if unused)
+    # 0x200000=MH_HAS_TLV_DESCRIPTORS (Has thread-local variables)
+    # 0x400000=MH_NO_HEAP_EXECUTION (Heap is non-executable)
+    # 0x800000=MH_APP_EXTENSION_SAFE (App extension safe)
+    
+  - name: reserved
+    offset: 0x1C
+    size: 4
+    type: u32
+    description: "Reserved for future use (64-bit only, should be 0)"
+    assert: "00000000"
+
+  # ============================================================================
+  # Load Commands follow at offset 0x20
+  # Each load command has structure:
+  #   uint32_t cmd;      // Type of load command
+  #   uint32_t cmdsize;  // Total size including command-specific data
+  #   ... command-specific data ...
+  # 
+  # Common load commands:
+  #   LC_SEGMENT_64 (0x19): 64-bit segment
+  #   LC_SYMTAB (0x2): Symbol table
+  #   LC_DYSYMTAB (0xB): Dynamic symbol table
+  #   LC_LOAD_DYLIB (0xC): Load dynamic library
+  #   LC_ID_DYLIB (0xD): Dylib identification
+  #   LC_LOAD_DYLINKER (0xE): Load dynamic linker
+  #   LC_UUID (0x1B): UUID of binary
+  #   LC_VERSION_MIN_MACOSX (0x24): Minimum macOS version
+  #   LC_VERSION_MIN_IPHONEOS (0x25): Minimum iOS version
+  #   LC_FUNCTION_STARTS (0x26): Function start addresses
+  #   LC_MAIN (0x28): Main entry point
+  #   LC_DATA_IN_CODE (0x29): Data-in-code entries
+  #   LC_SOURCE_VERSION (0x2A): Source version
+  #   LC_DYLD_INFO_ONLY (0x22 | 0x80000000): Compressed dyld info
+  #   LC_CODE_SIGNATURE (0x1D): Code signature
+  # ============================================================================
+
+  - name: first_load_cmd_type
+    offset: 0x20
+    size: 4
+    type: u32
+    description: "Type of first load command"
+    display: hex
+    
+  - name: first_load_cmd_size
+    offset: 0x24
+    size: 4
+    type: u32
+    description: "Size of first load command"
+    display: hex
+    
+  # Note: To fully parse all load commands, you need to iterate through ncmds,
+  # reading cmd/cmdsize pairs and advancing by cmdsize bytes each time.
+  # This template shows only the first load command as an example.

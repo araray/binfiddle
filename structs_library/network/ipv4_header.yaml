@@ -1,0 +1,188 @@
+# IPv4 (Internet Protocol version 4) Packet Header
+# Specification: RFC 791 - Internet Protocol
+# Purpose: Parsing IPv4 packet header for network analysis
+#
+# IPv4 is the dominant network-layer protocol carrying TCP/UDP/ICMP packets.
+# Header size: 20-60 bytes (20 bytes without options)
+#
+# Reference: https://datatracker.ietf.org/doc/html/rfc791
+# Layer: OSI Layer 3 (Network)
+
+name: IPv4 Packet Header
+description: |
+  IPv4 packet header with version, addresses, protocol, TTL, and checksum.
+  Minimum 20 bytes, up to 60 bytes with options.
+endian: big  # Network byte order (big-endian)
+
+fields:
+  # ============================================================================
+  # IPv4 Header - 20 bytes minimum (without options)
+  # ============================================================================
+  
+  - name: version_and_ihl
+    offset: 0x00
+    size: 1
+    type: u8
+    description: "Version (4 bits) + IHL/Header Length (4 bits)"
+    display: hex
+    # Bits 7-4: Version (always 4 for IPv4)
+    # Bits 3-0: Internet Header Length (IHL) in 32-bit words
+    #           Minimum value: 5 (20 bytes), Maximum: 15 (60 bytes)
+    
+  - name: dscp_and_ecn
+    offset: 0x01
+    size: 1
+    type: u8
+    description: "DSCP (6 bits) + ECN (2 bits)"
+    display: hex
+    # Bits 7-2: DSCP (Differentiated Services Code Point) - QoS
+    #   0x00 = Default (Best Effort)
+    #   0x28 = Expedited Forwarding (EF)
+    #   0x2E = Voice Admit
+    #   0x30-0x38 = Assured Forwarding (AF)
+    # Bits 1-0: ECN (Explicit Congestion Notification)
+    #   0 = Not ECN-Capable Transport
+    #   1 = ECN-Capable Transport (0)
+    #   2 = ECN-Capable Transport (1)
+    #   3 = Congestion Experienced
+    
+  - name: total_length
+    offset: 0x02
+    size: 2
+    type: u16
+    description: "Total packet length in bytes (header + data, max 65535)"
+    
+  - name: identification
+    offset: 0x04
+    size: 2
+    type: u16
+    description: "Identification field for fragment reassembly"
+    display: hex
+    
+  - name: flags_and_fragment_offset
+    offset: 0x06
+    size: 2
+    type: u16
+    description: "Flags (3 bits) + Fragment Offset (13 bits)"
+    display: hex
+    # Bit 15: Reserved (must be 0)
+    # Bit 14: Don't Fragment (DF) - 1=don't fragment, 0=may fragment
+    # Bit 13: More Fragments (MF) - 1=more fragments follow, 0=last/only fragment
+    # Bits 12-0: Fragment Offset in 8-byte units (position in original datagram)
+    
+  - name: ttl
+    offset: 0x08
+    size: 1
+    type: u8
+    description: "Time To Live (hop count, decremented by each router)"
+    # Typical values: 64 (Linux/macOS), 128 (Windows), 255 (some devices)
+    # Packet discarded when TTL reaches 0
+    
+  - name: protocol
+    offset: 0x09
+    size: 1
+    type: u8
+    description: "Protocol number of encapsulated payload"
+    enum:
+      1: "ICMP (Internet Control Message Protocol)"
+      2: "IGMP (Internet Group Management Protocol)"
+      6: "TCP (Transmission Control Protocol)"
+      17: "UDP (User Datagram Protocol)"
+      41: "IPv6 (IPv6 encapsulation)"
+      47: "GRE (Generic Routing Encapsulation)"
+      50: "ESP (Encapsulating Security Payload)"
+      51: "AH (Authentication Header)"
+      58: "ICMPv6"
+      89: "OSPF (Open Shortest Path First)"
+      132: "SCTP (Stream Control Transmission Protocol)"
+    
+  - name: header_checksum
+    offset: 0x0A
+    size: 2
+    type: u16
+    description: "Header checksum (one's complement sum of header)"
+    display: hex
+    # Calculated over header only, recalculated at each hop due to TTL change
+    
+  - name: source_ip
+    offset: 0x0C
+    size: 4
+    type: hex_string
+    description: "Source IP address (32-bit, dotted-decimal A.B.C.D)"
+    # Example: 192.168.1.100 = 0xC0A80164
+    
+  - name: destination_ip
+    offset: 0x10
+    size: 4
+    type: hex_string
+    description: "Destination IP address (32-bit, dotted-decimal A.B.C.D)"
+
+  # ============================================================================
+  # Options Field - Variable length (0-40 bytes)
+  # Present if IHL > 5 (header length > 20 bytes)
+  # Offset: 0x14
+  # ============================================================================
+
+  # Options format (each option):
+  #   Type (1 byte):
+  #     Bit 7: Copied flag (1=copy to all fragments)
+  #     Bits 6-5: Class (0=control, 2=debugging/measurement)
+  #     Bits 4-0: Option number
+  #   Length (1 byte, for variable-length options)
+  #   Data (variable, depends on option)
+  #
+  # Common options:
+  #   Type 0: End of Options List (1 byte)
+  #   Type 1: No Operation/Padding (1 byte)
+  #   Type 7: Record Route (variable, stores router IPs)
+  #   Type 68: Timestamp (variable, stores timestamps)
+  #   Type 131: Loose Source Route (variable, specifies route)
+  #   Type 137: Strict Source Route (variable, specifies exact route)
+  #
+  # Options are padded to 32-bit boundary with Type 0 or Type 1
+
+  # ============================================================================
+  # Payload - Variable length
+  # Offset: 20 + (options_length) bytes
+  # ============================================================================
+
+  # Contains higher-layer protocol data (TCP segment, UDP datagram, ICMP message)
+  # Maximum payload size = Total Length - Header Length
+  # Typical MTU: 1500 bytes for Ethernet
+  # Maximum payload without fragmentation ≈ 1480 bytes (1500 - 20 header)
+
+  # ============================================================================
+  # Fragmentation
+  # ============================================================================
+
+  # IPv4 packets larger than MTU are fragmented:
+  #   - Each fragment has same Identification value
+  #   - Fragment Offset indicates position in original datagram
+  #   - More Fragments (MF) flag set on all but last fragment
+  #   - Original packet reassembled at destination
+  #
+  # Example fragmentation of 2000-byte payload (MTU 1500):
+  #   Fragment 1: Offset 0, MF=1, Length=1500 (1480 data)
+  #   Fragment 2: Offset 185 (1480/8), MF=0, Length=540 (520 data)
+
+  # ============================================================================
+  # Special Addresses
+  # ============================================================================
+
+  # Private networks (RFC 1918):
+  #   10.0.0.0/8 (10.0.0.0 - 10.255.255.255)
+  #   172.16.0.0/12 (172.16.0.0 - 172.31.255.255)
+  #   192.168.0.0/16 (192.168.0.0 - 192.168.255.255)
+  #
+  # Loopback:
+  #   127.0.0.0/8 (127.0.0.0 - 127.255.255.255, typically 127.0.0.1)
+  #
+  # Link-local:
+  #   169.254.0.0/16 (APIPA - Automatic Private IP Addressing)
+  #
+  # Multicast:
+  #   224.0.0.0/4 (224.0.0.0 - 239.255.255.255)
+  #
+  # Broadcast:
+  #   255.255.255.255 (limited broadcast)
+  #   Network broadcast (e.g., 192.168.1.255 for 192.168.1.0/24)

@@ -1,0 +1,173 @@
+# BMP (Bitmap) File Format - DIB (Device Independent Bitmap)
+# Specification: Microsoft Windows Bitmap File Format
+# Purpose: Parsing BMP file header and DIB header (BITMAPINFOHEADER)
+#
+# BMP is an uncompressed (or RLE-compressed) raster image format used by Windows.
+# Structure: File Header (14 bytes) + DIB Header (variable) + Color Palette + Pixel Data
+#
+# Reference: https://en.wikipedia.org/wiki/BMP_file_format
+# MIME type: image/bmp
+
+name: BMP (Bitmap) Image Header
+description: |
+  BMP file header and BITMAPINFOHEADER (40-byte DIB header).
+  Includes dimensions, bit depth, compression method, and color information.
+endian: little  # BMP uses little-endian
+
+fields:
+  # ============================================================================
+  # BMP File Header (BITMAPFILEHEADER) - 14 bytes
+  # ============================================================================
+  
+  - name: signature
+    offset: 0x00
+    size: 2
+    type: hex_string
+    description: "BMP signature: 'BM' in ASCII (0x424D)"
+    assert: "424d"
+    # Other possible values (rare):
+    # "BA" (0x4241) - OS/2 struct bitmap array
+    # "CI" (0x4349) - OS/2 struct color icon
+    # "CP" (0x4350) - OS/2 const color pointer
+    # "IC" (0x4943) - OS/2 struct icon
+    # "PT" (0x5054) - OS/2 pointer
+    
+  - name: file_size
+    offset: 0x02
+    size: 4
+    type: u32
+    description: "Total file size in bytes"
+    display: hex
+    
+  - name: reserved1
+    offset: 0x06
+    size: 2
+    type: u16
+    description: "Reserved, must be zero"
+    assert: "0000"
+    
+  - name: reserved2
+    offset: 0x08
+    size: 2
+    type: u16
+    description: "Reserved, must be zero"
+    assert: "0000"
+    
+  - name: pixel_data_offset
+    offset: 0x0A
+    size: 4
+    type: u32
+    description: "Offset from beginning of file to pixel data"
+    display: hex
+
+  # ============================================================================
+  # DIB Header (BITMAPINFOHEADER) - 40 bytes
+  # This is the most common DIB header type (Windows 3.1+)
+  # Other header sizes: 12 (BITMAPCOREHEADER), 52 (BITMAPV2INFOHEADER),
+  #                     56 (BITMAPV3INFOHEADER), 108 (BITMAPV4HEADER),
+  #                     124 (BITMAPV5HEADER)
+  # ============================================================================
+
+  - name: dib_header_size
+    offset: 0x0E
+    size: 4
+    type: u32
+    description: "DIB header size in bytes (40 for BITMAPINFOHEADER)"
+    enum:
+      12: "BITMAPCOREHEADER (OS/2 1.x)"
+      40: "BITMAPINFOHEADER (Windows 3.1+)"
+      52: "BITMAPV2INFOHEADER"
+      56: "BITMAPV3INFOHEADER"
+      108: "BITMAPV4HEADER (Windows 95+)"
+      124: "BITMAPV5HEADER (Windows 98+)"
+    
+  - name: width
+    offset: 0x12
+    size: 4
+    type: i32
+    description: "Image width in pixels (signed, typically positive)"
+    
+  - name: height
+    offset: 0x16
+    size: 4
+    type: i32
+    description: "Image height in pixels (positive=bottom-up, negative=top-down)"
+    
+  - name: color_planes
+    offset: 0x1A
+    size: 2
+    type: u16
+    description: "Number of color planes (must be 1)"
+    assert: "0100"
+    
+  - name: bits_per_pixel
+    offset: 0x1C
+    size: 2
+    type: u16
+    description: "Bits per pixel (color depth)"
+    enum:
+      1: "1-bit monochrome (2 colors)"
+      4: "4-bit indexed (16 colors)"
+      8: "8-bit indexed (256 colors)"
+      16: "16-bit RGB (65,536 colors)"
+      24: "24-bit RGB (16.7 million colors)"
+      32: "32-bit RGBA (24-bit RGB + 8-bit alpha)"
+    
+  - name: compression_method
+    offset: 0x1E
+    size: 4
+    type: u32
+    description: "Compression method"
+    enum:
+      0: "BI_RGB (Uncompressed)"
+      1: "BI_RLE8 (8-bit RLE encoding)"
+      2: "BI_RLE4 (4-bit RLE encoding)"
+      3: "BI_BITFIELDS (Uncompressed with bitmasks)"
+      4: "BI_JPEG (JPEG compressed - not widely supported)"
+      5: "BI_PNG (PNG compressed - not widely supported)"
+      6: "BI_ALPHABITFIELDS (Uncompressed with alpha channel bitmasks)"
+    
+  - name: image_size
+    offset: 0x22
+    size: 4
+    type: u32
+    description: "Size of pixel data in bytes (0 allowed for BI_RGB)"
+    display: hex
+    
+  - name: x_pixels_per_meter
+    offset: 0x26
+    size: 4
+    type: i32
+    description: "Horizontal resolution in pixels per meter"
+    
+  - name: y_pixels_per_meter
+    offset: 0x2A
+    size: 4
+    type: i32
+    description: "Vertical resolution in pixels per meter"
+    
+  - name: colors_used
+    offset: 0x2E
+    size: 4
+    type: u32
+    description: "Number of colors in palette (0=default 2^n)"
+    
+  - name: important_colors
+    offset: 0x32
+    size: 4
+    type: u32
+    description: "Number of important colors (0=all colors important)"
+
+  # ============================================================================
+  # Color Palette (optional) - Present for <= 8 bpp
+  # Offset: 0x36 (immediately after DIB header)
+  # Size: colors_used * 4 bytes (RGBQUAD: Blue, Green, Red, Reserved)
+  # If colors_used=0, palette has 2^bits_per_pixel entries
+  # ============================================================================
+
+  # ============================================================================
+  # Pixel Data - Offset given by pixel_data_offset
+  # Row data is padded to 4-byte boundaries
+  # Bottom-up (height > 0): First row in file is bottom row of image
+  # Top-down (height < 0): First row in file is top row of image
+  # ============================================================================

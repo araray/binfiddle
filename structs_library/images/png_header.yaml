@@ -1,0 +1,141 @@
+# PNG (Portable Network Graphics) File Format
+# Specification: PNG (Portable Network Graphics) Specification, Version 1.2
+# Purpose: Parsing PNG file signature and IHDR (Image Header) chunk
+#
+# PNG is a lossless raster image format supporting transparency and color correction.
+# PNG files consist of an 8-byte signature followed by chunks (IHDR, PLTE, IDAT, IEND, etc.)
+#
+# Reference: http://www.libpng.org/pub/png/spec/1.2/PNG-Structure.html
+# MIME type: image/png
+
+name: PNG Image Header
+description: |
+  PNG file signature and IHDR (Image Header) chunk containing dimensions,
+  bit depth, color type, compression, filter, and interlace method.
+endian: big  # PNG uses big-endian (network byte order)
+
+fields:
+  # ============================================================================
+  # PNG Signature - 8 bytes
+  # Always: 137 80 78 71 13 10 26 10 (hex: 89 50 4E 47 0D 0A 1A 0A)
+  # Purpose: File type identification and corruption detection
+  # ============================================================================
+  
+  - name: signature
+    offset: 0x00
+    size: 8
+    type: hex_string
+    description: "PNG signature: 0x89 'PNG' CR LF SUB LF (detects text conversions)"
+    assert: "89504e470d0a1a0a"
+
+  # ============================================================================
+  # IHDR Chunk (Image Header) - Always first chunk after signature
+  # Structure: Length (4) + Type (4) + Data (13) + CRC (4) = 25 bytes
+  # ============================================================================
+
+  - name: ihdr_length
+    offset: 0x08
+    size: 4
+    type: u32
+    description: "IHDR chunk data length (always 13 bytes)"
+    assert: "0000000d"
+    
+  - name: ihdr_type
+    offset: 0x0C
+    size: 4
+    type: hex_string
+    description: "IHDR chunk type identifier ('IHDR' in ASCII)"
+    assert: "49484452"
+    
+  # IHDR Data - 13 bytes
+  
+  - name: width
+    offset: 0x10
+    size: 4
+    type: u32
+    description: "Image width in pixels (1 to 2^31-1)"
+    
+  - name: height
+    offset: 0x14
+    size: 4
+    type: u32
+    description: "Image height in pixels (1 to 2^31-1)"
+    
+  - name: bit_depth
+    offset: 0x18
+    size: 1
+    type: u8
+    description: "Number of bits per sample/palette index"
+    enum:
+      1: "1 bit (grayscale or indexed)"
+      2: "2 bits (grayscale or indexed)"
+      4: "4 bits (grayscale or indexed)"
+      8: "8 bits (all color types)"
+      16: "16 bits (grayscale, RGB, grayscale+alpha, RGBA)"
+    
+  - name: color_type
+    offset: 0x19
+    size: 1
+    type: u8
+    description: "Color type and interpretation"
+    enum:
+      0: "Grayscale (allowed depths: 1, 2, 4, 8, 16)"
+      2: "Truecolor RGB (allowed depths: 8, 16)"
+      3: "Indexed-color (palette) (allowed depths: 1, 2, 4, 8)"
+      4: "Grayscale with alpha (allowed depths: 8, 16)"
+      6: "Truecolor with alpha RGBA (allowed depths: 8, 16)"
+    
+  - name: compression_method
+    offset: 0x1A
+    size: 1
+    type: u8
+    description: "Compression method (only method 0 is defined)"
+    assert: "00"
+    enum:
+      0: "DEFLATE/INFLATE compression with 32K sliding window"
+    
+  - name: filter_method
+    offset: 0x1B
+    size: 1
+    type: u8
+    description: "Preprocessing method applied before compression"
+    assert: "00"
+    enum:
+      0: "Adaptive filtering with five basic filter types"
+    
+  - name: interlace_method
+    offset: 0x1C
+    size: 1
+    type: u8
+    description: "Transmission order of image data"
+    enum:
+      0: "No interlace (sequential scan lines)"
+      1: "Adam7 interlace (7-pass progressive display)"
+    
+  - name: ihdr_crc
+    offset: 0x1D
+    size: 4
+    type: u32
+    description: "CRC-32 checksum of IHDR type and data (excludes length field)"
+    display: hex
+
+  # ============================================================================
+  # Following chunks (not parsed in this template):
+  # - PLTE (Palette) - Required for color_type=3, optional for 2/6
+  # - IDAT (Image Data) - Contains compressed image data (can be multiple chunks)
+  # - IEND (Image End) - Marks end of PNG file (length=0, no data, CRC of type only)
+  # 
+  # Optional ancillary chunks:
+  # - tRNS (Transparency)
+  # - gAMA (Gamma)
+  # - cHRM (Chromaticity)
+  # - sRGB (Standard RGB color space)
+  # - iCCP (Embedded ICC profile)
+  # - tEXt, zTXt, iTXt (Textual data)
+  # - bKGD (Background color)
+  # - pHYs (Physical pixel dimensions)
+  # - sBIT (Significant bits)
+  # - sPLT (Suggested palette)
+  # - hIST (Palette histogram)
+  # - tIME (Last modification time)
+  # ============================================================================

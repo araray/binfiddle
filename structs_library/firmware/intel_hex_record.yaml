@@ -1,0 +1,106 @@
+# Intel HEX Format
+# Specification: Intel Hexadecimal Object File Format Specification
+# Platform: Embedded systems, microcontrollers, FPGAs, bootloaders
+# Purpose: Parsing Intel HEX firmware files (.hex, .ihex)
+#
+# Intel HEX is a text format for representing binary data (firmware, bootloaders)
+# used by many microcontroller programmers (AVR, PIC, ARM, x86 bootloaders).
+# Each line is ASCII-encoded and represents a record with address and data.
+#
+# Format: :LLAAAATTDD...DDCC
+#   : - Start code (colon)
+#   LL - Byte count (2 hex digits)
+#   AAAA - Address (4 hex digits, 16-bit)
+#   TT - Record type (2 hex digits)
+#   DD...DD - Data bytes (LL * 2 hex digits)
+#   CC - Checksum (2 hex digits)
+#
+# Usage: Arduino, AVR-GCC, MPLAB, embedded bootloaders
+# Reference: https://en.wikipedia.org/wiki/Intel_HEX
+# See also: objcopy, avrdude, st-flash
+
+name: Intel HEX Record Line
+description: |
+  Intel HEX format record line (ASCII text format).
+  Each line represents a data record, extended address, or EOF marker.
+  Used for firmware programming on microcontrollers and embedded systems.
+  Parse as ASCII text, not binary.
+endian: big  # Addresses are big-endian in the HEX representation
+
+fields:
+  - name: start_code
+    offset: 0x00
+    size: 1
+    type: string
+    description: "Start code (ASCII colon character)"
+    assert: "3a"  # ':' in ASCII
+    # Every Intel HEX record line starts with ':'
+    
+  - name: byte_count
+    offset: 0x01
+    size: 2
+    type: string
+    description: "Number of data bytes in this record (2 hex ASCII digits)"
+    # Example: "10" = 16 bytes of data
+    # This is the count of data bytes, not the total record length
+    
+  - name: address
+    offset: 0x03
+    size: 4
+    type: string
+    description: "16-bit address for this record (4 hex ASCII digits)"
+    # Example: "0100" = address 0x0100
+    # For extended addressing, combine with extended address records
+    
+  - name: record_type
+    offset: 0x07
+    size: 2
+    type: string
+    description: "Record type (2 hex ASCII digits)"
+    # Record types:
+    #   00: Data record - contains data bytes
+    #   01: End of File - marks end of HEX file
+    #   02: Extended Segment Address - sets upper 4 bits of address (x86)
+    #   03: Start Segment Address - sets CS:IP for x86 (rarely used)
+    #   04: Extended Linear Address - sets upper 16 bits of address
+    #   05: Start Linear Address - sets EIP for x86 (entry point)
+    
+  # After record_type, the data bytes follow (byte_count * 2 hex digits)
+  # Then the checksum (2 hex digits)
+  #
+  # Checksum calculation:
+  #   1. Sum all decoded bytes (byte_count, address high, address low,
+  #      record_type, and all data bytes)
+  #   2. Take two's complement of the least significant byte
+  #   checksum = (0x100 - (sum & 0xFF)) & 0xFF
+  #
+  # Example record:
+  #   :10010000214601360121470136007EFE09D2190140
+  #   : - start
+  #   10 - 16 bytes of data
+  #   0100 - address 0x0100
+  #   00 - data record
+  #   21 46 01 36 ... 01 - 16 bytes of data
+  #   40 - checksum
+  #
+  # Extended addressing example (>64KB):
+  #   :020000040001F9  - Extended Linear Address, address = 0x0001
+  #   :10000000...      - Data at 0x00010000
+  #   :10001000...      - Data at 0x00010010
+  #
+  # End of file:
+  #   :00000001FF       - EOF record (no data)
+
+# Note: Intel HEX is a text format, so each byte is represented as
+# 2 ASCII hex digits. This template describes the ASCII structure.
+# Actual binary data must be decoded from the hex ASCII representation.
+#
+# To parse Intel HEX:
+#   1. Read line-by-line
+#   2. Verify start code ':'
+#   3. Decode hex ASCII to binary (2 chars = 1 byte)
+#   4. Verify checksum
+#   5. Process based on record type
+#   6. For type 00 (data), write to address
+#   7. For type 04 (extended address), update base address
+#   8. For type 01 (EOF), stop parsing

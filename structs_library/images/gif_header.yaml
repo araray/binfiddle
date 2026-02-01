@@ -1,0 +1,107 @@
+# GIF (Graphics Interchange Format) File Format
+# Specification: GIF89a Specification (Graphics Interchange Format Version 89a)
+# Purpose: Parsing GIF file header and logical screen descriptor
+#
+# GIF is a bitmap image format supporting animation and transparency.
+# Versions: GIF87a (1987) and GIF89a (1989, added transparency and animation)
+#
+# Reference: https://www.w3.org/Graphics/GIF/spec-gif89a.txt
+# MIME type: image/gif
+
+name: GIF Image Header
+description: |
+  GIF file header (signature and version) and Logical Screen Descriptor
+  containing canvas dimensions, color table flags, and background color.
+endian: little  # GIF uses little-endian for multi-byte integers
+
+fields:
+  # ============================================================================
+  # GIF Header - 6 bytes
+  # ============================================================================
+  
+  - name: signature
+    offset: 0x00
+    size: 3
+    type: hex_string
+    description: "GIF signature: 'GIF' in ASCII"
+    assert: "474946"
+    
+  - name: version
+    offset: 0x03
+    size: 3
+    type: hex_string
+    description: "GIF version: '87a' or '89a' in ASCII"
+    enum:
+      "383761": "GIF87a (1987 specification)"
+      "383961": "GIF89a (1989 specification with transparency/animation)"
+
+  # ============================================================================
+  # Logical Screen Descriptor - 7 bytes
+  # Defines the canvas size and global color table properties
+  # ============================================================================
+
+  - name: canvas_width
+    offset: 0x06
+    size: 2
+    type: u16
+    description: "Logical screen width in pixels"
+    
+  - name: canvas_height
+    offset: 0x08
+    size: 2
+    type: u16
+    description: "Logical screen height in pixels"
+    
+  - name: packed_fields
+    offset: 0x0A
+    size: 1
+    type: u8
+    description: "Packed byte: Global Color Table Flag, Color Resolution, Sort Flag, Size"
+    display: hex
+    # Bit 7:   Global Color Table Flag (1=present)
+    # Bits 6-4: Color Resolution (bits per color - 1)
+    # Bit 3:   Sort Flag (1=color table sorted by importance)
+    # Bits 2-0: Size of Global Color Table (2^(N+1) entries)
+    
+  - name: background_color_index
+    offset: 0x0B
+    size: 1
+    type: u8
+    description: "Index into Global Color Table for background color"
+    
+  - name: pixel_aspect_ratio
+    offset: 0x0C
+    size: 1
+    type: u8
+    description: "Pixel aspect ratio (0=no aspect ratio given, else (ratio+15)/64)"
+
+  # ============================================================================
+  # Global Color Table (GCT) - Optional, follows if flag set
+  # Size: 3 * 2^(N+1) bytes, where N is from packed_fields bits 2-0
+  # Each entry: R (1 byte) + G (1 byte) + B (1 byte)
+  # Offset: 0x0D if present
+  # ============================================================================
+
+  # ============================================================================
+  # GIF Data Stream (follows header/GCT):
+  # 
+  # Block types (identified by first byte):
+  #   0x21 - Extension Introducer
+  #     0xF9 - Graphic Control Extension (GIF89a: transparency, disposal, delay)
+  #     0xFE - Comment Extension
+  #     0x01 - Plain Text Extension
+  #     0xFF - Application Extension (e.g., NETSCAPE2.0 for looping)
+  #   0x2C - Image Separator (Image Descriptor + optional Local Color Table + Image Data)
+  #   0x3B - Trailer (End of GIF file)
+  #   0x00 - Block Terminator
+  #
+  # Graphic Control Extension (GIF89a - 8 bytes):
+  #   0x21 0xF9 0x04 Packed(1) Delay(2) TransparentColorIndex(1) 0x00
+  #
+  # Image Descriptor (10 bytes):
+  #   Separator(0x2C) + Left(2) + Top(2) + Width(2) + Height(2) + Packed(1)
+  #   Packed bits: Local Color Table Flag, Interlace Flag, Sort Flag, Reserved, Size
+  #
+  # Image Data:
+  #   LZW Minimum Code Size (1 byte) + Data Sub-blocks (size + data) + 0x00
+  # ============================================================================
