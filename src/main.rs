@@ -27,7 +27,7 @@ struct Cli {
     #[arg(long, default_value = "hex")]
     input_format: String,
 
-    /// Output format (hex, dec, oct, bin, ascii)
+    /// Output format (hex, dec, oct, bin, ascii, raw)
     #[arg(short, long, default_value = "hex")]
     format: String,
 
@@ -42,6 +42,14 @@ struct Cli {
     /// Number of chunks per line (default: 16)
     #[arg(long, default_value = "16")]
     width: usize,
+
+    /// Show hex address offset prefix on each output line
+    #[arg(long)]
+    show_offset: bool,
+
+    /// Show ASCII sidebar alongside hex output (implies --show-offset)
+    #[arg(long)]
+    show_ascii: bool,
 }
 
 #[derive(Subcommand)]
@@ -263,13 +271,30 @@ fn main() -> Result<()> {
         Commands::Read { range } => {
             let (start, end) = binfiddle::utils::parsing::parse_range(range, binary_data.len())?;
             let chunk = binary_data.read_range(start, end)?;
-            let output = binfiddle::utils::display::display_bytes(
-                chunk.get_bytes(),
-                &cli.format,
-                binary_data.get_chunk_size(),
-                cli.width,
-            )?;
-            println!("{}", output);
+
+            if cli.format == "raw" {
+                // Raw binary output — write bytes directly to stdout
+                io::stdout().write_all(chunk.get_bytes())?;
+            } else if cli.show_offset || cli.show_ascii {
+                // Offset-prefixed output (xxd-style)
+                let output = binfiddle::utils::display::display_bytes_with_offset(
+                    chunk.get_bytes(),
+                    &cli.format,
+                    binary_data.get_chunk_size(),
+                    cli.width,
+                    start, // base_offset: show actual file offset
+                    cli.show_ascii,
+                )?;
+                println!("{}", output);
+            } else {
+                let output = binfiddle::utils::display::display_bytes(
+                    chunk.get_bytes(),
+                    &cli.format,
+                    binary_data.get_chunk_size(),
+                    cli.width,
+                )?;
+                println!("{}", output);
+            }
             false
         }
         Commands::Write { position, value } => {

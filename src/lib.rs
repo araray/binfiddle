@@ -17,7 +17,9 @@ pub use error::{BinfiddleError, Result};
 pub use utils::parsing::validate_search_pattern;
 pub use utils::parsing::SearchPattern;
 pub use utils::{display, parsing};
-pub use utils::{display_bytes, parse_bit_input, parse_input, parse_range};
+pub use utils::{
+    display_bytes, display_bytes_with_offset, parse_bit_input, parse_input, parse_range,
+};
 
 /// Color output mode for terminal display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

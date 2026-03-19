@@ -56,6 +56,98 @@ pub fn display_bytes(
     }
 }
 
+/// Formats bytes with hex address prefixes on each line, xxd-style.
+///
+/// Produces output like:
+/// ```text
+/// 0x00000000: 7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00  |.ELF............|
+/// 0x00000010: 03 00 3e 00 01 00 00 00 40 10 00 00 00 00 00 00  |..>.....@.......|
+/// ```
+///
+/// # Arguments
+/// * `bytes` - The raw bytes to display
+/// * `format` - The output format (hex, dec, oct, bin)
+/// * `chunk_size` - Number of bits per display chunk (1-64)
+/// * `width` - Number of chunks per line (must be > 0)
+/// * `base_offset` - Starting address for the first line
+/// * `show_ascii` - Whether to show ASCII sidebar (only for hex format with 8-bit chunks)
+///
+/// # Returns
+/// A formatted string with address prefixes on each line.
+pub fn display_bytes_with_offset(
+    bytes: &[u8],
+    format: &str,
+    chunk_size: usize,
+    width: usize,
+    base_offset: usize,
+    show_ascii: bool,
+) -> Result<String> {
+    if bytes.is_empty() {
+        return Ok(String::new());
+    }
+
+    // Width must be > 0 for offset display to make sense
+    let effective_width = if width == 0 { 16 } else { width };
+
+    // Calculate bytes per line based on chunk_size and width
+    // Each chunk is chunk_size bits, width chunks per line
+    let bits_per_line = effective_width * chunk_size;
+    let bytes_per_line = (bits_per_line + 7) / 8; // ceiling division
+
+    // Determine address width based on max offset
+    let max_addr = base_offset + bytes.len();
+    let addr_width = if max_addr > 0xFFFF_FFFF {
+        16 // 64-bit addresses
+    } else if max_addr > 0xFFFF {
+        8 // 32-bit addresses
+    } else {
+        4 // 16-bit addresses (minimum)
+    };
+
+    let show_sidebar = show_ascii && format == "hex" && chunk_size == 8;
+
+    let mut output = String::new();
+
+    for (line_idx, chunk) in bytes.chunks(bytes_per_line).enumerate() {
+        let line_offset = base_offset + line_idx * bytes_per_line;
+
+        // Address prefix
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&format!("0x{:0width$x}: ", line_offset, width = addr_width));
+
+        // Format the line data (width=0 to prevent internal wrapping)
+        let line_str = display_bytes(chunk, format, chunk_size, 0)?;
+        output.push_str(&line_str);
+
+        // Pad short last line to align ASCII sidebar
+        if show_sidebar && chunk.len() < bytes_per_line {
+            // Calculate expected formatted width for a full line
+            let full_line_str = display_bytes(&vec![0u8; bytes_per_line], format, chunk_size, 0)?;
+            let padding = full_line_str.len().saturating_sub(line_str.len());
+            for _ in 0..padding {
+                output.push(' ');
+            }
+        }
+
+        // ASCII sidebar
+        if show_sidebar {
+            output.push_str("  |");
+            for &byte in chunk {
+                if byte >= 0x20 && byte <= 0x7E {
+                    output.push(byte as char);
+                } else {
+                    output.push('.');
+                }
+            }
+            output.push('|');
+        }
+    }
+
+    Ok(output)
+}
+
 /// Generic chunked formatting function.
 ///
 /// This function handles the common logic of:
@@ -164,7 +256,7 @@ fn format_ascii(bytes: &[u8], width: usize) -> Result<String> {
     let mut output = String::new();
     let mut chars_on_line = 0;
 
-    for &byte in bytes {
+    for (i, &byte) in bytes.iter().enumerate() {
         let ch = if byte >= 0x20 && byte <= 0x7E {
             byte as char
         } else {
@@ -173,8 +265,8 @@ fn format_ascii(bytes: &[u8], width: usize) -> Result<String> {
         output.push(ch);
         chars_on_line += 1;
 
-        // Handle line wrapping
-        if width > 0 && chars_on_line >= width && chars_on_line < bytes.len() {
+        // Handle line wrapping (don't add newline after last byte)
+        if width > 0 && chars_on_line >= width && i + 1 < bytes.len() {
             output.push('\n');
             chars_on_line = 0;
         }
@@ -268,8 +360,7 @@ pub fn format_match_colored(
     let formatted_data = display_bytes(data, format, chunk_size, 0)?;
     Ok(format!(
         "{}0x{:08x}{}: {}{}{}",
-        ANSI_CYAN, offset, ANSI_RESET,
-        ANSI_BOLD_RED, formatted_data, ANSI_RESET
+        ANSI_CYAN, offset, ANSI_RESET, ANSI_BOLD_RED, formatted_data, ANSI_RESET
     ))
 }
 
@@ -412,13 +503,22 @@ mod tests {
     fn test_format_match_colored_contains_ansi() {
         let data = vec![0xDE, 0xAD];
         let output = format_match_colored(256, &data, "hex", 8).unwrap();
-        
+
         // Should contain ANSI escape codes
         assert!(output.contains("\x1b["), "Output should contain ANSI codes");
-        assert!(output.contains(ANSI_RESET), "Output should contain reset code");
-        assert!(output.contains(ANSI_CYAN), "Output should contain cyan for offset");
-        assert!(output.contains(ANSI_BOLD_RED), "Output should contain red for match");
-        
+        assert!(
+            output.contains(ANSI_RESET),
+            "Output should contain reset code"
+        );
+        assert!(
+            output.contains(ANSI_CYAN),
+            "Output should contain cyan for offset"
+        );
+        assert!(
+            output.contains(ANSI_BOLD_RED),
+            "Output should contain red for match"
+        );
+
         // Should still contain the actual data
         assert!(output.contains("00000100"), "Output should contain offset");
         assert!(output.contains("de ad"), "Output should contain match data");
@@ -429,17 +529,19 @@ mod tests {
         let match_data = vec![0xBE, 0xEF];
         let before = vec![0xDE, 0xAD];
         let after = vec![0xCA, 0xFE];
-        
-        let output = format_match_with_context_colored(
-            2, &match_data, &before, &after, "hex", 8
-        ).unwrap();
-        
+
+        let output =
+            format_match_with_context_colored(2, &match_data, &before, &after, "hex", 8).unwrap();
+
         // Should contain ANSI codes
-        assert!(output.contains(ANSI_BOLD_GREEN), "Should have green for header");
+        assert!(
+            output.contains(ANSI_BOLD_GREEN),
+            "Should have green for header"
+        );
         assert!(output.contains(ANSI_DIM), "Should have dim for context");
         assert!(output.contains(ANSI_BOLD_RED), "Should have red for match");
         assert!(output.contains(ANSI_RESET), "Should have reset codes");
-        
+
         // Should contain the data
         assert!(output.contains("Match at"));
         assert!(output.contains("Before:"));
@@ -454,8 +556,126 @@ mod tests {
     fn test_format_match_no_color_no_ansi() {
         let data = vec![0xDE, 0xAD];
         let output = format_match(256, &data, "hex", 8).unwrap();
-        
+
         // Non-colored version should NOT contain ANSI escape codes
-        assert!(!output.contains("\x1b["), "Non-colored output should not contain ANSI codes");
+        assert!(
+            !output.contains("\x1b["),
+            "Non-colored output should not contain ANSI codes"
+        );
+    }
+
+    // === Tests for display_bytes_with_offset ===
+
+    #[test]
+    fn test_offset_display_basic() {
+        let bytes = vec![0x7F, 0x45, 0x4C, 0x46];
+        let output = display_bytes_with_offset(&bytes, "hex", 8, 16, 0, false).unwrap();
+        assert!(output.starts_with("0x"), "Should start with address prefix");
+        assert!(output.contains("7f 45 4c 46"), "Should contain hex data");
+    }
+
+    #[test]
+    fn test_offset_display_multiline() {
+        // 8 bytes with width=4 → should produce 2 lines
+        let bytes: Vec<u8> = (0..8).collect();
+        let output = display_bytes_with_offset(&bytes, "hex", 8, 4, 0, false).unwrap();
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "Should produce 2 lines for 8 bytes at width=4"
+        );
+        assert!(
+            lines[0].contains("0x0000:"),
+            "First line should start at offset 0"
+        );
+        assert!(
+            lines[1].contains("0x0004:"),
+            "Second line should start at offset 4"
+        );
+    }
+
+    #[test]
+    fn test_offset_display_with_base_offset() {
+        let bytes = vec![0xDE, 0xAD];
+        let output = display_bytes_with_offset(&bytes, "hex", 8, 16, 0x100, false).unwrap();
+        assert!(output.contains("0x0100:"), "Should show base offset 0x100");
+    }
+
+    #[test]
+    fn test_offset_display_with_ascii_sidebar() {
+        let bytes = b"Hello\x00World".to_vec();
+        let output = display_bytes_with_offset(&bytes, "hex", 8, 16, 0, true).unwrap();
+        assert!(
+            output.contains("|Hello.World|"),
+            "Should show ASCII sidebar with . for non-printable"
+        );
+    }
+
+    #[test]
+    fn test_offset_display_ascii_sidebar_only_for_hex_8bit() {
+        // ASCII sidebar should only appear for hex format with 8-bit chunks
+        let bytes = vec![0x48, 0x69]; // "Hi"
+        let output_hex = display_bytes_with_offset(&bytes, "hex", 8, 16, 0, true).unwrap();
+        assert!(
+            output_hex.contains("|Hi|"),
+            "Hex 8-bit should show ASCII sidebar"
+        );
+
+        let output_dec = display_bytes_with_offset(&bytes, "dec", 8, 16, 0, true).unwrap();
+        assert!(
+            !output_dec.contains("|"),
+            "Dec format should not show ASCII sidebar"
+        );
+    }
+
+    #[test]
+    fn test_offset_display_empty() {
+        let output = display_bytes_with_offset(&[], "hex", 8, 16, 0, false).unwrap();
+        assert_eq!(output, "", "Empty bytes should produce empty output");
+    }
+
+    #[test]
+    fn test_offset_display_large_address() {
+        let bytes = vec![0xFF];
+        // Address > 0xFFFF should use 8-digit width
+        let output = display_bytes_with_offset(&bytes, "hex", 8, 16, 0x10000, false).unwrap();
+        assert!(
+            output.contains("0x00010000:"),
+            "Should use 8-digit address for offset > 0xFFFF"
+        );
+    }
+
+    #[test]
+    fn test_offset_display_short_last_line_padding() {
+        // 5 bytes with width=4 → line 1 has 4 bytes, line 2 has 1 byte
+        // ASCII sidebar on line 2 should be aligned
+        let bytes = vec![0x41, 0x42, 0x43, 0x44, 0x45]; // "ABCDE"
+        let output = display_bytes_with_offset(&bytes, "hex", 8, 4, 0, true).unwrap();
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("|ABCD|"), "First line sidebar");
+        assert!(lines[1].contains("|E|"), "Second line sidebar");
+    }
+
+    // === Tests for ASCII wrapping fix ===
+
+    #[test]
+    fn test_ascii_wrapping_exact_width() {
+        // Exactly width bytes — should NOT have trailing newline
+        let bytes = vec![0x41, 0x42, 0x43, 0x44]; // "ABCD"
+        let output = display_bytes(&bytes, "ascii", 8, 4).unwrap();
+        assert_eq!(
+            output, "ABCD",
+            "Exact width should not have trailing newline"
+        );
+    }
+
+    #[test]
+    fn test_ascii_wrapping_double_width() {
+        // Exactly 2x width bytes — should have one internal newline, no trailing
+        let bytes = b"ABCDEFGH".to_vec();
+        let output = display_bytes(&bytes, "ascii", 8, 4).unwrap();
+        assert_eq!(output, "ABCD\nEFGH", "Double width should have one newline");
     }
 }

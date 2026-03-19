@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.10.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.11.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
 Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, and custom exploration of binary data across a variety of formats.
 
@@ -47,7 +47,7 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 | **Pipeline Integration** | First-class stdin/stdout support | Often interactive-only |
 | **Unified Operations** | Read/Write/Edit/Search/Analyze/Diff in single tool | Separate tools per operation |
 | **Configurable Chunking** | 1-64 bit granularity | Fixed 8-bit (byte) chunks |
-| **Multi-Format I/O** | hex/dec/oct/bin/ascii | Usually hex-only |
+| **Multi-Format I/O** | hex/dec/oct/bin/ascii/raw | Usually hex-only |
 | **Script Friendly** | Deterministic, non-interactive | Often requires user interaction |
 | **Built-in Analysis** | Entropy, histograms, IC analysis | Requires external tools |
 
@@ -124,6 +124,12 @@ binfiddle diff original.bin modified.bin --diff-format unified
 
 # Pipeline usage
 cat data.bin | binfiddle read 0..32 | grep "7f 45"
+
+# xxd-style output with addresses and ASCII sidebar
+binfiddle -i firmware.bin read 0..256 --show-ascii
+
+# Raw binary output (pipe-friendly, no formatting)
+binfiddle -i archive.bin read 0..4 --format raw | file -
 ```
 
 ## Command Reference
@@ -135,10 +141,12 @@ cat data.bin | binfiddle read 0..32 | grep "7f 45"
 | `--input <FILE>` | `-i` | Input file (use `-` for stdin) | stdin |
 | `--output <FILE>` | `-o` | Output file (use `-` for stdout) | — |
 | `--in-file` | — | Modify input file in-place | false |
-| `--format <FMT>` | `-f` | Output format: hex, dec, oct, bin, ascii | hex |
+| `--format <FMT>` | `-f` | Output format: hex, dec, oct, bin, ascii, raw | hex |
 | `--input-format <FMT>` | — | Input value format | hex |
 | `--chunk-size <BITS>` | `-c` | Bits per display chunk (1-64) | 8 |
 | `--width <N>` | — | Chunks per output line (0=no wrap) | 16 |
+| `--show-offset` | — | Show hex address prefix on each line | false |
+| `--show-ascii` | — | Show ASCII sidebar (implies offset display) | false |
 | `--silent` | — | Suppress change diff output | false |
 
 ### Commands
@@ -152,6 +160,9 @@ binfiddle -i file.bin read 10..               # Byte 10 to end
 binfiddle -i file.bin read ..100              # First 100 bytes
 binfiddle -i file.bin read ..                 # Entire file
 binfiddle -i file.bin read 42                 # Single byte at index 42
+binfiddle -i file.bin read 0..256 --show-offset        # xxd-style with address prefixes
+binfiddle -i file.bin read 0..256 --show-ascii         # xxd-style with ASCII sidebar
+binfiddle -i file.bin read 0..64 --format raw | file - # Raw binary output for piping
 ```
 
 #### `write <POSITION> <VALUE>` — Write bytes to binary data

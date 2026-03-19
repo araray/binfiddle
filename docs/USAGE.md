@@ -1378,6 +1378,40 @@ binfiddle -i file.bin read 0..4 --format bin
 # ASCII (printable chars, "." for non-printable)
 binfiddle -i file.bin read 0..4 --format ascii
 # Output: . . . .
+
+# Raw binary (no formatting — writes bytes directly to stdout)
+binfiddle -i file.bin read 0..4 --format raw | file -
+binfiddle -i file.bin read 0..4 --format raw > header.bin
+```
+
+### Offset Display (xxd-style)
+
+Use `--show-offset` to add hex address prefixes on each output line, or
+`--show-ascii` to also include an ASCII sidebar:
+
+```bash
+# Address prefixes only
+binfiddle -i /bin/ls read 0..64 --show-offset
+# Output:
+# 0x0000: 7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+# 0x0010: 03 00 3e 00 01 00 00 00 40 10 00 00 00 00 00 00
+# 0x0020: 40 00 00 00 00 00 00 00 e8 e1 02 00 00 00 00 00
+# 0x0030: 00 00 00 00 40 00 38 00 0d 00 40 00 1f 00 1e 00
+
+# With ASCII sidebar (classic xxd/hexdump style)
+binfiddle -i /bin/ls read 0..64 --show-ascii
+# Output:
+# 0x0000: 7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00  |.ELF............|
+# 0x0010: 03 00 3e 00 01 00 00 00 40 10 00 00 00 00 00 00  |..>.....@.......|
+# 0x0020: 40 00 00 00 00 00 00 00 e8 e1 02 00 00 00 00 00  |@...............|
+# 0x0030: 00 00 00 00 40 00 38 00 0d 00 40 00 1f 00 1e 00  |....@.8...@.....|
+
+# Offset display respects the range start offset
+binfiddle -i firmware.bin read 0x1000..0x1040 --show-ascii
+# Output starts from 0x1000, not 0x0000
+
+# Combine with other formats
+binfiddle -i file.bin read 0..32 --format dec --show-offset
 ```
 
 ### Input Formats

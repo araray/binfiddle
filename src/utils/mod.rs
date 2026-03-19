@@ -6,5 +6,5 @@ pub mod display;
 pub mod parsing;
 
 // Re-export commonly used functions at the module level
-pub use display::display_bytes;
+pub use display::{display_bytes, display_bytes_with_offset};
 pub use parsing::{parse_bit_input, parse_input, parse_range};
