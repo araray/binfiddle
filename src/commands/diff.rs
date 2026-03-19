@@ -897,10 +897,15 @@ impl DiffCommand {
 
         // Overview section
         output.push_str("Overview:\n");
+        let diff_density = total_diffs as f64 / max_size as f64;
         output.push_str(&format!(
             "  Total differences: {:>10} bytes ({:>5.1}% of file)\n",
             total_diffs,
-            (total_diffs as f64 / max_size as f64) * 100.0
+            diff_density * 100.0
+        ));
+        output.push_str(&format!(
+            "  Diff density:      [{}]\n",
+            Self::density_bar(diff_density, 40)
         ));
         output.push_str(&format!(
             "  Changed bytes:     {:>10}       ({:>5.1}%)\n",
