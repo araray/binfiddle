@@ -92,7 +92,7 @@ pub fn display_bytes_with_offset(
     // Calculate bytes per line based on chunk_size and width
     // Each chunk is chunk_size bits, width chunks per line
     let bits_per_line = effective_width * chunk_size;
-    let bytes_per_line = (bits_per_line + 7) / 8; // ceiling division
+    let bytes_per_line = bits_per_line.div_ceil(8); // ceiling division
 
     // Determine address width based on max offset
     let max_addr = base_offset + bytes.len();
@@ -135,7 +135,7 @@ pub fn display_bytes_with_offset(
         if show_sidebar {
             output.push_str("  |");
             for &byte in chunk {
-                if byte >= 0x20 && byte <= 0x7E {
+                if (0x20..=0x7E).contains(&byte) {
                     output.push(byte as char);
                 } else {
                     output.push('.');
@@ -229,7 +229,7 @@ fn extract_bits(bytes: &[u8], bit_offset: usize, bit_count: usize) -> u64 {
 
 /// Formats a chunk value as hexadecimal.
 fn format_chunk_hex(value: u64, bit_count: usize) -> String {
-    let hex_digits = (bit_count + 3) / 4; // Ceiling division
+    let hex_digits = bit_count.div_ceil(4); // Ceiling division
     format!("{:0width$x}", value, width = hex_digits)
 }
 
@@ -257,7 +257,7 @@ fn format_ascii(bytes: &[u8], width: usize) -> Result<String> {
     let mut chars_on_line = 0;
 
     for (i, &byte) in bytes.iter().enumerate() {
-        let ch = if byte >= 0x20 && byte <= 0x7E {
+        let ch = if (0x20..=0x7E).contains(&byte) {
             byte as char
         } else {
             '.'

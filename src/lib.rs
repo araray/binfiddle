@@ -7,11 +7,11 @@ use std::io::Read;
 
 pub use commands::{
     parse_encoding, parse_ignore_ranges, AnalysisType, AnalyzeCommand, AnalyzeConfig,
-    AnalyzeOutputFormat, BomMode, Command, ConvertCommand, ConvertConfig, DiffCommand, DiffConfig,
-    DiffEntry, DiffFormat, EditCommand, EditOperation, Endianness, ErrorMode, FieldDefinition,
-    FieldType, NewlineMode, ParsedField, ParsedStruct, PatchCommand, PatchConfig, PatchEntry,
-    PatchResult, ReadCommand, SearchCommand, SearchConfig, StructCommand, StructConfig,
-    StructOutputFormat, StructTemplate, WriteCommand,
+    AnalyzeOutputFormat, BitfieldDefinition, BomMode, Command, ConvertCommand, ConvertConfig,
+    DiffCommand, DiffConfig, DiffEntry, DiffFormat, EditCommand, EditOperation, Endianness,
+    ErrorMode, FieldDefinition, FieldType, NewlineMode, ParsedField, ParsedStruct, PatchCommand,
+    PatchConfig, PatchEntry, PatchResult, ReadCommand, SearchCommand, SearchConfig, StructCommand,
+    StructConfig, StructOutputFormat, StructTemplate, ValueOrExpression, WriteCommand,
 };
 pub use error::{BinfiddleError, Result};
 pub use utils::parsing::validate_search_pattern;
@@ -22,20 +22,15 @@ pub use utils::{
 };
 
 /// Color output mode for terminal display.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ColorMode {
     /// Always use colors, even if output is not a terminal
     Always,
     /// Automatically detect if terminal supports colors
+    #[default]
     Auto,
     /// Never use colors
     Never,
-}
-
-impl Default for ColorMode {
-    fn default() -> Self {
-        ColorMode::Auto
-    }
 }
 
 /// Represents the input source for binary data
@@ -95,7 +90,7 @@ impl BinaryData {
             BinarySource::RawData(data) => data,
         };
 
-        if chunk_size == 0 || (data.len() > 0 && chunk_size > data.len() * 8) {
+        if chunk_size == 0 || (!data.is_empty() && chunk_size > data.len() * 8) {
             return Err(BinfiddleError::InvalidChunkSize(chunk_size));
         }
 
@@ -169,7 +164,7 @@ impl BinaryData {
     }
 
     pub fn set_chunk_size(&mut self, chunk_size: usize) -> Result<()> {
-        if chunk_size == 0 || (self.data.len() > 0 && chunk_size > self.data.len() * 8) {
+        if chunk_size == 0 || (!self.data.is_empty() && chunk_size > self.data.len() * 8) {
             return Err(BinfiddleError::InvalidChunkSize(chunk_size));
         }
         self.chunk_size = chunk_size;

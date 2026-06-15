@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.11.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.12.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
 Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, and custom exploration of binary data across a variety of formats.
 
@@ -384,19 +384,19 @@ Parse and interpret binary data according to YAML structure templates, useful fo
 
 ```bash
 # Parse an ELF file header
-binfiddle -i /bin/ls struct elf_header.yaml
+binfiddle struct elf_header.yaml < /bin/ls
 
 # List fields in a template without parsing data
 binfiddle struct my_format.yaml --list-fields
 
 # Get a specific field value
-binfiddle -i firmware.bin struct header.yaml --get version
+binfiddle struct header.yaml --get version < firmware.bin
 
 # Output as JSON
-binfiddle -i data.bin struct format.yaml --output-format json
+binfiddle struct format.yaml --output-format json < data.bin
 
 # Output as YAML
-binfiddle -i data.bin struct format.yaml --output-format yaml
+binfiddle struct format.yaml --output-format yaml < data.bin
 ```
 
 **Template Format (YAML):**
@@ -430,6 +430,23 @@ fields:
 | `hex_string` | Variable | Raw bytes as hex |
 | `string` | Variable | ASCII/UTF-8 string |
 | `bytes` | Variable | Raw byte array |
+| `computed` | — | Virtual field from an expression |
+
+**Dynamic Templates:**
+
+Templates support field references (`$fieldname`), magic variables (`$@prev_end`, `$@file_size`), conditional fields (`when:`), computed fields, bitfields, and counted arrays.
+
+```yaml
+fields:
+  - name: filename_length
+    offset: 0x1A
+    size: 2
+    type: u16
+  - name: filename
+    offset: 0x1E
+    size: $filename_length
+    type: string
+```
 
 **Struct Options:**
 
@@ -564,7 +581,10 @@ src/
 │   ├── edit.rs      # Edit command (insert/remove/replace)
 │   ├── search.rs    # Search command (exact/regex/mask/parallel)
 │   ├── analyze.rs   # Analyze command (entropy/histogram/IC)
-│   └── diff.rs      # Diff command (simple/unified/side-by-side/patch)
+│   ├── diff.rs      # Diff command (simple/unified/side-by-side/patch)
+│   ├── convert.rs   # Convert command (encoding/line endings/BOM)
+│   ├── patch.rs     # Patch command (apply/revert binary patches)
+│   └── struct_cmd.rs # Struct command (template-based parsing)
 └── utils/
     ├── mod.rs       # Utility exports
     ├── parsing.rs   # Range and format parsing
@@ -584,6 +604,7 @@ pub enum BinarySource {
     File(PathBuf),       // Read from file
     Stdin,               // Read from stdin
     RawData(Vec<u8>),    // In-memory data
+    MemoryAddress(usize), // Process memory (reserved)
 }
 ```
 
@@ -591,10 +612,11 @@ pub enum BinarySource {
 
 All operations return `Result<T, BinfiddleError>` with specific error types:
 - `Io` — File not found, permission denied, etc.
-- `Parse` — Invalid hex, decimal, or format strings
+- `Parse` — Invalid hex, decimal, template YAML, or format strings
 - `InvalidRange` — Out of bounds or invalid range specification
 - `InvalidChunkSize` — Chunk size is 0 or exceeds data
 - `InvalidInput` — Unknown format or invalid input
+- `UnsupportedOperation` — Feature not yet implemented (e.g., memory address access)
 
 ## Contributing
 
@@ -613,33 +635,28 @@ cargo test -- --nocapture
 cargo build --release
 
 # Build for all platforms
-./build_releases.sh
+./scripts/build_releases.sh --native
 ```
 
 ### Code Style
 
 - Follow Rust standard formatting (`cargo fmt`)
-- Run clippy for lints (`cargo clippy`)
+- Run clippy with zero warnings (`cargo clippy -- -D warnings`)
 - Add tests for new functionality
 - Document public APIs with doc comments
 
 ## Roadmap
 
-TBD
-
-### Completed Features
-
-- ✅ **Read/Write/Edit** — Core binary manipulation
-- ✅ **Search** — Exact, regex, and wildcard pattern matching with parallel processing
-- ✅ **Analyze** — Entropy, histogram, and Index of Coincidence analysis
-- ✅ **Diff** — Binary comparison with multiple output formats
-
-### Planned Features
-
-- **Patch** — Apply binary patches from diff output
-- **Convert** — Encoding and line ending conversion
-- **Struct** — Structure-aware parsing with templates
-- **Memory** — Live process memory inspection
+| Phase | Theme | Status |
+|-------|-------|--------|
+| 1 | Core read/write/edit | ✅ Complete |
+| 2 | Search, analyze, diff | ✅ Complete |
+| 3 | Convert, patch, struct | ✅ Complete |
+| 4 | Template system evolution | 🔄 In progress |
+| 5 | Bit-level precision | 🔲 Planned |
+| 6 | Command chaining & pipelines | 🔲 Planned |
+| 7 | Live process memory | 🔲 Planned |
+| 8 | Advanced analysis & intelligence | 🔲 Planned |
 
 ## License
 

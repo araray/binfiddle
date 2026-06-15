@@ -167,7 +167,7 @@ fn parse_hex_input(input: &str) -> Result<Vec<u8>> {
     // Remove common separators and whitespace
     let cleaned: String = input.chars().filter(|c| c.is_ascii_hexdigit()).collect();
 
-    if cleaned.len() % 2 != 0 {
+    if !cleaned.len().is_multiple_of(2) {
         return Err(BinfiddleError::Parse(format!(
             "Hex input must have even number of digits, got {} digits",
             cleaned.len()
@@ -314,7 +314,7 @@ fn parse_mask_pattern(input: &str) -> Result<SearchPattern> {
         .filter(|c| c.is_ascii_hexdigit() || *c == '?' || *c == 'x' || *c == 'X')
         .collect();
 
-    if cleaned.len() % 2 != 0 {
+    if !cleaned.len().is_multiple_of(2) {
         return Err(BinfiddleError::Parse(format!(
             "Mask pattern must have pairs of characters, got {} characters",
             cleaned.len()
@@ -597,18 +597,17 @@ pub fn validate_search_pattern(pattern: &str, format: &str) -> Vec<String> {
             }
         }
 
-        "mask" => {
-            // Check if wildcards are present
+        "mask"
             if !pattern.contains("??")
                 && !pattern.contains("XX")
-                && !pattern.to_uppercase().contains("XX")
-            {
-                warnings.push(format!(
-                    "💡 Pattern '{}' has no wildcards (?? or XX).\n\
-                    Did you mean: --input-format hex?",
-                    pattern
-                ));
-            }
+                && !pattern.to_uppercase().contains("XX") =>
+        {
+            // Pattern has no wildcards
+            warnings.push(format!(
+                "💡 Pattern '{}' has no wildcards (?? or XX).\n\
+                Did you mean: --input-format hex?",
+                pattern
+            ));
         }
 
         _ => {}

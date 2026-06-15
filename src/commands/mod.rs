@@ -9,6 +9,7 @@ pub mod patch;
 pub mod read;
 pub mod search;
 pub mod struct_cmd;
+pub mod struct_expr;
 pub mod write;
 
 pub use analyze::{
@@ -21,8 +22,8 @@ pub use patch::{PatchCommand, PatchConfig, PatchEntry, PatchResult};
 pub use read::ReadCommand;
 pub use search::{SearchCommand, SearchConfig, SearchMatch};
 pub use struct_cmd::{
-    Endianness, FieldDefinition, FieldType, ParsedField, ParsedStruct, StructCommand, StructConfig,
-    StructOutputFormat, StructTemplate,
+    BitfieldDefinition, Endianness, FieldDefinition, FieldType, ParsedField, ParsedStruct,
+    StructCommand, StructConfig, StructOutputFormat, StructTemplate, ValueOrExpression,
 };
 pub use write::WriteCommand;
 

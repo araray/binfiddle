@@ -1085,7 +1085,7 @@ The `struct` command parses binary data according to YAML structure templates, m
 
 ```bash
 # Parse a binary file using a template
-binfiddle -i firmware.bin struct header_template.yaml
+binfiddle struct header_template.yaml < firmware.bin
 
 # Example output:
 # Structure: Firmware Header
@@ -1142,13 +1142,19 @@ fields:
 | Option | Required | Description |
 |--------|----------|-------------|
 | `name` | Yes | Field identifier |
-| `offset` | Yes | Byte offset (decimal or hex with 0x prefix) |
-| `size` | Yes | Size in bytes |
+| `offset` | Yes* | Byte offset or expression (default: `$@prev_end`) |
+| `size` | Yes* | Size in bytes or expression (omitted for `computed`) |
 | `type` | No | Data type (default: `bytes`) |
 | `assert` | No | Expected hex value for validation |
 | `enum` | No | Map numeric values to names |
 | `description` | No | Field description |
 | `display` | No | Display format override |
+| `when` | No | Conditional expression for parsing |
+| `value` | No | Expression for `computed` fields |
+| `bitfields` | No | Extract bitfields from integer fields |
+| `count` | No | Number of elements for arrays |
+
+* `offset`/`size` can be expressions such as `$filename_length` or `$@prev_end + 4`.
 
 #### Supported Field Types
 
@@ -1165,6 +1171,92 @@ fields:
 | `hex_string` | Variable | Raw bytes as hex (default display) |
 | `string` | Variable | Null-terminated or fixed-length ASCII/UTF-8 |
 | `bytes` | Variable | Raw byte array |
+| `computed` | — | Virtual field calculated from an expression |
+
+#### Advanced Template Features
+
+Templates support a small expression language for dynamic parsing.
+
+**Field References and Magic Variables**:
+
+| Reference | Meaning |
+|-----------|---------|
+| `$fieldname` | Numeric value of a previously parsed field |
+| `$fieldname.subfield` | Bitfield value |
+| `$@current` | Current parse offset |
+| `$@prev_end` | End offset of the previous field |
+| `$@file_size` | Total size of the input data |
+| `$@base` | Base offset of the current template |
+
+**Dynamic offset/size**:
+
+```yaml
+fields:
+  - name: filename_length
+    offset: 0x1A
+    size: 2
+    type: u16
+  - name: filename
+    offset: 0x1E
+    size: $filename_length
+    type: string
+```
+
+**Conditional fields** (`when`):
+
+```yaml
+fields:
+  - name: version
+    offset: 0
+    size: 1
+    type: u8
+  - name: extra
+    offset: 1
+    size: 1
+    type: u8
+    when: $version >= 2
+```
+
+**Computed fields**:
+
+```yaml
+fields:
+  - name: total_size
+    type: computed
+    value: $header_size + $payload_size
+```
+
+**Bitfields**:
+
+```yaml
+fields:
+  - name: flags
+    offset: 0
+    size: 1
+    type: u8
+    bitfields:
+      - name: is_compressed
+        bits: 0
+        type: bool
+      - name: compression_level
+        bits: 2..5
+        type: u8
+```
+
+**Counted arrays**:
+
+```yaml
+fields:
+  - name: count
+    offset: 0
+    size: 1
+    type: u8
+  - name: values
+    offset: 1
+    size: 1
+    type: u8
+    count: $count
+```
 
 #### List Template Fields
 
@@ -1189,24 +1281,24 @@ binfiddle struct elf_header.yaml --list-fields
 
 ```bash
 # Get a single field value
-binfiddle -i /bin/ls struct elf_header.yaml --get e_entry
+binfiddle struct elf_header.yaml --get e_entry < /bin/ls
 # Output: 286416
 
 # Get multiple fields
-binfiddle -i /bin/ls struct elf_header.yaml --get e_type --get e_machine
+binfiddle struct elf_header.yaml --get e_type --get e_machine < /bin/ls
 ```
 
 #### Output Formats
 
 ```bash
 # Human-readable table (default)
-binfiddle -i data.bin struct template.yaml --output-format human
+binfiddle struct template.yaml --output-format human < data.bin
 
 # JSON output
-binfiddle -i data.bin struct template.yaml --output-format json
+binfiddle struct template.yaml --output-format json < data.bin
 
 # YAML output
-binfiddle -i data.bin struct template.yaml --output-format yaml
+binfiddle struct template.yaml --output-format yaml < data.bin
 ```
 
 #### Assertions and Validation
@@ -1744,6 +1836,7 @@ binfiddle --version
 │   oct       336 255 276 357                                     │
 │   bin       11011110 10101101 10111110 11101111                 │
 │   ascii     .... (output only)                                  │
+│   raw       Raw bytes, no formatting (output only)              │
 │   regex     [A-Z]{4} (search only)                              │
 │   mask      DE ?? BE EF (search only)                           │
 ├─────────────────────────────────────────────────────────────────┤
@@ -1755,6 +1848,8 @@ binfiddle --version
 │   --input-format  Input format for values                       │
 │   --chunk-size N  Bits per chunk (default: 8)                   │
 │   --width N       Chunks per line (default: 16)                 │
+│   --show-offset   Show hex address prefix on each line          │
+│   --show-ascii    Show ASCII sidebar (implies --show-offset)    │
 │   --silent        Suppress diff output                          │
 │   --all           Find all matches (search)                     │
 │   --count         Count matches only (search)                   │

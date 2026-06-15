@@ -2,7 +2,8 @@
 //!
 //! Run with: `cargo bench`
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::hint::black_box;
 
 use binfiddle::commands::SearchCommand;
 use binfiddle::utils::parsing::SearchPattern;
@@ -48,10 +49,8 @@ fn bench_exact_search(c: &mut Criterion) {
 
         group.throughput(Throughput::Bytes(*size as u64));
         group.bench_with_input(BenchmarkId::new("sequential", size), &data, |b, data| {
-            let config = make_search_config(
-                SearchPattern::Exact(vec![0xDE, 0xAD, 0xBE, 0xEF]),
-                true,
-            );
+            let config =
+                make_search_config(SearchPattern::Exact(vec![0xDE, 0xAD, 0xBE, 0xEF]), true);
             let cmd = SearchCommand::new(config);
             b.iter(|| {
                 let matches = cmd.search(black_box(data)).unwrap();
@@ -96,10 +95,8 @@ fn bench_regex_search(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(*size as u64));
         group.bench_with_input(BenchmarkId::new("sequential", size), &data, |b, data| {
             // Pattern: Match DEADBEEF as regex
-            let config = make_search_config(
-                SearchPattern::Regex(r"\xDE\xAD\xBE\xEF".to_string()),
-                true,
-            );
+            let config =
+                make_search_config(SearchPattern::Regex(r"\xDE\xAD\xBE\xEF".to_string()), true);
             let cmd = SearchCommand::new(config);
             b.iter(|| {
                 let matches = cmd.search(black_box(data)).unwrap();
@@ -124,10 +121,8 @@ fn bench_parallel_vs_sequential(c: &mut Criterion) {
             BenchmarkId::new("exact_sequential", size),
             &data,
             |b, data| {
-                let config = make_search_config(
-                    SearchPattern::Exact(vec![0xDE, 0xAD, 0xBE, 0xEF]),
-                    true,
-                );
+                let config =
+                    make_search_config(SearchPattern::Exact(vec![0xDE, 0xAD, 0xBE, 0xEF]), true);
                 let cmd = SearchCommand::new(config);
                 b.iter(|| {
                     let matches = cmd.search(black_box(data)).unwrap();
@@ -141,10 +136,8 @@ fn bench_parallel_vs_sequential(c: &mut Criterion) {
             BenchmarkId::new("exact_parallel", size),
             &data,
             |b, data| {
-                let config = make_search_config(
-                    SearchPattern::Exact(vec![0xDE, 0xAD, 0xBE, 0xEF]),
-                    true,
-                );
+                let config =
+                    make_search_config(SearchPattern::Exact(vec![0xDE, 0xAD, 0xBE, 0xEF]), true);
                 let cmd = SearchCommand::new(config);
                 b.iter(|| {
                     let matches = cmd.search_parallel(black_box(data)).unwrap();
@@ -171,21 +164,17 @@ fn bench_parallel_vs_sequential(c: &mut Criterion) {
         );
 
         // Parallel mask search
-        group.bench_with_input(
-            BenchmarkId::new("mask_parallel", size),
-            &data,
-            |b, data| {
-                let config = make_search_config(
-                    SearchPattern::Mask(vec![Some(0xDE), None, Some(0xBE), Some(0xEF)]),
-                    true,
-                );
-                let cmd = SearchCommand::new(config);
-                b.iter(|| {
-                    let matches = cmd.search_parallel(black_box(data)).unwrap();
-                    black_box(matches.len())
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("mask_parallel", size), &data, |b, data| {
+            let config = make_search_config(
+                SearchPattern::Mask(vec![Some(0xDE), None, Some(0xBE), Some(0xEF)]),
+                true,
+            );
+            let cmd = SearchCommand::new(config);
+            b.iter(|| {
+                let matches = cmd.search_parallel(black_box(data)).unwrap();
+                black_box(matches.len())
+            });
+        });
     }
     group.finish();
 }

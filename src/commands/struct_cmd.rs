@@ -53,6 +53,8 @@ use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::struct_expr::{eval_to_bool, eval_to_i128, resolve_size_or_offset, EvalContext};
+
 /// Endianness for multi-byte field interpretation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -64,9 +66,11 @@ pub enum Endianness {
     Big,
 }
 
-impl Endianness {
+impl std::str::FromStr for Endianness {
+    type Err = BinfiddleError;
+
     /// Parses an endianness string.
-    pub fn from_str(s: &str) -> Result<Self> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "little" | "le" | "little-endian" | "littleendian" => Ok(Endianness::Little),
             "big" | "be" | "big-endian" | "bigendian" => Ok(Endianness::Big),
@@ -90,9 +94,11 @@ pub enum StructOutputFormat {
     Yaml,
 }
 
-impl StructOutputFormat {
+impl std::str::FromStr for StructOutputFormat {
+    type Err = BinfiddleError;
+
     /// Parses an output format string.
-    pub fn from_str(s: &str) -> Result<Self> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "human" | "table" | "text" => Ok(StructOutputFormat::Human),
             "json" => Ok(StructOutputFormat::Json),
@@ -106,7 +112,7 @@ impl StructOutputFormat {
 }
 
 /// Field data type for template fields.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldType {
     /// Unsigned 8-bit integer
@@ -130,13 +136,10 @@ pub enum FieldType {
     /// ASCII/UTF-8 string (null-terminated or fixed length)
     String,
     /// Raw byte array
+    #[default]
     Bytes,
-}
-
-impl Default for FieldType {
-    fn default() -> Self {
-        FieldType::Bytes
-    }
+    /// Computed value from an expression
+    Computed,
 }
 
 impl FieldType {
@@ -150,9 +153,12 @@ impl FieldType {
             _ => None, // Variable size types
         }
     }
+}
 
-    /// Parses a field type from string (for manual parsing if needed).
-    pub fn from_str(s: &str) -> Result<Self> {
+impl std::str::FromStr for FieldType {
+    type Err = BinfiddleError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "u8" | "uint8" | "byte" => Ok(FieldType::U8),
             "u16" | "uint16" | "word" | "ushort" => Ok(FieldType::U16),
@@ -165,13 +171,155 @@ impl FieldType {
             "hex_string" | "hexstring" | "hex" => Ok(FieldType::HexString),
             "string" | "str" | "ascii" | "utf8" => Ok(FieldType::String),
             "bytes" | "raw" | "data" => Ok(FieldType::Bytes),
+            "computed" | "calc" => Ok(FieldType::Computed),
             _ => Err(BinfiddleError::Parse(format!(
                 "Invalid field type '{}': expected u8, u16, u32, u64, i8, i16, i32, i64, \
-                 hex_string, string, or bytes",
+                 hex_string, string, bytes, or computed",
                 s
             ))),
         }
     }
+}
+
+/// A literal value or an expression string.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ValueOrExpression {
+    /// A fixed numeric value.
+    Number(usize),
+    /// An expression such as `$@prev_end + 4` or `$filename_length`.
+    Expression(String),
+}
+
+impl ValueOrExpression {
+    /// Returns the expression string if this is an expression.
+    pub fn as_expr(&self) -> Option<&str> {
+        match self {
+            ValueOrExpression::Expression(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Resolves to a usize using the given evaluation context.
+    pub fn resolve(&self, ctx: &EvalContext) -> Result<usize> {
+        match self {
+            ValueOrExpression::Number(n) => Ok(*n),
+            ValueOrExpression::Expression(s) => resolve_size_or_offset(s, ctx),
+        }
+    }
+}
+
+/// Definition of a bitfield within an integer field.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BitfieldDefinition {
+    /// Name of the bitfield.
+    pub name: String,
+    /// Bit range, e.g. `0` or `2..5`.
+    #[serde(deserialize_with = "deserialize_bit_range")]
+    pub bits: (u8, u8),
+    /// Interpretation type: `bool`, `u8`, `u16`, `u32`, `u64`.
+    #[serde(rename = "type", default = "default_bitfield_type")]
+    pub field_type: String,
+    /// Optional description.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+fn default_bitfield_type() -> String {
+    "bool".to_string()
+}
+
+/// Deserialize a bit range from either a single number or `start..end`.
+fn deserialize_bit_range<'de, D>(deserializer: D) -> std::result::Result<(u8, u8), D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum BitRangeValue {
+        Single(u8),
+        String(String),
+    }
+
+    match BitRangeValue::deserialize(deserializer)? {
+        BitRangeValue::Single(n) => Ok((n, n)),
+        BitRangeValue::String(s) => {
+            let s = s.trim();
+            if let Some((start, end)) = s.split_once("..") {
+                let start = start
+                    .trim()
+                    .parse::<u8>()
+                    .map_err(|e| D::Error::custom(format!("Invalid bit start: {}", e)))?;
+                let end = end
+                    .trim()
+                    .parse::<u8>()
+                    .map_err(|e| D::Error::custom(format!("Invalid bit end: {}", e)))?;
+                if start > end {
+                    return Err(D::Error::custom("Bit range start must be <= end"));
+                }
+                Ok((start, end))
+            } else {
+                let n = s
+                    .parse::<u8>()
+                    .map_err(|e| D::Error::custom(format!("Invalid bit index: {}", e)))?;
+                Ok((n, n))
+            }
+        }
+    }
+}
+
+/// Custom deserializer for `ValueOrExpression`.
+fn deserialize_value_or_expression<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<ValueOrExpression>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RawValue {
+        Number(usize),
+        String(String),
+    }
+
+    match Option::<RawValue>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(RawValue::Number(n)) => Ok(Some(ValueOrExpression::Number(n))),
+        Some(RawValue::String(s)) => {
+            let s = s.trim();
+            if s.is_empty() {
+                return Err(D::Error::custom("Empty offset/size expression"));
+            }
+            if s.starts_with('$') {
+                Ok(Some(ValueOrExpression::Expression(s.to_string())))
+            } else {
+                // Try to parse as hex/decimal literal
+                let n = if s.starts_with("0x") || s.starts_with("0X") {
+                    usize::from_str_radix(&s[2..], 16).map_err(|e| {
+                        D::Error::custom(format!("Invalid hex value '{}': {}", s, e))
+                    })?
+                } else {
+                    s.parse::<usize>()
+                        .map_err(|e| D::Error::custom(format!("Invalid number '{}': {}", s, e)))?
+                };
+                Ok(Some(ValueOrExpression::Number(n)))
+            }
+        }
+    }
+}
+
+/// Custom deserializer for an optional `ValueOrExpression`.
+fn deserialize_optional_value_or_expression<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<ValueOrExpression>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserialize_value_or_expression(deserializer)
 }
 
 /// Represents a single field definition in a template.
@@ -181,11 +329,12 @@ pub struct FieldDefinition {
     pub name: String,
 
     /// Byte offset from start of structure
-    #[serde(deserialize_with = "deserialize_offset")]
-    pub offset: usize,
+    #[serde(default, deserialize_with = "deserialize_value_or_expression")]
+    pub offset: Option<ValueOrExpression>,
 
-    /// Size in bytes
-    pub size: usize,
+    /// Size in bytes (optional for computed/array fields)
+    #[serde(default, deserialize_with = "deserialize_optional_value_or_expression")]
+    pub size: Option<ValueOrExpression>,
 
     /// Data type for interpretation
     #[serde(rename = "type", default)]
@@ -206,33 +355,26 @@ pub struct FieldDefinition {
     /// Optional display format override (hex, dec, bin, oct)
     #[serde(default)]
     pub display: Option<String>,
-}
 
-/// Custom deserializer for offset that handles hex strings.
-fn deserialize_offset<'de, D>(deserializer: D) -> std::result::Result<usize, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::Error;
+    /// Conditional expression; field is skipped if false.
+    #[serde(default)]
+    pub when: Option<String>,
 
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum OffsetValue {
-        Number(usize),
-        String(String),
-    }
+    /// For arrays: expression evaluating to element count.
+    #[serde(default)]
+    pub count: Option<String>,
 
-    match OffsetValue::deserialize(deserializer)? {
-        OffsetValue::Number(n) => Ok(n),
-        OffsetValue::String(s) => {
-            let s = s.trim();
-            if s.starts_with("0x") || s.starts_with("0X") {
-                usize::from_str_radix(&s[2..], 16).map_err(|e| D::Error::custom(e.to_string()))
-            } else {
-                s.parse::<usize>().map_err(|e| D::Error::custom(e.to_string()))
-            }
-        }
-    }
+    /// For arrays: template file to parse for each element.
+    #[serde(default)]
+    pub element_template: Option<String>,
+
+    /// For computed fields: expression yielding the value.
+    #[serde(default)]
+    pub value: Option<String>,
+
+    /// For integer fields: bitfield definitions.
+    #[serde(default)]
+    pub bitfields: Option<Vec<BitfieldDefinition>>,
 }
 
 /// Represents a complete structure template.
@@ -256,9 +398,8 @@ pub struct StructTemplate {
 impl StructTemplate {
     /// Loads a template from YAML string.
     pub fn from_yaml(yaml: &str) -> Result<Self> {
-        serde_yaml::from_str(yaml).map_err(|e| {
-            BinfiddleError::Parse(format!("Failed to parse template YAML: {}", e))
-        })
+        serde_yaml::from_str(yaml)
+            .map_err(|e| BinfiddleError::Parse(format!("Failed to parse template YAML: {}", e)))
     }
 
     /// Loads a template from a file path.
@@ -272,11 +413,21 @@ impl StructTemplate {
         Self::from_yaml(&content)
     }
 
-    /// Returns the total size covered by this template.
+    /// Returns the total size covered by this template using literal values only.
     pub fn total_size(&self) -> usize {
         self.fields
             .iter()
-            .map(|f| f.offset + f.size)
+            .filter_map(|f| {
+                let offset = match &f.offset {
+                    Some(ValueOrExpression::Number(n)) => *n,
+                    _ => return None,
+                };
+                let size = match &f.size {
+                    Some(ValueOrExpression::Number(n)) => *n,
+                    _ => return None,
+                };
+                Some(offset + size)
+            })
             .max()
             .unwrap_or(0)
     }
@@ -299,14 +450,16 @@ impl StructTemplate {
             }
         }
 
-        // Validate field type sizes
+        // Validate field type sizes for literal sizes
         for field in &self.fields {
             if let Some(expected) = field.field_type.expected_size() {
-                if field.size != expected {
-                    return Err(BinfiddleError::Parse(format!(
-                        "Field '{}' has type {:?} which requires {} bytes, but size is {}",
-                        field.name, field.field_type, expected, field.size
-                    )));
+                if let Some(ValueOrExpression::Number(size)) = &field.size {
+                    if *size != expected {
+                        return Err(BinfiddleError::Parse(format!(
+                            "Field '{}' has type {:?} which requires {} bytes, but size is {}",
+                            field.name, field.field_type, expected, size
+                        )));
+                    }
                 }
             }
         }
@@ -389,6 +542,17 @@ impl StructCommand {
     /// # Returns
     /// A ParsedStruct containing all field values.
     pub fn parse(&self, data: &[u8], template: &StructTemplate) -> Result<ParsedStruct> {
+        let ctx = EvalContext::new(data.len(), 0);
+        self.parse_with_context(data, template, ctx)
+    }
+
+    /// Parses binary data using an existing evaluation context.
+    fn parse_with_context(
+        &self,
+        data: &[u8],
+        template: &StructTemplate,
+        mut ctx: EvalContext,
+    ) -> Result<ParsedStruct> {
         // Validate template first
         template.validate()?;
 
@@ -403,16 +567,44 @@ impl StructCommand {
                 continue;
             }
 
-            let parsed = self.parse_field(data, field_def, template.endian)?;
-
-            // Check assertion
-            if let Some(passed) = parsed.assertion_passed {
-                if !passed {
-                    all_assertions_passed = false;
+            // Evaluate conditional
+            if let Some(when_expr) = &field_def.when {
+                if !eval_to_bool(when_expr, &ctx)? {
+                    continue;
                 }
             }
 
-            fields.push(parsed);
+            // Resolve offset: explicit or $@prev_end
+            let offset = match &field_def.offset {
+                Some(expr) => expr.resolve(&ctx)?,
+                None => ctx.prev_end(),
+            };
+            ctx.set_current_offset(offset);
+
+            // Parse the field (which may produce multiple parsed fields for arrays/bitfields)
+            let mut parsed_fields =
+                self.parse_field_at(data, field_def, offset, template.endian, &ctx)?;
+
+            // Update context with numeric values from all parsed fields and end offset
+            if let Some(main) = parsed_fields.first() {
+                ctx.set_prev_end(main.offset + main.size);
+            }
+            for parsed in &parsed_fields {
+                if let Some(numeric) = parsed.numeric_value {
+                    ctx.set_variable(parsed.name.clone(), numeric);
+                }
+            }
+
+            // Check assertions
+            for parsed in &parsed_fields {
+                if let Some(passed) = parsed.assertion_passed {
+                    if !passed {
+                        all_assertions_passed = false;
+                    }
+                }
+            }
+
+            fields.append(&mut parsed_fields);
         }
 
         Ok(ParsedStruct {
@@ -423,25 +615,75 @@ impl StructCommand {
         })
     }
 
-    /// Parses a single field from binary data.
-    fn parse_field(
+    /// Parses a field at the given offset, handling arrays, computed fields,
+    /// bitfields, and normal data fields.
+    fn parse_field_at(
         &self,
         data: &[u8],
         field: &FieldDefinition,
+        offset: usize,
         endian: Endianness,
-    ) -> Result<ParsedField> {
+        ctx: &EvalContext,
+    ) -> Result<Vec<ParsedField>> {
+        // Handle counted arrays
+        if let Some(count_expr) = &field.count {
+            let count = eval_to_i128(count_expr, ctx)?;
+            if count < 0 {
+                return Err(BinfiddleError::InvalidRange(format!(
+                    "Array count for field '{}' evaluated to negative value {}",
+                    field.name, count
+                )));
+            }
+            let count = count as usize;
+            return self.parse_array(data, field, offset, count, endian, ctx);
+        }
+
+        // Handle computed fields
+        if field.field_type == FieldType::Computed {
+            let value_expr = field.value.as_ref().ok_or_else(|| {
+                BinfiddleError::Parse(format!(
+                    "Computed field '{}' requires a 'value' expression",
+                    field.name
+                ))
+            })?;
+            let value = eval_to_i128(value_expr, ctx)?;
+            let parsed = ParsedField {
+                name: field.name.clone(),
+                offset,
+                size: 0,
+                raw_bytes: Vec::new(),
+                value: format!("{}", value),
+                numeric_value: Some(value),
+                enum_name: None,
+                assertion_passed: None,
+                description: field.description.clone(),
+            };
+            return Ok(vec![parsed]);
+        }
+
+        // Resolve size for normal fields
+        let size = match &field.size {
+            Some(expr) => expr.resolve(ctx)?,
+            None => {
+                return Err(BinfiddleError::Parse(format!(
+                    "Field '{}' is missing required 'size'",
+                    field.name
+                )))
+            }
+        };
+
         // Bounds check
-        if field.offset + field.size > data.len() {
+        if offset + size > data.len() {
             return Err(BinfiddleError::InvalidRange(format!(
                 "Field '{}' at offset 0x{:x} with size {} exceeds data length {}",
                 field.name,
-                field.offset,
-                field.size,
+                offset,
+                size,
                 data.len()
             )));
         }
 
-        let raw_bytes = data[field.offset..field.offset + field.size].to_vec();
+        let raw_bytes = data[offset..offset + size].to_vec();
 
         // Parse based on type
         let (value, numeric_value) = self.interpret_field(&raw_bytes, &field.field_type, endian)?;
@@ -466,17 +708,175 @@ impl StructCommand {
             value
         };
 
-        Ok(ParsedField {
+        let main_field = ParsedField {
             name: field.name.clone(),
-            offset: field.offset,
-            size: field.size,
+            offset,
+            size,
             raw_bytes,
             value: display_value,
             numeric_value,
             enum_name,
             assertion_passed,
             description: field.description.clone(),
-        })
+        };
+
+        let mut result = vec![main_field.clone()];
+
+        // Extract bitfields if defined and we have a numeric value
+        if let (Some(bitfields), Some(numeric)) = (&field.bitfields, numeric_value) {
+            let mut bitfield_fields =
+                self.parse_bitfields(&field.name, offset, size, numeric, bitfields);
+            result.append(&mut bitfield_fields);
+        }
+
+        Ok(result)
+    }
+
+    /// Parses a counted array of elements.
+    fn parse_array(
+        &self,
+        data: &[u8],
+        field: &FieldDefinition,
+        start_offset: usize,
+        count: usize,
+        endian: Endianness,
+        ctx: &EvalContext,
+    ) -> Result<Vec<ParsedField>> {
+        let mut result = Vec::new();
+
+        if let Some(template_name) = &field.element_template {
+            // Load external template for each element
+            let element_template = StructTemplate::from_file(template_name)?;
+            let element_size = element_template.total_size();
+            if element_size == 0 {
+                return Err(BinfiddleError::Parse(format!(
+                    "Array field '{}' uses element template '{}' with zero size",
+                    field.name, template_name
+                )));
+            }
+
+            for i in 0..count {
+                let element_offset = start_offset + i * element_size;
+                if element_offset + element_size > data.len() {
+                    return Err(BinfiddleError::InvalidRange(format!(
+                        "Array '{}' element {} at offset 0x{:x} with size {} exceeds data length {}",
+                        field.name,
+                        i,
+                        element_offset,
+                        element_size,
+                        data.len()
+                    )));
+                }
+
+                let element_ctx = ctx.child_with_base(element_offset);
+                let parsed_element =
+                    self.parse_with_context(data, &element_template, element_ctx)?;
+                for parsed_field in parsed_element.fields {
+                    let indexed_name = format!("{}[{}].{}", field.name, i, parsed_field.name);
+                    let mut indexed = parsed_field;
+                    indexed.name = indexed_name;
+                    result.push(indexed);
+                }
+            }
+        } else {
+            // Array of identical simple fields
+            let size = match &field.size {
+                Some(expr) => expr.resolve(ctx)?,
+                None => {
+                    return Err(BinfiddleError::Parse(format!(
+                        "Array field '{}' without element_template requires 'size'",
+                        field.name
+                    )))
+                }
+            };
+
+            for i in 0..count {
+                let element_offset = start_offset + i * size;
+                if element_offset + size > data.len() {
+                    return Err(BinfiddleError::InvalidRange(format!(
+                        "Array '{}' element {} at offset 0x{:x} with size {} exceeds data length {}",
+                        field.name,
+                        i,
+                        element_offset,
+                        size,
+                        data.len()
+                    )));
+                }
+
+                let raw_bytes = data[element_offset..element_offset + size].to_vec();
+                let (value, numeric_value) =
+                    self.interpret_field(&raw_bytes, &field.field_type, endian)?;
+
+                let field_name = format!("{}[{}]", field.name, i);
+                result.push(ParsedField {
+                    name: field_name,
+                    offset: element_offset,
+                    size,
+                    raw_bytes,
+                    value,
+                    numeric_value,
+                    enum_name: None,
+                    assertion_passed: None,
+                    description: field.description.clone(),
+                });
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Extracts bitfield values from an integer field.
+    fn parse_bitfields(
+        &self,
+        parent_name: &str,
+        parent_offset: usize,
+        parent_size: usize,
+        value: i128,
+        bitfields: &[BitfieldDefinition],
+    ) -> Vec<ParsedField> {
+        let mut result = Vec::new();
+        let max_bit = (parent_size * 8) as u8;
+
+        for bf in bitfields {
+            let (start, end) = bf.bits;
+            if end >= max_bit {
+                // Skip out-of-range bitfields silently; validation could be stricter
+                continue;
+            }
+            let width = (end - start + 1) as u32;
+            let mask = ((1i128 << width) - 1) << start;
+            let raw = ((value as u128 & mask as u128) >> start) as i128;
+
+            let (display, numeric) = match bf.field_type.to_lowercase().as_str() {
+                "bool" | "boolean" => (
+                    if raw != 0 {
+                        "true".to_string()
+                    } else {
+                        "false".to_string()
+                    },
+                    Some(raw),
+                ),
+                "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" => {
+                    (format!("{}", raw), Some(raw))
+                }
+                _ => (format!("{}", raw), Some(raw)),
+            };
+
+            let name = format!("{}.{}", parent_name, bf.name);
+            result.push(ParsedField {
+                name,
+                offset: parent_offset,
+                size: 0,
+                raw_bytes: Vec::new(),
+                value: display,
+                numeric_value: numeric,
+                enum_name: None,
+                assertion_passed: None,
+                description: bf.description.clone(),
+            });
+        }
+
+        result
     }
 
     /// Interprets raw bytes according to field type.
@@ -559,6 +959,9 @@ impl StructCommand {
                     .join(" ");
                 Ok((hex_str, None))
             }
+            FieldType::Computed => Err(BinfiddleError::Parse(
+                "Computed fields should not be interpreted as raw bytes".to_string(),
+            )),
         }
     }
 
@@ -728,11 +1131,27 @@ impl StructCommand {
         for field in &template.fields {
             let type_str = format!("{:?}", field.field_type);
             let desc = field.description.as_deref().unwrap_or("-");
+            let offset_str = field
+                .offset
+                .as_ref()
+                .map(|v| match v {
+                    ValueOrExpression::Number(n) => format!("0x{:08x}", n),
+                    ValueOrExpression::Expression(s) => s.clone(),
+                })
+                .unwrap_or_else(|| "auto".to_string());
+            let size_str = field
+                .size
+                .as_ref()
+                .map(|v| match v {
+                    ValueOrExpression::Number(n) => format!("{}", n),
+                    ValueOrExpression::Expression(s) => s.clone(),
+                })
+                .unwrap_or_else(|| "-".to_string());
             output.push_str(&format!(
-                "{:<name_width$}  0x{:08x}  {:>4}  {:<type_width$}  {}\n",
+                "{:<name_width$}  {:>10}  {:>4}  {:<type_width$}  {}\n",
                 field.name,
-                field.offset,
-                field.size,
+                offset_str,
+                size_str,
                 type_str,
                 desc,
                 name_width = name_width,
@@ -756,6 +1175,20 @@ impl StructCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn literal_offset(offset: &Option<ValueOrExpression>) -> usize {
+        match offset {
+            Some(ValueOrExpression::Number(n)) => *n,
+            _ => panic!("Expected literal offset"),
+        }
+    }
+
+    fn literal_size(size: &Option<ValueOrExpression>) -> usize {
+        match size {
+            Some(ValueOrExpression::Number(n)) => *n,
+            _ => panic!("Expected literal size"),
+        }
+    }
 
     const ELF_TEMPLATE_YAML: &str = r#"
 name: ELF Header
@@ -821,8 +1254,8 @@ fields:
         assert_eq!(template.endian, Endianness::Little);
         assert_eq!(template.fields.len(), 4);
         assert_eq!(template.fields[0].name, "e_ident_magic");
-        assert_eq!(template.fields[0].offset, 0);
-        assert_eq!(template.fields[0].size, 4);
+        assert_eq!(literal_offset(&template.fields[0].offset), 0);
+        assert_eq!(literal_size(&template.fields[0].size), 4);
     }
 
     #[test]
@@ -836,7 +1269,7 @@ fields:
     type: u32
 "#;
         let template = StructTemplate::from_yaml(yaml).unwrap();
-        assert_eq!(template.fields[0].offset, 0x100);
+        assert_eq!(literal_offset(&template.fields[0].offset), 0x100);
     }
 
     #[test]
@@ -1116,43 +1549,49 @@ fields:
         let result = cmd.parse(&data, &template);
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("exceeds data length"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds data length"));
     }
 
     #[test]
     fn test_endianness_from_str() {
-        assert_eq!(Endianness::from_str("little").unwrap(), Endianness::Little);
-        assert_eq!(Endianness::from_str("big").unwrap(), Endianness::Big);
-        assert_eq!(Endianness::from_str("LE").unwrap(), Endianness::Little);
-        assert_eq!(Endianness::from_str("BE").unwrap(), Endianness::Big);
-        assert!(Endianness::from_str("invalid").is_err());
+        assert_eq!("little".parse::<Endianness>().unwrap(), Endianness::Little);
+        assert_eq!("big".parse::<Endianness>().unwrap(), Endianness::Big);
+        assert_eq!("LE".parse::<Endianness>().unwrap(), Endianness::Little);
+        assert_eq!("BE".parse::<Endianness>().unwrap(), Endianness::Big);
+        assert!("invalid".parse::<Endianness>().is_err());
     }
 
     #[test]
     fn test_output_format_from_str() {
         assert_eq!(
-            StructOutputFormat::from_str("human").unwrap(),
+            "human".parse::<StructOutputFormat>().unwrap(),
             StructOutputFormat::Human
         );
         assert_eq!(
-            StructOutputFormat::from_str("json").unwrap(),
+            "json".parse::<StructOutputFormat>().unwrap(),
             StructOutputFormat::Json
         );
         assert_eq!(
-            StructOutputFormat::from_str("yaml").unwrap(),
+            "yaml".parse::<StructOutputFormat>().unwrap(),
             StructOutputFormat::Yaml
         );
-        assert!(StructOutputFormat::from_str("invalid").is_err());
+        assert!("invalid".parse::<StructOutputFormat>().is_err());
     }
 
     #[test]
     fn test_field_type_from_str() {
-        assert_eq!(FieldType::from_str("u8").unwrap(), FieldType::U8);
-        assert_eq!(FieldType::from_str("u16").unwrap(), FieldType::U16);
-        assert_eq!(FieldType::from_str("uint32").unwrap(), FieldType::U32);
-        assert_eq!(FieldType::from_str("hex_string").unwrap(), FieldType::HexString);
-        assert_eq!(FieldType::from_str("string").unwrap(), FieldType::String);
-        assert!(FieldType::from_str("invalid").is_err());
+        assert_eq!("u8".parse::<FieldType>().unwrap(), FieldType::U8);
+        assert_eq!("u16".parse::<FieldType>().unwrap(), FieldType::U16);
+        assert_eq!("uint32".parse::<FieldType>().unwrap(), FieldType::U32);
+        assert_eq!(
+            "hex_string".parse::<FieldType>().unwrap(),
+            FieldType::HexString
+        );
+        assert_eq!("string".parse::<FieldType>().unwrap(), FieldType::String);
+        assert!("invalid".parse::<FieldType>().is_err());
     }
 
     #[test]
@@ -1166,7 +1605,7 @@ fields:
     fn test_template_get_field() {
         let template = StructTemplate::from_yaml(ELF_TEMPLATE_YAML).unwrap();
         let field = template.get_field("e_type").unwrap();
-        assert_eq!(field.offset, 0x10);
+        assert_eq!(literal_offset(&field.offset), 0x10);
         assert!(template.get_field("nonexistent").is_none());
     }
 
@@ -1290,5 +1729,217 @@ fields:
         assert_eq!(result.fields[5].numeric_value, Some(-50000));
         assert_eq!(result.fields[6].numeric_value, Some(1000000000000));
         assert_eq!(result.fields[7].numeric_value, Some(-500000000000));
+    }
+
+    #[test]
+    fn test_field_reference_in_size() {
+        let yaml = r#"
+name: Dynamic String
+endian: little
+fields:
+  - name: length
+    offset: 0
+    size: 2
+    type: u16
+  - name: data
+    offset: 2
+    size: $length
+    type: bytes
+"#;
+        let template = StructTemplate::from_yaml(yaml).unwrap();
+        let mut data = vec![0u8; 6];
+        data[0..2].copy_from_slice(&4u16.to_le_bytes());
+        data[2..6].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+
+        let cmd = StructCommand::new(StructConfig::default());
+        let result = cmd.parse(&data, &template).unwrap();
+
+        assert_eq!(result.fields.len(), 2);
+        assert_eq!(result.fields[0].numeric_value, Some(4));
+        assert_eq!(result.fields[1].name, "data");
+        assert_eq!(result.fields[1].size, 4);
+        assert_eq!(result.fields[1].value, "de ad be ef");
+    }
+
+    #[test]
+    fn test_computed_field() {
+        let yaml = r#"
+name: Computed Test
+fields:
+  - name: a
+    offset: 0
+    size: 1
+    type: u8
+  - name: b
+    offset: 1
+    size: 1
+    type: u8
+  - name: sum
+    type: computed
+    value: $a + $b
+"#;
+        let template = StructTemplate::from_yaml(yaml).unwrap();
+        let data = vec![10u8, 32u8];
+
+        let cmd = StructCommand::new(StructConfig::default());
+        let result = cmd.parse(&data, &template).unwrap();
+
+        assert_eq!(result.fields.len(), 3);
+        assert_eq!(result.fields[2].name, "sum");
+        assert_eq!(result.fields[2].value, "42");
+        assert_eq!(result.fields[2].numeric_value, Some(42));
+    }
+
+    #[test]
+    fn test_conditional_field_with_bitfield_reference() {
+        let yaml = r#"
+name: Conditional Bitfield Test
+endian: big
+fields:
+  - name: flags
+    offset: 0
+    size: 1
+    type: u8
+    bitfields:
+      - name: urg
+        bits: 5
+        type: bool
+  - name: urgent_pointer
+    offset: 1
+    size: 1
+    type: u8
+    when: $flags.urg == 1
+"#;
+        let template = StructTemplate::from_yaml(yaml).unwrap();
+
+        // URG not set -> skip urgent_pointer
+        let data1 = vec![0x00u8, 0xFF];
+        let cmd = StructCommand::new(StructConfig::default());
+        let result1 = cmd.parse(&data1, &template).unwrap();
+        assert_eq!(result1.fields.len(), 2); // flags + flags.urg
+
+        // URG set -> parse urgent_pointer
+        let data2 = vec![0x20u8, 0xAB];
+        let result2 = cmd.parse(&data2, &template).unwrap();
+        assert_eq!(result2.fields.len(), 3);
+        assert_eq!(result2.fields[2].name, "urgent_pointer");
+        assert_eq!(result2.fields[2].numeric_value, Some(0xAB));
+    }
+
+    #[test]
+    fn test_conditional_field() {
+        let yaml = r#"
+name: Conditional Test
+fields:
+  - name: version
+    offset: 0
+    size: 1
+    type: u8
+  - name: extra
+    offset: 1
+    size: 1
+    type: u8
+    when: $version >= 2
+"#;
+        let template = StructTemplate::from_yaml(yaml).unwrap();
+
+        // version == 1: extra field should be skipped
+        let data1 = vec![1u8, 0xFF];
+        let cmd = StructCommand::new(StructConfig::default());
+        let result1 = cmd.parse(&data1, &template).unwrap();
+        assert_eq!(result1.fields.len(), 1);
+
+        // version == 2: extra field should be parsed
+        let data2 = vec![2u8, 0xAB];
+        let result2 = cmd.parse(&data2, &template).unwrap();
+        assert_eq!(result2.fields.len(), 2);
+        assert_eq!(result2.fields[1].numeric_value, Some(0xAB));
+    }
+
+    #[test]
+    fn test_bitfield_extraction() {
+        let yaml = r#"
+name: Bitfield Test
+endian: little
+fields:
+  - name: flags
+    offset: 0
+    size: 2
+    type: u16
+    bitfields:
+      - name: is_compressed
+        bits: 0
+        type: bool
+      - name: compression_level
+        bits: 2..5
+        type: u8
+"#;
+        let template = StructTemplate::from_yaml(yaml).unwrap();
+        // value = 0x0031 -> bit 0 = 1, bits 2-5 = 0b1100 (12)
+        let data = vec![0x31u8, 0x00u8];
+
+        let cmd = StructCommand::new(StructConfig::default());
+        let result = cmd.parse(&data, &template).unwrap();
+
+        assert_eq!(result.fields.len(), 3);
+        let is_compressed = &result.fields[1];
+        assert_eq!(is_compressed.name, "flags.is_compressed");
+        assert_eq!(is_compressed.value, "true");
+
+        let level = &result.fields[2];
+        assert_eq!(level.name, "flags.compression_level");
+        assert_eq!(level.numeric_value, Some(12));
+    }
+
+    #[test]
+    fn test_counted_array_of_simple_fields() {
+        let yaml = r#"
+name: Array Test
+endian: little
+fields:
+  - name: count
+    offset: 0
+    size: 1
+    type: u8
+  - name: values
+    offset: 1
+    size: 1
+    type: u8
+    count: $count
+"#;
+        let template = StructTemplate::from_yaml(yaml).unwrap();
+        let data = vec![3u8, 0xAA, 0xBB, 0xCC];
+
+        let cmd = StructCommand::new(StructConfig::default());
+        let result = cmd.parse(&data, &template).unwrap();
+
+        assert_eq!(result.fields.len(), 4); // count + 3 array elements
+        assert_eq!(result.fields[1].name, "values[0]");
+        assert_eq!(result.fields[1].numeric_value, Some(0xAA));
+        assert_eq!(result.fields[3].name, "values[2]");
+        assert_eq!(result.fields[3].numeric_value, Some(0xCC));
+    }
+
+    #[test]
+    fn test_auto_offset_with_prev_end() {
+        let yaml = r#"
+name: Auto Offset Test
+fields:
+  - name: first
+    offset: 0
+    size: 2
+    type: u16
+  - name: second
+    size: 1
+    type: u8
+"#;
+        let template = StructTemplate::from_yaml(yaml).unwrap();
+        let data = vec![0x00, 0x00, 0xAB];
+
+        let cmd = StructCommand::new(StructConfig::default());
+        let result = cmd.parse(&data, &template).unwrap();
+
+        assert_eq!(result.fields[1].offset, 2);
+        assert_eq!(result.fields[1].numeric_value, Some(0xAB));
     }
 }

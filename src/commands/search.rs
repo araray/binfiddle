@@ -10,7 +10,10 @@
 /// src/commands/search.rs
 use super::Command;
 use crate::error::{BinfiddleError, Result};
-use crate::utils::display::{format_match, format_match_with_context, format_match_colored, format_match_with_context_colored};
+use crate::utils::display::{
+    format_match, format_match_colored, format_match_with_context,
+    format_match_with_context_colored,
+};
 use crate::utils::parsing::SearchPattern;
 use crate::{BinaryData, ColorMode};
 
@@ -289,7 +292,8 @@ impl SearchCommand {
 
                             // Only include if this match starts within our primary chunk region
                             // (not in the overlap region that belongs to the next chunk)
-                            let primary_end = (*chunk_start + PARALLEL_CHUNK_SIZE).min(haystack.len());
+                            let primary_end =
+                                (*chunk_start + PARALLEL_CHUNK_SIZE).min(haystack.len());
                             if absolute_offset < primary_end || *chunk_end == haystack.len() {
                                 chunk_matches.push(SearchMatch {
                                     offset: absolute_offset,
@@ -335,7 +339,11 @@ impl SearchCommand {
     }
 
     /// Parallel mask-based search with wildcard support.
-    fn search_mask_parallel(&self, haystack: &[u8], mask: &[Option<u8>]) -> Result<Vec<SearchMatch>> {
+    fn search_mask_parallel(
+        &self,
+        haystack: &[u8],
+        mask: &[Option<u8>],
+    ) -> Result<Vec<SearchMatch>> {
         if mask.is_empty() {
             return Err(BinfiddleError::InvalidInput(
                 "Mask pattern cannot be empty".to_string(),
@@ -655,9 +663,12 @@ mod tests {
 
         let matches = cmd.search(&data).unwrap();
         let output = cmd.format_results(&data, &matches).unwrap();
-        
+
         // Should contain ANSI escape codes when color is Always
-        assert!(output.contains("\x1b["), "Colored output should contain ANSI codes");
+        assert!(
+            output.contains("\x1b["),
+            "Colored output should contain ANSI codes"
+        );
         // Should still contain the actual data
         assert!(output.contains("be ef"), "Output should contain match data");
     }
@@ -672,9 +683,12 @@ mod tests {
 
         let matches = cmd.search(&data).unwrap();
         let output = cmd.format_results(&data, &matches).unwrap();
-        
+
         // Should contain ANSI escape codes
-        assert!(output.contains("\x1b["), "Colored context output should contain ANSI codes");
+        assert!(
+            output.contains("\x1b["),
+            "Colored context output should contain ANSI codes"
+        );
         // Should contain context labels
         assert!(output.contains("Before:"), "Should show before context");
         assert!(output.contains("Match:"), "Should show match");
@@ -690,9 +704,12 @@ mod tests {
 
         let matches = cmd.search(&data).unwrap();
         let output = cmd.format_results(&data, &matches).unwrap();
-        
+
         // Should NOT contain ANSI escape codes when color is Never
-        assert!(!output.contains("\x1b["), "No-color output should not contain ANSI codes");
+        assert!(
+            !output.contains("\x1b["),
+            "No-color output should not contain ANSI codes"
+        );
         // Should still contain the actual data
         assert!(output.contains("be ef"), "Output should contain match data");
     }
@@ -716,7 +733,7 @@ mod tests {
     fn test_parallel_exact_search_large_data() {
         // Create data larger than PARALLEL_THRESHOLD
         let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
-        // Insert pattern at known locations
+                                                      // Insert pattern at known locations
         let pattern = [0xDE, 0xAD, 0xBE, 0xEF];
         for offset in [0, 100_000, 500_000, 1_000_000, 1_500_000, 2_097_148] {
             if offset + pattern.len() <= data.len() {
@@ -741,7 +758,7 @@ mod tests {
     fn test_parallel_mask_search_large_data() {
         // Create data larger than PARALLEL_THRESHOLD
         let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
-        // Insert pattern at known locations
+                                                      // Insert pattern at known locations
         let pattern = [0xDE, 0xAD, 0xBE, 0xEF];
         for offset in [0, 256_000, 512_000, 1_024_000] {
             if offset + pattern.len() <= data.len() {
@@ -768,7 +785,7 @@ mod tests {
         // PARALLEL_CHUNK_SIZE is 256KB, so put pattern at boundary
         let chunk_boundary = 256 * 1024;
         let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
-        
+
         // Pattern spanning the chunk boundary
         let pattern = [0xDE, 0xAD, 0xBE, 0xEF];
         let boundary_offset = chunk_boundary - 2; // Pattern starts 2 bytes before boundary
@@ -786,7 +803,7 @@ mod tests {
     fn test_parallel_no_overlap() {
         // Test no_overlap with parallel search
         let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
-        // Create overlapping patterns: 00 00 00 00 at multiple locations
+                                                      // Create overlapping patterns: 00 00 00 00 at multiple locations
         let overlapping_start = 1_000_000;
         for i in 0..8 {
             data[overlapping_start + i] = 0x00;
@@ -797,12 +814,12 @@ mod tests {
         let cmd = SearchCommand::new(config);
 
         let matches = cmd.search_parallel(&data).unwrap();
-        
+
         // With no_overlap, consecutive 00 00 patterns should not overlap
         // Check that matches don't overlap
         for i in 1..matches.len() {
             assert!(
-                matches[i].offset >= matches[i-1].offset + matches[i-1].data.len(),
+                matches[i].offset >= matches[i - 1].offset + matches[i - 1].data.len(),
                 "Matches should not overlap"
             );
         }
@@ -813,7 +830,7 @@ mod tests {
         // Verify parallel and sequential produce same results
         let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
         let pattern = [0xCA, 0xFE, 0xBA, 0xBE];
-        
+
         // Insert patterns at various locations
         for i in 0..100 {
             let offset = i * 20_000;
@@ -828,7 +845,11 @@ mod tests {
         let sequential = cmd.search(&data).unwrap();
         let parallel = cmd.search_parallel(&data).unwrap();
 
-        assert_eq!(sequential.len(), parallel.len(), "Match count should be equal");
+        assert_eq!(
+            sequential.len(),
+            parallel.len(),
+            "Match count should be equal"
+        );
         for (seq, par) in sequential.iter().zip(parallel.iter()) {
             assert_eq!(seq.offset, par.offset, "Offsets should match");
             assert_eq!(seq.data, par.data, "Data should match");

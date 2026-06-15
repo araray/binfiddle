@@ -434,10 +434,10 @@ fn main() -> Result<()> {
             range,
         } => {
             // Parse analysis type
-            let analysis = binfiddle::AnalysisType::from_str(analysis_type)?;
+            let analysis = analysis_type.parse::<binfiddle::AnalysisType>()?;
 
             // Parse output format
-            let format = binfiddle::AnalyzeOutputFormat::from_str(output_format)?;
+            let format = output_format.parse::<binfiddle::AnalyzeOutputFormat>()?;
 
             // Parse optional range
             let range_bounds = if let Some(range_str) = range {
@@ -511,7 +511,7 @@ fn main() -> Result<()> {
                 let max_size = data1.len().max(data2.len());
                 binfiddle::DiffFormat::auto_select(differences.len(), max_size)
             } else {
-                binfiddle::DiffFormat::from_str(diff_format)?
+                diff_format.parse::<binfiddle::DiffFormat>()?
             };
 
             // Warn about large diffs BEFORE outputting
@@ -575,9 +575,9 @@ fn main() -> Result<()> {
             // Parse configuration options
             let from_encoding = binfiddle::parse_encoding(from)?;
             let to_encoding = binfiddle::parse_encoding(to)?;
-            let newline_mode = binfiddle::NewlineMode::from_str(newlines)?;
-            let bom_mode = binfiddle::BomMode::from_str(bom)?;
-            let error_mode = binfiddle::ErrorMode::from_str(on_error)?;
+            let newline_mode = newlines.parse::<binfiddle::NewlineMode>()?;
+            let bom_mode = bom.parse::<binfiddle::BomMode>()?;
+            let error_mode = on_error.parse::<binfiddle::ErrorMode>()?;
 
             // Build configuration
             let config = binfiddle::ConvertConfig {
@@ -718,7 +718,7 @@ fn main() -> Result<()> {
 
             // Build configuration
             let config = binfiddle::StructConfig {
-                format: binfiddle::StructOutputFormat::from_str(output_format)?,
+                format: output_format.parse::<binfiddle::StructOutputFormat>()?,
                 get_fields: get.clone(),
                 list_fields: *list_fields,
             };

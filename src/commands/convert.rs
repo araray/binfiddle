@@ -109,7 +109,9 @@ pub enum NewlineMode {
     Keep,
 }
 
-impl NewlineMode {
+impl std::str::FromStr for NewlineMode {
+    type Err = BinfiddleError;
+
     /// Parse a newline mode from a string.
     ///
     /// # Arguments
@@ -123,7 +125,7 @@ impl NewlineMode {
     /// # Errors
     ///
     /// Returns `InvalidInput` if the mode string is not recognized.
-    pub fn from_str(s: &str) -> Result<Self> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "unix" | "lf" => Ok(NewlineMode::Unix),
             "windows" | "crlf" | "dos" => Ok(NewlineMode::Windows),
@@ -135,7 +137,9 @@ impl NewlineMode {
             ))),
         }
     }
+}
 
+impl NewlineMode {
     /// Get the newline byte sequence for this mode.
     pub fn as_bytes(&self) -> &'static [u8] {
         match self {
@@ -161,7 +165,9 @@ pub enum BomMode {
     Keep,
 }
 
-impl BomMode {
+impl std::str::FromStr for BomMode {
+    type Err = BinfiddleError;
+
     /// Parse a BOM mode from a string.
     ///
     /// # Arguments
@@ -175,7 +181,7 @@ impl BomMode {
     /// # Errors
     ///
     /// Returns `InvalidInput` if the mode string is not recognized.
-    pub fn from_str(s: &str) -> Result<Self> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "add" | "yes" | "true" => Ok(BomMode::Add),
             "remove" | "strip" | "no" | "false" => Ok(BomMode::Remove),
@@ -202,7 +208,9 @@ pub enum ErrorMode {
     Ignore,
 }
 
-impl ErrorMode {
+impl std::str::FromStr for ErrorMode {
+    type Err = BinfiddleError;
+
     /// Parse an error mode from a string.
     ///
     /// # Arguments
@@ -216,7 +224,7 @@ impl ErrorMode {
     /// # Errors
     ///
     /// Returns `InvalidInput` if the mode string is not recognized.
-    pub fn from_str(s: &str) -> Result<Self> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "strict" | "error" | "fail" => Ok(ErrorMode::Strict),
             "replace" | "substitute" => Ok(ErrorMode::Replace),
@@ -578,21 +586,21 @@ mod tests {
 
     #[test]
     fn test_newline_mode_from_str() {
-        assert_eq!(NewlineMode::from_str("unix").unwrap(), NewlineMode::Unix);
-        assert_eq!(NewlineMode::from_str("lf").unwrap(), NewlineMode::Unix);
+        assert_eq!("unix".parse::<NewlineMode>().unwrap(), NewlineMode::Unix);
+        assert_eq!("lf".parse::<NewlineMode>().unwrap(), NewlineMode::Unix);
         assert_eq!(
-            NewlineMode::from_str("windows").unwrap(),
+            "windows".parse::<NewlineMode>().unwrap(),
             NewlineMode::Windows
         );
-        assert_eq!(NewlineMode::from_str("crlf").unwrap(), NewlineMode::Windows);
-        assert_eq!(NewlineMode::from_str("mac").unwrap(), NewlineMode::Mac);
-        assert_eq!(NewlineMode::from_str("cr").unwrap(), NewlineMode::Mac);
-        assert_eq!(NewlineMode::from_str("keep").unwrap(), NewlineMode::Keep);
+        assert_eq!("crlf".parse::<NewlineMode>().unwrap(), NewlineMode::Windows);
+        assert_eq!("mac".parse::<NewlineMode>().unwrap(), NewlineMode::Mac);
+        assert_eq!("cr".parse::<NewlineMode>().unwrap(), NewlineMode::Mac);
+        assert_eq!("keep".parse::<NewlineMode>().unwrap(), NewlineMode::Keep);
     }
 
     #[test]
     fn test_newline_mode_invalid() {
-        assert!(NewlineMode::from_str("invalid").is_err());
+        assert!("invalid".parse::<NewlineMode>().is_err());
     }
 
     // ------------------------------------------------------------------------
@@ -601,15 +609,15 @@ mod tests {
 
     #[test]
     fn test_bom_mode_from_str() {
-        assert_eq!(BomMode::from_str("add").unwrap(), BomMode::Add);
-        assert_eq!(BomMode::from_str("remove").unwrap(), BomMode::Remove);
-        assert_eq!(BomMode::from_str("keep").unwrap(), BomMode::Keep);
-        assert_eq!(BomMode::from_str("strip").unwrap(), BomMode::Remove);
+        assert_eq!("add".parse::<BomMode>().unwrap(), BomMode::Add);
+        assert_eq!("remove".parse::<BomMode>().unwrap(), BomMode::Remove);
+        assert_eq!("keep".parse::<BomMode>().unwrap(), BomMode::Keep);
+        assert_eq!("strip".parse::<BomMode>().unwrap(), BomMode::Remove);
     }
 
     #[test]
     fn test_bom_mode_invalid() {
-        assert!(BomMode::from_str("invalid").is_err());
+        assert!("invalid".parse::<BomMode>().is_err());
     }
 
     // ------------------------------------------------------------------------
@@ -618,14 +626,14 @@ mod tests {
 
     #[test]
     fn test_error_mode_from_str() {
-        assert_eq!(ErrorMode::from_str("strict").unwrap(), ErrorMode::Strict);
-        assert_eq!(ErrorMode::from_str("replace").unwrap(), ErrorMode::Replace);
-        assert_eq!(ErrorMode::from_str("ignore").unwrap(), ErrorMode::Ignore);
+        assert_eq!("strict".parse::<ErrorMode>().unwrap(), ErrorMode::Strict);
+        assert_eq!("replace".parse::<ErrorMode>().unwrap(), ErrorMode::Replace);
+        assert_eq!("ignore".parse::<ErrorMode>().unwrap(), ErrorMode::Ignore);
     }
 
     #[test]
     fn test_error_mode_invalid() {
-        assert!(ErrorMode::from_str("invalid").is_err());
+        assert!("invalid".parse::<ErrorMode>().is_err());
     }
 
     // ------------------------------------------------------------------------

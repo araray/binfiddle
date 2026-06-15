@@ -35,9 +35,11 @@ pub enum AnalysisType {
     IndexOfCoincidence,
 }
 
-impl AnalysisType {
+impl std::str::FromStr for AnalysisType {
+    type Err = BinfiddleError;
+
     /// Parses an analysis type from a string.
-    pub fn from_str(s: &str) -> Result<Self> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "entropy" => Ok(AnalysisType::Entropy),
             "histogram" | "hist" => Ok(AnalysisType::Histogram),
@@ -61,9 +63,11 @@ pub enum OutputFormat {
     Json,
 }
 
-impl OutputFormat {
+impl std::str::FromStr for OutputFormat {
+    type Err = BinfiddleError;
+
     /// Parses an output format from a string.
-    pub fn from_str(s: &str) -> Result<Self> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "human" | "text" => Ok(OutputFormat::Human),
             "csv" => Ok(OutputFormat::Csv),
@@ -207,7 +211,7 @@ impl AnalyzeCommand {
             .collect();
 
         // Sort by count descending
-        histogram.sort_by(|a, b| b.count.cmp(&a.count));
+        histogram.sort_by_key(|b| std::cmp::Reverse(b.count));
 
         histogram
     }
@@ -225,7 +229,11 @@ impl AnalyzeCommand {
             frequencies[byte as usize] += 1;
         }
 
-        let len = if data.is_empty() { 1.0 } else { data.len() as f64 };
+        let len = if data.is_empty() {
+            1.0
+        } else {
+            data.len() as f64
+        };
 
         (0u16..256)
             .map(|byte_val| {
@@ -403,7 +411,11 @@ impl AnalyzeCommand {
     }
 
     /// Formats histogram results according to the configured output format.
-    pub fn format_histogram_results(&self, histogram: &[ByteFrequency], total_bytes: usize) -> String {
+    pub fn format_histogram_results(
+        &self,
+        histogram: &[ByteFrequency],
+        total_bytes: usize,
+    ) -> String {
         match self.config.format {
             OutputFormat::Human => self.format_histogram_human(histogram, total_bytes),
             OutputFormat::Csv => self.format_histogram_csv(histogram),
@@ -557,7 +569,9 @@ impl AnalyzeCommand {
             if start >= data.len() || end > data.len() || start >= end {
                 return Err(BinfiddleError::InvalidRange(format!(
                     "Invalid range [{}, {}) for data of length {}",
-                    start, end, data.len()
+                    start,
+                    end,
+                    data.len()
                 )));
             }
             &data[start..end]
@@ -781,44 +795,44 @@ mod tests {
     #[test]
     fn test_analysis_type_parsing() {
         assert!(matches!(
-            AnalysisType::from_str("entropy").unwrap(),
+            "entropy".parse::<AnalysisType>().unwrap(),
             AnalysisType::Entropy
         ));
         assert!(matches!(
-            AnalysisType::from_str("HISTOGRAM").unwrap(),
+            "HISTOGRAM".parse::<AnalysisType>().unwrap(),
             AnalysisType::Histogram
         ));
         assert!(matches!(
-            AnalysisType::from_str("ic").unwrap(),
+            "ic".parse::<AnalysisType>().unwrap(),
             AnalysisType::IndexOfCoincidence
         ));
         assert!(matches!(
-            AnalysisType::from_str("ioc").unwrap(),
+            "ioc".parse::<AnalysisType>().unwrap(),
             AnalysisType::IndexOfCoincidence
         ));
-        assert!(AnalysisType::from_str("invalid").is_err());
+        assert!("invalid".parse::<AnalysisType>().is_err());
     }
 
     #[test]
     fn test_output_format_parsing() {
         assert!(matches!(
-            OutputFormat::from_str("human").unwrap(),
+            "human".parse::<OutputFormat>().unwrap(),
             OutputFormat::Human
         ));
         assert!(matches!(
-            OutputFormat::from_str("CSV").unwrap(),
+            "CSV".parse::<OutputFormat>().unwrap(),
             OutputFormat::Csv
         ));
         assert!(matches!(
-            OutputFormat::from_str("json").unwrap(),
+            "json".parse::<OutputFormat>().unwrap(),
             OutputFormat::Json
         ));
-        assert!(OutputFormat::from_str("xml").is_err());
+        assert!("xml".parse::<OutputFormat>().is_err());
     }
 
     #[test]
     fn test_range_restriction() {
-        let data = vec![0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF];
+        let data = [0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF];
         let config = AnalyzeConfig {
             analysis_type: AnalysisType::Entropy,
             block_size: 0,
