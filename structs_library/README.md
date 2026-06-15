@@ -166,6 +166,35 @@ fields:
         type: u8
 ```
 
+### Bit-Level Field Example
+
+Fields can be declared at arbitrary bit positions and widths. Bit ordering
+follows the template's `endian` setting:
+
+- `endian: big` — MSB-first within each byte (network protocols, registers).
+- `endian: little` — LSB-first within each byte (some file formats).
+
+```yaml
+endian: big
+fields:
+  - name: data_offset
+    offset: 0x0C
+    bit_size: 4
+    type: u8
+
+  - name: reserved
+    offset: 0x0C
+    bit_offset: 4
+    bit_size: 3
+    type: u8
+
+  - name: ns_flag
+    offset: 0x0C
+    bit_offset: 7
+    bit_size: 1
+    type: u8
+```
+
 ### Array Example
 
 ```yaml

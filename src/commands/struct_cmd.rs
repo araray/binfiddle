@@ -53,6 +53,7 @@ use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::struct_bits::{byte_span, read_bits, sign_extend, BitAddress};
 use super::struct_expr::{eval_to_bool, eval_to_i128, resolve_size_or_offset, EvalContext};
 
 /// Endianness for multi-byte field interpretation.
@@ -151,6 +152,17 @@ impl FieldType {
             FieldType::U32 | FieldType::I32 => Some(4),
             FieldType::U64 | FieldType::I64 => Some(8),
             _ => None, // Variable size types
+        }
+    }
+
+    /// Returns the maximum bit width this type can hold, if it supports bit-level parsing.
+    pub fn max_bit_width(&self) -> Option<u8> {
+        match self {
+            FieldType::U8 | FieldType::I8 => Some(8),
+            FieldType::U16 | FieldType::I16 => Some(16),
+            FieldType::U32 | FieldType::I32 => Some(32),
+            FieldType::U64 | FieldType::I64 => Some(64),
+            _ => None,
         }
     }
 }
@@ -332,9 +344,18 @@ pub struct FieldDefinition {
     #[serde(default, deserialize_with = "deserialize_value_or_expression")]
     pub offset: Option<ValueOrExpression>,
 
-    /// Size in bytes (optional for computed/array fields)
+    /// Size in bytes (optional for computed/array fields or when bit_size is used)
     #[serde(default, deserialize_with = "deserialize_optional_value_or_expression")]
     pub size: Option<ValueOrExpression>,
+
+    /// Bit offset inside the byte at `offset` (0-7). Optional; defaults to 0.
+    #[serde(default)]
+    pub bit_offset: Option<u8>,
+
+    /// Size in bits (1-64). When present, the field is read at bit precision
+    /// and `size` is ignored.
+    #[serde(default)]
+    pub bit_size: Option<u8>,
 
     /// Data type for interpretation
     #[serde(rename = "type", default)]
@@ -462,6 +483,50 @@ impl StructTemplate {
                     }
                 }
             }
+
+            // Validate bit-level constraints
+            if let Some(bit_offset) = field.bit_offset {
+                if bit_offset >= 8 {
+                    return Err(BinfiddleError::Parse(format!(
+                        "Field '{}' has invalid bit_offset {}; must be 0-7",
+                        field.name, bit_offset
+                    )));
+                }
+            }
+            if let Some(bit_size) = field.bit_size {
+                if bit_size == 0 || bit_size > 64 {
+                    return Err(BinfiddleError::Parse(format!(
+                        "Field '{}' has invalid bit_size {}; must be 1-64",
+                        field.name, bit_size
+                    )));
+                }
+                if let Some(max_bits) = field.field_type.max_bit_width() {
+                    if bit_size > max_bits {
+                        return Err(BinfiddleError::Parse(format!(
+                            "Field '{}' has type {:?} which supports at most {} bits, but bit_size is {}",
+                            field.name, field.field_type, max_bits, bit_size
+                        )));
+                    }
+                } else {
+                    return Err(BinfiddleError::Parse(format!(
+                        "Field '{}' has type {:?} which does not support bit-level parsing",
+                        field.name, field.field_type
+                    )));
+                }
+
+                if field.count.is_some() {
+                    return Err(BinfiddleError::Parse(format!(
+                        "Field '{}' cannot use bit_size with counted arrays",
+                        field.name
+                    )));
+                }
+                if field.field_type == FieldType::Computed {
+                    return Err(BinfiddleError::Parse(format!(
+                        "Field '{}' cannot use bit_size with computed type",
+                        field.name
+                    )));
+                }
+            }
         }
 
         Ok(())
@@ -473,10 +538,16 @@ impl StructTemplate {
 pub struct ParsedField {
     /// Field name
     pub name: String,
-    /// Offset in data
+    /// Offset in data (start byte)
     pub offset: usize,
-    /// Size in bytes
+    /// Size in bytes (total bytes spanned)
     pub size: usize,
+    /// Bit offset inside the start byte, if this is a bit-level field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bit_offset: Option<u8>,
+    /// Size in bits, if this is a bit-level field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bit_size: Option<u8>,
     /// Raw bytes
     #[serde(skip)]
     pub raw_bytes: Vec<u8>,
@@ -651,6 +722,8 @@ impl StructCommand {
                 name: field.name.clone(),
                 offset,
                 size: 0,
+                bit_offset: None,
+                bit_size: None,
                 raw_bytes: Vec::new(),
                 value: format!("{}", value),
                 numeric_value: Some(value),
@@ -661,32 +734,56 @@ impl StructCommand {
             return Ok(vec![parsed]);
         }
 
-        // Resolve size for normal fields
-        let size = match &field.size {
-            Some(expr) => expr.resolve(ctx)?,
-            None => {
-                return Err(BinfiddleError::Parse(format!(
-                    "Field '{}' is missing required 'size'",
-                    field.name
-                )))
+        // Determine if this is a bit-level field.
+        let bit_offset_val = field.bit_offset.unwrap_or(0);
+        let (value, numeric_value, raw_bytes, size, bit_size_opt) = if let Some(bit_size) =
+            field.bit_size
+        {
+            let bit_start = BitAddress::new(offset, bit_offset_val).flat();
+            let span = byte_span(bit_offset_val, bit_size);
+            if offset + span > data.len() {
+                return Err(BinfiddleError::InvalidRange(format!(
+                    "Field '{}' at bit offset {} with bit size {} exceeds data length {} bits",
+                    field.name,
+                    bit_start,
+                    bit_size,
+                    data.len() * 8
+                )));
             }
+            let raw = data[offset..offset + span].to_vec();
+            let bits_value = read_bits(data, bit_start, bit_size as usize, endian);
+            let (value, numeric) = self.interpret_bits(bits_value, &field.field_type, bit_size)?;
+            (value, numeric, raw, span, Some(bit_size))
+        } else {
+            // Resolve size for normal byte-aligned fields
+            let size = match &field.size {
+                Some(expr) => expr.resolve(ctx)?,
+                None => {
+                    return Err(BinfiddleError::Parse(format!(
+                        "Field '{}' is missing required 'size'",
+                        field.name
+                    )))
+                }
+            };
+
+            // Bounds check
+            if offset + size > data.len() {
+                return Err(BinfiddleError::InvalidRange(format!(
+                    "Field '{}' at offset 0x{:x} with size {} exceeds data length {}",
+                    field.name,
+                    offset,
+                    size,
+                    data.len()
+                )));
+            }
+
+            let raw_bytes = data[offset..offset + size].to_vec();
+
+            // Parse based on type
+            let (value, numeric_value) =
+                self.interpret_field(&raw_bytes, &field.field_type, endian)?;
+            (value, numeric_value, raw_bytes, size, None)
         };
-
-        // Bounds check
-        if offset + size > data.len() {
-            return Err(BinfiddleError::InvalidRange(format!(
-                "Field '{}' at offset 0x{:x} with size {} exceeds data length {}",
-                field.name,
-                offset,
-                size,
-                data.len()
-            )));
-        }
-
-        let raw_bytes = data[offset..offset + size].to_vec();
-
-        // Parse based on type
-        let (value, numeric_value) = self.interpret_field(&raw_bytes, &field.field_type, endian)?;
 
         // Check enum mapping
         let enum_name = if let (Some(ref enum_map), Some(num)) = (&field.r#enum, numeric_value) {
@@ -695,11 +792,15 @@ impl StructCommand {
             None
         };
 
-        // Check assertion
-        let assertion_passed = field.assert.as_ref().map(|expected| {
-            let expected_bytes = self.parse_assert_value(expected);
-            expected_bytes.as_ref() == Some(&raw_bytes)
-        });
+        // Check assertion (only for byte-aligned fields; raw bytes include extra bits for bit fields)
+        let assertion_passed = if bit_size_opt.is_some() {
+            None
+        } else {
+            field.assert.as_ref().map(|expected| {
+                let expected_bytes = self.parse_assert_value(expected);
+                expected_bytes.as_ref() == Some(&raw_bytes)
+            })
+        };
 
         // Format the display value
         let display_value = if let Some(ref enum_name) = enum_name {
@@ -712,6 +813,8 @@ impl StructCommand {
             name: field.name.clone(),
             offset,
             size,
+            bit_offset: field.bit_offset,
+            bit_size: bit_size_opt,
             raw_bytes,
             value: display_value,
             numeric_value,
@@ -724,8 +827,9 @@ impl StructCommand {
 
         // Extract bitfields if defined and we have a numeric value
         if let (Some(bitfields), Some(numeric)) = (&field.bitfields, numeric_value) {
+            let max_bit = bit_size_opt.unwrap_or((size * 8) as u8);
             let mut bitfield_fields =
-                self.parse_bitfields(&field.name, offset, size, numeric, bitfields);
+                self.parse_bitfields(&field.name, offset, size, max_bit, numeric, bitfields);
             result.append(&mut bitfield_fields);
         }
 
@@ -812,6 +916,8 @@ impl StructCommand {
                     name: field_name,
                     offset: element_offset,
                     size,
+                    bit_offset: None,
+                    bit_size: None,
                     raw_bytes,
                     value,
                     numeric_value,
@@ -830,12 +936,12 @@ impl StructCommand {
         &self,
         parent_name: &str,
         parent_offset: usize,
-        parent_size: usize,
+        _parent_size: usize,
+        max_bit: u8,
         value: i128,
         bitfields: &[BitfieldDefinition],
     ) -> Vec<ParsedField> {
         let mut result = Vec::new();
-        let max_bit = (parent_size * 8) as u8;
 
         for bf in bitfields {
             let (start, end) = bf.bits;
@@ -867,6 +973,8 @@ impl StructCommand {
                 name,
                 offset: parent_offset,
                 size: 0,
+                bit_offset: None,
+                bit_size: None,
                 raw_bytes: Vec::new(),
                 value: display,
                 numeric_value: numeric,
@@ -877,6 +985,28 @@ impl StructCommand {
         }
 
         result
+    }
+
+    /// Interprets a bit-level value according to field type.
+    fn interpret_bits(
+        &self,
+        value: u64,
+        field_type: &FieldType,
+        bit_width: u8,
+    ) -> Result<(String, Option<i128>)> {
+        match field_type {
+            FieldType::U8 | FieldType::U16 | FieldType::U32 | FieldType::U64 => {
+                Ok((format!("{}", value), Some(value as i128)))
+            }
+            FieldType::I8 | FieldType::I16 | FieldType::I32 | FieldType::I64 => {
+                let signed = sign_extend(value, bit_width as usize)?;
+                Ok((format!("{}", signed), Some(signed as i128)))
+            }
+            _ => Err(BinfiddleError::Parse(format!(
+                "Type {:?} does not support bit-level parsing",
+                field_type
+            ))),
+        }
     }
 
     /// Interprets raw bytes according to field type.
@@ -1015,8 +1145,32 @@ impl StructCommand {
             .max()
             .unwrap_or(4)
             .max(4);
-        let offset_width = 10; // "0x00000000"
-        let size_width = 4;
+        let offset_width = parsed
+            .fields
+            .iter()
+            .map(|f| {
+                if f.bit_size.is_some() {
+                    "0x00000000.0".len()
+                } else {
+                    "0x00000000".len()
+                }
+            })
+            .max()
+            .unwrap_or(10)
+            .max(10);
+        let size_width = parsed
+            .fields
+            .iter()
+            .map(|f| {
+                if let Some(bit_size) = f.bit_size {
+                    format!("{}b", bit_size).len()
+                } else {
+                    format!("{}", f.size).len()
+                }
+            })
+            .max()
+            .unwrap_or(4)
+            .max(4);
         let value_width = parsed
             .fields
             .iter()
@@ -1057,14 +1211,27 @@ impl StructCommand {
                 None => "",
             };
 
+            let (offset_str, size_str) = if let Some(bit_size) = field.bit_size {
+                (
+                    format!("0x{:08x}.{} ", field.offset, field.bit_offset.unwrap_or(0)),
+                    format!("{}b", bit_size),
+                )
+            } else {
+                (
+                    format!("0x{:08x}  ", field.offset),
+                    format!("{}", field.size),
+                )
+            };
+
             output.push_str(&format!(
-                "{:<name_width$}  0x{:08x}  {:>size_width$}  {:<value_width$}  {}\n",
+                "{:<name_width$}  {:>offset_width$}  {:>size_width$}  {:<value_width$}  {}\n",
                 field.name,
-                field.offset,
-                field.size,
+                offset_str,
+                size_str,
                 field.value,
                 status,
                 name_width = name_width,
+                offset_width = offset_width,
                 size_width = size_width,
                 value_width = value_width
             ));
@@ -1131,22 +1298,33 @@ impl StructCommand {
         for field in &template.fields {
             let type_str = format!("{:?}", field.field_type);
             let desc = field.description.as_deref().unwrap_or("-");
-            let offset_str = field
-                .offset
-                .as_ref()
-                .map(|v| match v {
-                    ValueOrExpression::Number(n) => format!("0x{:08x}", n),
-                    ValueOrExpression::Expression(s) => s.clone(),
-                })
-                .unwrap_or_else(|| "auto".to_string());
-            let size_str = field
-                .size
-                .as_ref()
-                .map(|v| match v {
-                    ValueOrExpression::Number(n) => format!("{}", n),
-                    ValueOrExpression::Expression(s) => s.clone(),
-                })
-                .unwrap_or_else(|| "-".to_string());
+            let offset_str = {
+                let base = field
+                    .offset
+                    .as_ref()
+                    .map(|v| match v {
+                        ValueOrExpression::Number(n) => format!("0x{:08x}", n),
+                        ValueOrExpression::Expression(s) => s.clone(),
+                    })
+                    .unwrap_or_else(|| "auto".to_string());
+                if let Some(bit_offset) = field.bit_offset {
+                    format!("{}.{} ", base, bit_offset)
+                } else {
+                    base
+                }
+            };
+            let size_str = if let Some(bit_size) = field.bit_size {
+                format!("{}b", bit_size)
+            } else {
+                field
+                    .size
+                    .as_ref()
+                    .map(|v| match v {
+                        ValueOrExpression::Number(n) => format!("{}", n),
+                        ValueOrExpression::Expression(s) => s.clone(),
+                    })
+                    .unwrap_or_else(|| "-".to_string())
+            };
             output.push_str(&format!(
                 "{:<name_width$}  {:>10}  {:>4}  {:<type_width$}  {}\n",
                 field.name,
@@ -1941,5 +2119,195 @@ fields:
 
         assert_eq!(result.fields[1].offset, 2);
         assert_eq!(result.fields[1].numeric_value, Some(0xAB));
+    }
+
+    #[test]
+    fn test_bit_level_field_big_endian() {
+        let yaml = r#"
+name: Bit-level BE Test
+endian: big
+fields:
+  - name: nibble
+    offset: 0
+    bit_offset: 0
+    bit_size: 4
+    type: u8
+"#;
+        let template = StructTemplate::from_yaml(yaml).unwrap();
+        let data = vec![0xA0u8];
+
+        let cmd = StructCommand::new(StructConfig::default());
+        let result = cmd.parse(&data, &template).unwrap();
+
+        assert_eq!(result.fields.len(), 1);
+        assert_eq!(result.fields[0].name, "nibble");
+        assert_eq!(result.fields[0].numeric_value, Some(0xA));
+        assert_eq!(result.fields[0].bit_size, Some(4));
+        assert_eq!(result.fields[0].bit_offset, Some(0));
+    }
+
+    #[test]
+    fn test_bit_level_field_little_endian() {
+        let yaml = r#"
+name: Bit-level LE Test
+endian: little
+fields:
+  - name: nibble
+    offset: 0
+    bit_offset: 0
+    bit_size: 4
+    type: u8
+"#;
+        let template = StructTemplate::from_yaml(yaml).unwrap();
+        let data = vec![0x0Au8];
+
+        let cmd = StructCommand::new(StructConfig::default());
+        let result = cmd.parse(&data, &template).unwrap();
+
+        assert_eq!(result.fields[0].numeric_value, Some(0xA));
+    }
+
+    #[test]
+    fn test_bit_level_field_across_bytes() {
+        let yaml = r#"
+name: Bit-level Across Bytes Test
+endian: big
+fields:
+  - name: twelve_bits
+    offset: 0
+    bit_offset: 4
+    bit_size: 12
+    type: u16
+"#;
+        let template = StructTemplate::from_yaml(yaml).unwrap();
+        // Bytes: 0x12 0x34
+        // Big-endian bit stream starting at bit 4:
+        // 0001 0010 0011 0100
+        // skip first 4 bits -> 0010 0011 0100 = 0x234
+        let data = vec![0x12u8, 0x34u8];
+
+        let cmd = StructCommand::new(StructConfig::default());
+        let result = cmd.parse(&data, &template).unwrap();
+
+        assert_eq!(result.fields[0].numeric_value, Some(0x234));
+        assert_eq!(result.fields[0].size, 2);
+    }
+
+    #[test]
+    fn test_bit_level_signed_field() {
+        let yaml = r#"
+name: Bit-level Signed Test
+endian: big
+fields:
+  - name: signed_nibble
+    offset: 0
+    bit_offset: 0
+    bit_size: 4
+    type: i8
+"#;
+        let template = StructTemplate::from_yaml(yaml).unwrap();
+        // 0x80 => top 4 bits are 1000b = -8 in 4-bit two's complement
+        let data = vec![0x80u8];
+
+        let cmd = StructCommand::new(StructConfig::default());
+        let result = cmd.parse(&data, &template).unwrap();
+
+        assert_eq!(result.fields[0].numeric_value, Some(-8));
+    }
+
+    #[test]
+    fn test_bit_level_with_bitfields() {
+        let yaml = r#"
+name: Bit-level With Bitfields Test
+endian: big
+fields:
+  - name: packed
+    offset: 0
+    bit_size: 8
+    type: u8
+    bitfields:
+      - name: low
+        bits: 0..3
+        type: u8
+      - name: high
+        bits: 3..7
+        type: u8
+"#;
+        let template = StructTemplate::from_yaml(yaml).unwrap();
+        // 0xA7 = 1010 0111
+        // bits 0..3 = 0111 = 7
+        // bits 3..7 = 10100 = 20
+        let data = vec![0xA7u8];
+
+        let cmd = StructCommand::new(StructConfig::default());
+        let result = cmd.parse(&data, &template).unwrap();
+
+        assert_eq!(result.fields[0].numeric_value, Some(0xA7));
+        assert_eq!(result.fields[1].name, "packed.low");
+        assert_eq!(result.fields[1].numeric_value, Some(7));
+        assert_eq!(result.fields[2].name, "packed.high");
+        assert_eq!(result.fields[2].numeric_value, Some(20));
+    }
+
+    #[test]
+    fn test_bit_level_validation_rejects_bad_bit_offset() {
+        let yaml = r#"
+name: Bad Bit Offset Test
+fields:
+  - name: bad
+    offset: 0
+    bit_offset: 8
+    bit_size: 1
+    type: u8
+"#;
+        assert!(StructTemplate::from_yaml(yaml).unwrap().validate().is_err());
+    }
+
+    #[test]
+    fn test_bit_level_validation_rejects_zero_bit_size() {
+        let yaml = r#"
+name: Bad Bit Size Test
+fields:
+  - name: bad
+    offset: 0
+    bit_size: 0
+    type: u8
+"#;
+        assert!(StructTemplate::from_yaml(yaml).unwrap().validate().is_err());
+    }
+
+    #[test]
+    fn test_bit_level_validation_rejects_too_large_bit_size_for_type() {
+        let yaml = r#"
+name: Too Large Bit Size Test
+fields:
+  - name: bad
+    offset: 0
+    bit_size: 9
+    type: u8
+"#;
+        assert!(StructTemplate::from_yaml(yaml).unwrap().validate().is_err());
+    }
+
+    #[test]
+    fn test_bit_level_backwards_compatibility() {
+        // Existing byte-aligned templates should still work unchanged.
+        let yaml = r#"
+name: Byte-aligned Test
+endian: little
+fields:
+  - name: byte_value
+    offset: 0
+    size: 1
+    type: u8
+"#;
+        let template = StructTemplate::from_yaml(yaml).unwrap();
+        let data = vec![0x42u8];
+
+        let cmd = StructCommand::new(StructConfig::default());
+        let result = cmd.parse(&data, &template).unwrap();
+
+        assert_eq!(result.fields[0].numeric_value, Some(0x42));
+        assert_eq!(result.fields[0].bit_size, None);
     }
 }

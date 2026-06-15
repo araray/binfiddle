@@ -1143,7 +1143,9 @@ fields:
 |--------|----------|-------------|
 | `name` | Yes | Field identifier |
 | `offset` | Yes* | Byte offset or expression (default: `$@prev_end`) |
-| `size` | Yes* | Size in bytes or expression (omitted for `computed`) |
+| `size` | Yes* | Size in bytes or expression (omitted for `computed` or when `bit_size` is used) |
+| `bit_offset` | No | Bit index inside the byte at `offset` (0-7, default 0) |
+| `bit_size` | No | Size in bits (1-64). When present, the field is read at bit precision |
 | `type` | No | Data type (default: `bytes`) |
 | `assert` | No | Expected hex value for validation |
 | `enum` | No | Map numeric values to names |
@@ -1256,6 +1258,35 @@ fields:
     size: 1
     type: u8
     count: $count
+```
+
+**Bit-level fields**:
+
+Parse packed bit fields at arbitrary positions. Bit ordering follows the
+template `endian`:
+
+- `big` — MSB-first (network protocols, hardware registers).
+- `little` — LSB-first (some file formats).
+
+```yaml
+endian: big
+fields:
+  - name: data_offset
+    offset: 0x0C
+    bit_size: 4
+    type: u8
+
+  - name: reserved
+    offset: 0x0C
+    bit_offset: 4
+    bit_size: 3
+    type: u8
+
+  - name: ns_flag
+    offset: 0x0C
+    bit_offset: 7
+    bit_size: 1
+    type: u8
 ```
 
 #### List Template Fields

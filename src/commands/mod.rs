@@ -8,6 +8,7 @@ pub mod edit;
 pub mod patch;
 pub mod read;
 pub mod search;
+pub mod struct_bits;
 pub mod struct_cmd;
 pub mod struct_expr;
 pub mod write;

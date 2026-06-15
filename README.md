@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.12.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.13.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
 Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, and custom exploration of binary data across a variety of formats.
 
@@ -434,7 +434,7 @@ fields:
 
 **Dynamic Templates:**
 
-Templates support field references (`$fieldname`), magic variables (`$@prev_end`, `$@file_size`), conditional fields (`when:`), computed fields, bitfields, and counted arrays.
+Templates support field references (`$fieldname`), magic variables (`$@prev_end`, `$@file_size`), conditional fields (`when:`), computed fields, bitfields, counted arrays, and bit-level fields (`bit_offset`/`bit_size`).
 
 ```yaml
 fields:
@@ -652,8 +652,8 @@ cargo build --release
 | 1 | Core read/write/edit | ✅ Complete |
 | 2 | Search, analyze, diff | ✅ Complete |
 | 3 | Convert, patch, struct | ✅ Complete |
-| 4 | Template system evolution | 🔄 In progress |
-| 5 | Bit-level precision | 🔲 Planned |
+| 4 | Template system evolution | ✅ Complete |
+| 5 | Bit-level precision | 🔄 In progress |
 | 6 | Command chaining & pipelines | 🔲 Planned |
 | 7 | Live process memory | 🔲 Planned |
 | 8 | Advanced analysis & intelligence | 🔲 Planned |
