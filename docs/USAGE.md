@@ -1186,6 +1186,18 @@ binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
     --allow-write --force-writable write 0 CAFEBABE
 ```
 
+#### Process Memory Safety
+
+- **`--allow-write` is required** for any write back to process memory. Without it, `write` and `edit` commands are rejected.
+- **`--force-writable` requires `--allow-write`** and temporarily changes read-only pages to writable. Binfiddle restores the original protection after the write, but if the operation is interrupted or an error occurs the target pages may be left writable.
+- **Writes are bounded**: a write that would extend past the mapped region found in `/proc/<pid>/maps` is rejected.
+- **Cross-process access requires ptrace permissions**: reads use `process_vm_readv` and writes use `process_vm_writev` / ptrace injection. On systems with Yama LSM, check `/proc/sys/kernel/yama/ptrace_scope`:
+  - `0` — unrestricted (same-user processes are traceable).
+  - `1` — restricted to parent-child and direct descendants (default on many distributions).
+  - `2` — administrator-only.
+  - `3` — no ptrace allowed.
+- **Use at your own risk**: modifying running process memory can crash the target, corrupt data, or trigger security mitigations. Always target your own processes and prefer writable regions.
+
 #### Limitations
 
 - **Writable regions only by default**: cross-process writes use `process_vm_writev` and can only modify already-writable memory.
