@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.13.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.14.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
 Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, and custom exploration of binary data across a variety of formats.
 
@@ -38,6 +38,7 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 | **Diff** | Compare binary files with multiple output formats |
 | **Patch** | Apply binary patches (works with diff --format patch output) |
 | **Convert** | Text encoding conversion and line ending normalization |
+| **Chain** | Pipe multiple binfiddle commands together without shell escaping |
 | **Struct** | Parse binary data using YAML templates for structure definitions |
 
 ### Key Differentiators
@@ -378,6 +379,35 @@ diff modified.bin reconstructed.bin && echo "Perfect match!"
 0x00000002:be:ca
 ```
 
+#### `chain --step <COMMAND>` — Execute multiple commands in sequence
+
+Run several binfiddle commands in order, passing the byte output of each step as the input to the next. This avoids shell pipe escaping and makes multi-step transformations explicit.
+
+Intermediate steps must produce byte output (e.g., `write`, `edit`, `replace`, `convert`). The final step may produce text output.
+
+```bash
+# Replace a header and then patch a byte
+binfiddle -i firmware.bin -o patched.bin chain \
+    --step "edit replace 0..4 44415431" \
+    --step "write 8 00"
+
+# Chain from stdin and read the result
+printf '\x00\x11\x22\x33' | binfiddle chain \
+    --step "edit replace 0..2 4142" \
+    --step "read 0..4"
+
+# Run silently so intermediate diagnostics do not pollute stderr
+binfiddle --silent -i data.bin -o out.bin chain \
+    --step "edit replace 0..8 1234567890abcdef" \
+    --step "write 0 ff"
+```
+
+**Chain Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--step <COMMAND>` | One step to execute (repeatable, required). Quoting follows shell rules. |
+
 #### `struct <TEMPLATE>` — Parse binary data using structure templates
 
 Parse and interpret binary data according to YAML structure templates, useful for analyzing file headers, network protocols, and data structures.
@@ -653,8 +683,8 @@ cargo build --release
 | 2 | Search, analyze, diff | ✅ Complete |
 | 3 | Convert, patch, struct | ✅ Complete |
 | 4 | Template system evolution | ✅ Complete |
-| 5 | Bit-level precision | 🔄 In progress |
-| 6 | Command chaining & pipelines | 🔲 Planned |
+| 5 | Bit-level precision | ✅ Complete |
+| 6 | Command chaining & pipelines | ✅ Complete |
 | 7 | Live process memory | 🔲 Planned |
 | 8 | Advanced analysis & intelligence | 🔲 Planned |
 

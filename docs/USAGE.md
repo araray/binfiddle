@@ -14,6 +14,7 @@ This guide provides detailed usage instructions, examples, and common workflows 
   - [Comparing Files (Diff)](#comparing-files-diff)
   - [Converting Encodings](#converting-encodings)
   - [Applying Patches](#applying-patches)
+  - [Chaining Commands](#chaining-commands)
   - [Parsing Structures](#parsing-structures)
 - [Input and Output](#input-and-output)
   - [File I/O](#file-io)
@@ -47,6 +48,7 @@ binfiddle analyze --help      # Analyze command help
 binfiddle diff --help         # Diff command help
 binfiddle convert --help      # Convert command help
 binfiddle patch --help        # Patch command help
+binfiddle chain --help        # Chain command help
 binfiddle struct --help       # Struct command help
 binfiddle --version           # Version information
 ```
@@ -1074,6 +1076,53 @@ for file in *.bin; do
     binfiddle --output "patched_$file" patch "$file" fix.patch
 done
 ```
+
+---
+
+### Chaining Commands
+
+The `chain` command runs multiple binfiddle commands in sequence, passing the byte output of each step as the input to the next. This avoids shell pipe escaping and makes multi-step workflows explicit and portable.
+
+#### Syntax
+
+```bash
+binfiddle [OPTIONS] chain --step <COMMAND> [--step <COMMAND>] ...
+```
+
+- `--step` is repeatable and required.
+- Each step is parsed with shell quoting rules.
+- Intermediate steps must produce byte output (e.g., `write`, `edit`, `replace`, `convert`).
+- The final step may produce text output (e.g., `read`, `search`, `analyze`).
+
+#### Examples
+
+```bash
+# Replace a header and then patch a byte
+binfiddle -i firmware.bin -o patched.bin chain \
+    --step "edit replace 0..4 44415431" \
+    --step "write 8 00"
+
+# Read result after modification, without shell pipes
+binfiddle -i data.bin chain \
+    --step "edit replace 0..8 1234567890abcdef" \
+    --step "read 0..16"
+
+# Chain from stdin
+printf '\x00\x11\x22\x33' | binfiddle --input - chain \
+    --step "edit replace 0..2 4142" \
+    --step "read 0..4"
+
+# Suppress intermediate diagnostics
+binfiddle --silent -i data.bin -o out.bin chain \
+    --step "edit replace 0..2 9999" \
+    --step "write 0 42"
+```
+
+#### Important Notes
+
+- `chain` bypasses the normal command execution path and launches each step as a subprocess connected by temporary files.
+- If an intermediate step fails or produces no byte output, the chain aborts with a clear error.
+- Use `--silent` to prevent intermediate commands from writing diagnostics to stderr.
 
 ---
 

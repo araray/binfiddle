@@ -233,10 +233,27 @@ enum Commands {
         #[arg(long, default_value = "human", value_parser = ["human", "json", "yaml"])]
         output_format: String,
     },
+
+    /// Execute multiple binfiddle commands in sequence
+    Chain {
+        /// Command step to execute (can be repeated)
+        #[arg(long, required = true)]
+        step: Vec<String>,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Handle chain command early, before normal input loading.
+    if let Commands::Chain { step } = &cli.command {
+        return binfiddle::ChainExecutor::execute(
+            step,
+            cli.input.as_deref(),
+            cli.output.as_deref(),
+            cli.silent,
+        );
+    }
 
     // Check if this command needs binary_data loaded
     let needs_input = matches!(
@@ -765,6 +782,10 @@ fn main() -> Result<()> {
             }
 
             false // Struct handles its own output
+        }
+        Commands::Chain { .. } => {
+            // Chain is handled before this match.
+            unreachable!()
         }
     };
 

@@ -2,6 +2,7 @@
 use crate::{BinaryData, Result};
 
 pub mod analyze;
+pub mod chain;
 pub mod convert;
 pub mod diff;
 pub mod edit;

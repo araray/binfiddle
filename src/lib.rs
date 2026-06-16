@@ -6,12 +6,13 @@ pub mod utils;
 use std::io::Read;
 
 pub use commands::{
-    parse_encoding, parse_ignore_ranges, AnalysisType, AnalyzeCommand, AnalyzeConfig,
-    AnalyzeOutputFormat, BitfieldDefinition, BomMode, Command, ConvertCommand, ConvertConfig,
-    DiffCommand, DiffConfig, DiffEntry, DiffFormat, EditCommand, EditOperation, Endianness,
-    ErrorMode, FieldDefinition, FieldType, NewlineMode, ParsedField, ParsedStruct, PatchCommand,
-    PatchConfig, PatchEntry, PatchResult, ReadCommand, SearchCommand, SearchConfig, StructCommand,
-    StructConfig, StructOutputFormat, StructTemplate, ValueOrExpression, WriteCommand,
+    chain::ChainExecutor, parse_encoding, parse_ignore_ranges, AnalysisType, AnalyzeCommand,
+    AnalyzeConfig, AnalyzeOutputFormat, BitfieldDefinition, BomMode, Command, ConvertCommand,
+    ConvertConfig, DiffCommand, DiffConfig, DiffEntry, DiffFormat, EditCommand, EditOperation,
+    Endianness, ErrorMode, FieldDefinition, FieldType, NewlineMode, ParsedField, ParsedStruct,
+    PatchCommand, PatchConfig, PatchEntry, PatchResult, ReadCommand, SearchCommand, SearchConfig,
+    StructCommand, StructConfig, StructOutputFormat, StructTemplate, ValueOrExpression,
+    WriteCommand,
 };
 pub use error::{BinfiddleError, Result};
 pub use utils::parsing::validate_search_pattern;

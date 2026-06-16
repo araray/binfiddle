@@ -20,6 +20,13 @@ pub enum BinfiddleError {
 
     #[error("Operation not supported: {0}")]
     UnsupportedOperation(String),
+
+    #[error("Chain step {step} failed: {command}\n{stderr}")]
+    ChainStepFailed {
+        step: usize,
+        command: String,
+        stderr: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, BinfiddleError>;

@@ -101,7 +101,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "binfiddle"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "atty",
@@ -117,6 +117,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "shell-words",
  "tempfile",
  "termcolor",
  "thiserror",
@@ -683,6 +684,12 @@ dependencies = [
  "serde",
  "unsafe-libyaml",
 ]
+
+[[package]]
+name = "shell-words"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shlex"
