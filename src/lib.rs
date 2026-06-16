@@ -295,6 +295,14 @@ impl BinaryData {
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
+
+    /// Returns an immutable view of the underlying bytes.
+    ///
+    /// For file-backed data this is a slice into the memory-mapped region, so
+    /// callers do not trigger a full copy of the file.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.data.as_bytes()
+    }
 }
 
 #[cfg(test)]

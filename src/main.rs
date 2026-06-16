@@ -546,9 +546,8 @@ fn main() -> Result<()> {
             // Create and execute search command
             let search_cmd = binfiddle::SearchCommand::new(config);
 
-            // Read all data for searching
-            let chunk = binary_data.read_range(0, None)?;
-            let bytes = chunk.get_bytes();
+            // Search directly against the backing bytes without copying the whole file.
+            let bytes = binary_data.as_bytes();
 
             // Perform search
             let matches = search_cmd.search(bytes)?;
@@ -597,9 +596,8 @@ fn main() -> Result<()> {
             // Create and execute analyze command
             let analyze_cmd = binfiddle::AnalyzeCommand::new(config);
 
-            // Read all data for analysis
-            let chunk = binary_data.read_range(0, None)?;
-            let bytes = chunk.get_bytes();
+            // Analyze directly against the backing bytes without copying the whole file.
+            let bytes = binary_data.as_bytes();
 
             // Perform analysis and print results
             let output = analyze_cmd.analyze(bytes)?;
@@ -729,9 +727,8 @@ fn main() -> Result<()> {
             // Create and execute convert command
             let convert_cmd = binfiddle::ConvertCommand::new(config);
 
-            // Read all data for conversion
-            let chunk = binary_data.read_range(0, None)?;
-            let bytes = chunk.get_bytes();
+            // Convert directly against the backing bytes without copying the whole file.
+            let bytes = binary_data.as_bytes();
 
             // Perform conversion
             let converted = convert_cmd.convert(bytes)?;
@@ -937,18 +934,18 @@ fn main() -> Result<()> {
             binfiddle::process_memory::write_process_memory(
                 pid,
                 address,
-                binary_data.read_range(0, None)?.get_bytes(),
+                binary_data.as_bytes(),
                 cli.force_writable,
             )?;
         } else if cli.in_file {
             if let Some(path) = &cli.input {
-                std::fs::write(path, binary_data.read_range(0, None)?.get_bytes())?;
+                std::fs::write(path, binary_data.as_bytes())?;
             }
         } else if let Some(output) = &cli.output {
             if output == "-" {
-                io::stdout().write_all(binary_data.read_range(0, None)?.get_bytes())?;
+                io::stdout().write_all(binary_data.as_bytes())?;
             } else {
-                std::fs::write(output, binary_data.read_range(0, None)?.get_bytes())?;
+                std::fs::write(output, binary_data.as_bytes())?;
             }
         } else if !cli.silent {
             eprintln!("Warning: Changes were made but no output specified");
