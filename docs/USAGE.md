@@ -10,6 +10,7 @@ This guide provides detailed usage instructions, examples, and common workflows 
   - [Writing Data](#writing-data)
   - [Editing Data](#editing-data)
   - [Searching Data](#searching-data)
+  - [Hashing Data](#hashing-data)
   - [Analyzing Data](#analyzing-data)
   - [Comparing Files (Diff)](#comparing-files-diff)
   - [Converting Encodings](#converting-encodings)
@@ -493,6 +494,29 @@ binfiddle search "[\x20-\x7E]{10,}\x00" --input-format regex -i data.bin --all
 | `--context <N>` | Show N bytes before/after each match |
 | `--no-overlap` | Prevent overlapping matches |
 | `--color <MODE>` | Color output: always, auto, never |
+| `--block-size <SIZE>` | Stream input in blocks (e.g. `64M`, `1G`) |
+
+#### Streaming Search for Very Large Files
+
+By default `search` memory-maps the input. For files that are larger than RAM,
+or when you want to avoid paging the whole file into memory, use
+`--block-size` to stream the input in fixed-size blocks. Boundary matches are
+still detected.
+
+```bash
+# Search a 100 GB file without loading it whole
+binfiddle -i huge.bin search "7F454C46" --all --block-size 64M
+
+# Stop at the first match while streaming
+binfiddle -i huge.bin search "CAFEBABE" --block-size 256M
+```
+
+Limitations of streaming mode:
+
+- Only `hex`, `ascii`, `dec`, `oct`, `bin`, and `mask` patterns are supported.
+  Regex patterns need an unbounded lookback window, so they require the default
+  memory-mapped path.
+- `--context` is disabled because the surrounding bytes are not kept in memory.
 
 #### Search Output Formats
 
@@ -519,6 +543,60 @@ binfiddle search "[\x20-\x7E]{10,}\x00" --input-format regex -i data.bin --all
 ```
 
 ---
+
+
+### Hashing Data
+
+The `hash` command computes common digests over binary data.
+
+#### Supported Algorithms
+
+| Algorithm | Digest Size | Use Case |
+|-----------|-------------|----------|
+| `md5` | 128-bit | Legacy checksums |
+| `sha256` | 256-bit | Cryptographic verification |
+| `blake3` | 256-bit | Fast, modern cryptographic hash |
+| `crc32` | 32-bit | Data integrity / zip-style checksums |
+
+#### Syntax
+
+```bash
+binfiddle -i <FILE> hash <ALGORITHM> [OPTIONS]
+```
+
+#### Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--output-format` | Output encoding (`hex`) | `hex` |
+| `--block-size <N>` | Hash non-overlapping blocks of N bytes (`0` = whole file) | `0` |
+
+#### Examples
+
+```bash
+# SHA-256 of an entire file
+binfiddle -i firmware.bin hash sha256
+
+# MD5 checksum
+binfiddle -i file.bin hash md5
+
+# Per-block CRC32 (useful for finding corrupted regions)
+binfiddle -i disk.img hash crc32 --block-size 4096
+
+# BLAKE3 of a file
+binfiddle -i data.bin hash blake3
+```
+
+#### Block-Based Output
+
+When `--block-size` is set, each block is printed on its own line with its
+starting offset:
+
+```
+0x00000000: a3b2c1d4
+0x00001000: e5f6a7b8
+...
+```
 
 ### Analyzing Data
 
@@ -1642,6 +1720,13 @@ binfiddle -i file.bin --in-file write 0 FF -o out.bin  # ERROR
 cp file.bin file.bin.bak
 binfiddle -i file.bin --in-file write 0 FF
 ```
+
+**In-place `write` uses a mutable memory map.** When `--in-file` is combined
+with the `write` command, binfiddle maps the file read-write and flushes each
+change directly to disk. This avoids copying the entire file into memory, so
+you can patch large files efficiently. Size-changing operations (`insert`,
+`remove`, `replace`) still require an in-memory copy and are written back when
+finished.
 
 ---
 

@@ -6,6 +6,7 @@ pub mod chain;
 pub mod convert;
 pub mod diff;
 pub mod edit;
+pub mod hash;
 pub mod patch;
 pub mod read;
 pub mod search;
@@ -20,6 +21,7 @@ pub use analyze::{
 pub use convert::{parse_encoding, BomMode, ConvertCommand, ConvertConfig, ErrorMode, NewlineMode};
 pub use diff::{parse_ignore_ranges, DiffCommand, DiffConfig, DiffEntry, DiffFormat};
 pub use edit::{EditCommand, EditOperation};
+pub use hash::{HashAlgorithm, HashCommand, HashConfig, HashOutputFormat};
 pub use patch::{PatchCommand, PatchConfig, PatchEntry, PatchResult};
 pub use read::ReadCommand;
 pub use search::{SearchCommand, SearchConfig, SearchMatch};

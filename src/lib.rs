@@ -10,10 +10,10 @@ pub use commands::{
     chain::ChainExecutor, parse_encoding, parse_ignore_ranges, AnalysisType, AnalyzeCommand,
     AnalyzeConfig, AnalyzeOutputFormat, BitfieldDefinition, BomMode, Command, ConvertCommand,
     ConvertConfig, DiffCommand, DiffConfig, DiffEntry, DiffFormat, EditCommand, EditOperation,
-    Endianness, ErrorMode, FieldDefinition, FieldType, NewlineMode, ParsedField, ParsedStruct,
-    PatchCommand, PatchConfig, PatchEntry, PatchResult, ReadCommand, SearchCommand, SearchConfig,
-    StructCommand, StructConfig, StructOutputFormat, StructTemplate, ValueOrExpression,
-    WriteCommand,
+    Endianness, ErrorMode, FieldDefinition, FieldType, HashAlgorithm, HashCommand, HashConfig,
+    HashOutputFormat, NewlineMode, ParsedField, ParsedStruct, PatchCommand, PatchConfig,
+    PatchEntry, PatchResult, ReadCommand, SearchCommand, SearchConfig, StructCommand, StructConfig,
+    StructOutputFormat, StructTemplate, ValueOrExpression, WriteCommand,
 };
 pub use error::{BinfiddleError, Result};
 pub use utils::parsing::validate_search_pattern;
@@ -39,6 +39,8 @@ pub enum ColorMode {
 #[derive(Debug, Clone)]
 pub enum BinarySource {
     File(std::path::PathBuf),
+    /// File opened read-write for in-place mutation via a mutable memory map.
+    WritableFile(std::path::PathBuf),
     Stdin,
     MemoryAddress(usize),
     /// Read memory from the current process via `/proc/self/mem`.
@@ -60,11 +62,14 @@ pub enum BinarySource {
 /// Internal backing storage for [`BinaryData`].
 ///
 /// File-backed data is mapped read-only with `memmap2`. Mutation methods lazily
-/// copy the mapped contents into an owned `Vec<u8>` before modifying them.
+/// copy the mapped contents into an owned `Vec<u8>` before modifying them, except
+/// for in-place writes via [`BinarySource::WritableFile`], which use a mutable
+/// memory map and flush changes directly back to disk.
 #[derive(Debug)]
 enum DataBacking {
     Owned(Vec<u8>),
     Mmap(memmap2::Mmap),
+    MmapMut(memmap2::MmapMut),
 }
 
 impl DataBacking {
@@ -72,6 +77,7 @@ impl DataBacking {
         match self {
             DataBacking::Owned(v) => v.as_slice(),
             DataBacking::Mmap(m) => m.as_ref(),
+            DataBacking::MmapMut(m) => m.as_ref(),
         }
     }
 
@@ -136,6 +142,22 @@ impl BinaryData {
                     // until a mutation method is called, at which point the mapped
                     // region is copied into an owned Vec before any writes occur.
                     DataBacking::Mmap(unsafe { memmap2::Mmap::map(&file)? })
+                }
+            }
+            BinarySource::WritableFile(path) => {
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(path)?;
+                let metadata = file.metadata()?;
+                if metadata.len() == 0 {
+                    DataBacking::Owned(Vec::new())
+                } else {
+                    // Safety: the file is opened read-write and the mapping is flushed
+                    // before any other process observes the changes. Size-changing edits
+                    // copy the data into an owned Vec first, so the mutable map is only
+                    // used for fixed-size in-place writes.
+                    DataBacking::MmapMut(unsafe { memmap2::MmapMut::map_mut(&file)? })
                 }
             }
             BinarySource::Stdin => {
@@ -214,36 +236,62 @@ impl BinaryData {
     /// This is called lazily by mutation methods so that read-only operations on
     /// file-backed data can keep using the memory-mapped region.
     fn ensure_owned(&mut self) {
-        if matches!(&self.data, DataBacking::Mmap(_)) {
+        if matches!(&self.data, DataBacking::Mmap(_) | DataBacking::MmapMut(_)) {
             let old = std::mem::replace(&mut self.data, DataBacking::Owned(Vec::new()));
-            if let DataBacking::Mmap(mmap) = old {
-                self.data = DataBacking::Owned(mmap.as_ref().to_vec());
+            match old {
+                DataBacking::Mmap(mmap) => {
+                    self.data = DataBacking::Owned(mmap.as_ref().to_vec());
+                }
+                DataBacking::MmapMut(mmap) => {
+                    self.data = DataBacking::Owned(mmap.as_ref().to_vec());
+                }
+                DataBacking::Owned(_) => unreachable!("replace produced an empty Owned"),
             }
         }
     }
 
     pub fn write_range(&mut self, start: usize, data: &[u8]) -> Result<()> {
-        self.ensure_owned();
-        let bytes = match &mut self.data {
-            DataBacking::Owned(v) => v.as_mut_slice(),
-            DataBacking::Mmap(_) => unreachable!("ensure_owned just converted Mmap to Owned"),
-        };
+        let data_len = data.len();
+        match &mut self.data {
+            DataBacking::MmapMut(mmap) => {
+                let bytes = mmap.as_mut();
+                if start + data_len > bytes.len() {
+                    return Err(BinfiddleError::InvalidRange(
+                        "Write operation would exceed data bounds".to_string(),
+                    ));
+                }
+                bytes[start..start + data_len].copy_from_slice(data);
+                mmap.flush()?;
+                Ok(())
+            }
+            _ => {
+                self.ensure_owned();
+                let bytes = match &mut self.data {
+                    DataBacking::Owned(v) => v.as_mut_slice(),
+                    DataBacking::Mmap(_) | DataBacking::MmapMut(_) => {
+                        unreachable!("ensure_owned just converted backing to Owned")
+                    }
+                };
 
-        if start + data.len() > bytes.len() {
-            return Err(BinfiddleError::InvalidRange(
-                "Write operation would exceed data bounds".to_string(),
-            ));
+                if start + data_len > bytes.len() {
+                    return Err(BinfiddleError::InvalidRange(
+                        "Write operation would exceed data bounds".to_string(),
+                    ));
+                }
+
+                bytes[start..start + data_len].copy_from_slice(data);
+                Ok(())
+            }
         }
-
-        bytes[start..start + data.len()].copy_from_slice(data);
-        Ok(())
     }
 
     pub fn insert_data(&mut self, position: usize, data: &[u8]) -> Result<()> {
         self.ensure_owned();
         let vec = match &mut self.data {
             DataBacking::Owned(v) => v,
-            DataBacking::Mmap(_) => unreachable!("ensure_owned just converted Mmap to Owned"),
+            DataBacking::Mmap(_) | DataBacking::MmapMut(_) => {
+                unreachable!("ensure_owned just converted backing to Owned")
+            }
         };
 
         if position > vec.len() {
@@ -260,7 +308,9 @@ impl BinaryData {
         self.ensure_owned();
         let vec = match &mut self.data {
             DataBacking::Owned(v) => v,
-            DataBacking::Mmap(_) => unreachable!("ensure_owned just converted Mmap to Owned"),
+            DataBacking::Mmap(_) | DataBacking::MmapMut(_) => {
+                unreachable!("ensure_owned just converted backing to Owned")
+            }
         };
 
         if start >= vec.len() || end > vec.len() || start >= end {
@@ -515,5 +565,41 @@ mod tests {
 
         data.remove_range(3, 4).unwrap();
         assert_eq!(data.read_range(0, None).unwrap().get_bytes(), b"XYZ!");
+    }
+
+    #[test]
+    fn test_writable_file_in_place_write() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"HELLO WORLD").unwrap();
+        let path = tmp.path().to_path_buf();
+
+        let mut data = BinaryData::new(BinarySource::WritableFile(path.clone()), 8, 16).unwrap();
+        data.write_range(6, b"EARTH").unwrap();
+
+        // In-memory view reflects the write.
+        assert_eq!(
+            data.read_range(0, None).unwrap().get_bytes(),
+            b"HELLO EARTH"
+        );
+
+        // The change is also visible on disk without an explicit save.
+        let on_disk = std::fs::read(&path).unwrap();
+        assert_eq!(on_disk, b"HELLO EARTH");
+    }
+
+    #[test]
+    fn test_writable_file_size_changing_edit_falls_back_to_owned() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"ABCD").unwrap();
+        let path = tmp.path().to_path_buf();
+
+        let mut data = BinaryData::new(BinarySource::WritableFile(path.clone()), 8, 16).unwrap();
+        // Insert forces a copy because the mapped region cannot grow.
+        data.insert_data(4, b"EF").unwrap();
+        assert_eq!(data.read_range(0, None).unwrap().get_bytes(), b"ABCDEF");
+
+        // The file on disk is unchanged until we write it back explicitly.
+        let on_disk = std::fs::read(&path).unwrap();
+        assert_eq!(on_disk, b"ABCD");
     }
 }

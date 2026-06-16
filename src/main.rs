@@ -122,6 +122,20 @@ enum Commands {
         data: Option<String>,
     },
 
+    /// Compute a hash digest of the binary data
+    Hash {
+        /// Hash algorithm: md5, sha256, blake3, crc32
+        algorithm: String,
+
+        /// Output format: hex
+        #[arg(long, default_value = "hex", value_parser = ["hex"])]
+        output_format: String,
+
+        /// Block size for block-based hashing (0 = whole file)
+        #[arg(long, default_value = "0")]
+        block_size: usize,
+    },
+
     /// Search for patterns in binary data
     Search {
         /// Pattern to search for (interpreted per --input-format)
@@ -154,6 +168,10 @@ enum Commands {
         /// Colorize output (always, auto, never)
         #[arg(long, default_value = "auto", value_parser = ["always", "auto", "never"])]
         color: String,
+
+        /// Stream input in blocks of this size (e.g., 64M, 1G, 256K)
+        #[arg(long)]
+        block_size: Option<String>,
     },
 
     /// Analyze binary data (entropy, histogram, index of coincidence)
@@ -356,12 +374,88 @@ fn main() -> Result<()> {
         binfiddle::process_memory::FillMode::Error
     };
 
+    // Handle streaming search before loading binary data, so huge inputs are
+    // not memory-mapped or copied in full.
+    if let Commands::Search {
+        pattern,
+        input_format,
+        all,
+        count,
+        offsets_only,
+        context,
+        no_overlap,
+        color,
+        block_size: Some(block_size_str),
+    } = command
+    {
+        if source_is_process_memory {
+            return Err(BinfiddleError::InvalidInput(
+                "--block-size cannot be used with --process-self or --pid".to_string(),
+            ));
+        }
+        if *context > 0 {
+            return Err(BinfiddleError::InvalidInput(
+                "--context is not supported with --block-size streaming search".to_string(),
+            ));
+        }
+
+        let block_size = parse_byte_size(block_size_str)?;
+
+        if !cli.silent {
+            let warnings = validate_search_pattern(pattern, input_format);
+            for warning in warnings {
+                eprintln!("{}\n", warning);
+            }
+        }
+
+        let search_pattern = parse_search_pattern(pattern, input_format)?;
+        let color_mode = match color.as_str() {
+            "always" => binfiddle::ColorMode::Always,
+            "never" => binfiddle::ColorMode::Never,
+            _ => binfiddle::ColorMode::Auto,
+        };
+
+        let config = SearchConfig {
+            pattern: search_pattern,
+            format: cli.format.clone(),
+            chunk_size: cli.chunk_size,
+            find_all: *all,
+            count_only: *count,
+            offsets_only: *offsets_only,
+            context: *context,
+            no_overlap: *no_overlap,
+            color: color_mode,
+        };
+        let search_cmd = binfiddle::SearchCommand::new(config);
+
+        let input: Box<dyn Read> = match cli.input.as_deref() {
+            Some("-") | None => Box::new(io::stdin()),
+            Some(path) => Box::new(std::fs::File::open(path)?),
+        };
+
+        let matches = search_cmd.search_stream(input, block_size)?;
+
+        if matches.is_empty() {
+            if !cli.silent {
+                eprintln!("No matches found");
+            }
+        } else {
+            let output = search_cmd.format_results(&[], &matches)?;
+            if !output.is_empty() {
+                println!("{}", output);
+            }
+        }
+
+        return Ok(());
+    }
+
     // Check if this command needs binary_data loaded
     let needs_input = matches!(
         command,
         Commands::Read { .. }
             | Commands::Write { .. }
             | Commands::Edit { .. }
+            | Commands::Hash { .. }
             | Commands::Search { .. }
             | Commands::Convert { .. }
             | Commands::Analyze { .. }
@@ -395,7 +489,14 @@ fn main() -> Result<()> {
                     BinaryData::new(BinarySource::RawData(data), cli.chunk_size, cli.width)?
                 }
                 Some(path) => {
-                    BinaryData::new(BinarySource::File(path.into()), cli.chunk_size, cli.width)?
+                    let writable_in_place =
+                        matches!(command, Commands::Write { .. }) && cli.in_file;
+                    let source = if writable_in_place {
+                        BinarySource::WritableFile(path.into())
+                    } else {
+                        BinarySource::File(path.into())
+                    };
+                    BinaryData::new(source, cli.chunk_size, cli.width)?
                 }
             }
         }
@@ -511,6 +612,7 @@ fn main() -> Result<()> {
             context,
             no_overlap,
             color,
+            block_size: _,
         } => {
             // Validate pattern and show warnings if format might be incorrect
             let warnings = validate_search_pattern(pattern, input_format);
@@ -604,6 +706,28 @@ fn main() -> Result<()> {
             println!("{}", output);
 
             false // Analyze doesn't modify data
+        }
+        Commands::Hash {
+            algorithm,
+            output_format,
+            block_size,
+        } => {
+            let algorithm = algorithm.parse::<binfiddle::HashAlgorithm>()?;
+            let output_format = output_format.parse::<binfiddle::HashOutputFormat>()?;
+
+            let config = binfiddle::HashConfig {
+                algorithm,
+                output_format,
+                block_size: *block_size,
+            };
+            let hash_cmd = binfiddle::HashCommand::new(config);
+
+            // Hash directly against the backing bytes without copying the whole file.
+            let bytes = binary_data.as_bytes();
+            let output = hash_cmd.compute(bytes)?;
+            println!("{}", output);
+
+            false // Hash doesn't modify data
         }
         Commands::Diff {
             file1,
@@ -939,7 +1063,10 @@ fn main() -> Result<()> {
             )?;
         } else if cli.in_file {
             if let Some(path) = &cli.input {
-                std::fs::write(path, binary_data.as_bytes())?;
+                // WritableFile has already flushed changes directly to disk.
+                if !matches!(binary_data.source(), BinarySource::WritableFile(_)) {
+                    std::fs::write(path, binary_data.as_bytes())?;
+                }
             }
         } else if let Some(output) = &cli.output {
             if output == "-" {
@@ -972,4 +1099,43 @@ fn parse_address_or_size(value: &str) -> Result<u64> {
     u64::from_str_radix(stripped, radix).map_err(|e| {
         BinfiddleError::InvalidInput(format!("Invalid address/size '{}': {}", value, e))
     })
+}
+
+/// Parse a human-readable byte size such as `64K`, `128M`, or `2G`.
+fn parse_byte_size(value: &str) -> Result<usize> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(BinfiddleError::InvalidInput(
+            "Block size cannot be empty".to_string(),
+        ));
+    }
+
+    let last = value.chars().last().unwrap();
+    let multiplier = match last.to_ascii_uppercase() {
+        'B' => 1usize,
+        'K' => 1024usize,
+        'M' => 1024 * 1024,
+        'G' => 1024 * 1024 * 1024,
+        _ => {
+            return value.parse::<usize>().map_err(|e| {
+                BinfiddleError::InvalidInput(format!("Invalid block size '{}': {}", value, e))
+            });
+        }
+    };
+
+    let number_part = &value[..value.len() - 1];
+    if number_part.is_empty() {
+        return Err(BinfiddleError::InvalidInput(format!(
+            "Invalid block size '{}': missing number",
+            value
+        )));
+    }
+
+    let number = number_part.parse::<usize>().map_err(|e| {
+        BinfiddleError::InvalidInput(format!("Invalid block size '{}': {}", value, e))
+    })?;
+
+    number
+        .checked_mul(multiplier)
+        .ok_or_else(|| BinfiddleError::InvalidInput(format!("Block size '{}' is too large", value)))
 }
