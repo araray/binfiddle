@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.16.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.17.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
 Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, and custom exploration of binary data across a variety of formats.
 
@@ -432,6 +432,10 @@ binfiddle --process-self --address 0x400000 --size 0x1000 search 474343
 # Overwrite 4 bytes in the current process (requires --allow-write)
 binfiddle --process-self --address 0x7ffd12345678 --size 4 \
     --allow-write write 0 DEADBEEF
+
+# Overwrite bytes in another process's writable memory
+binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
+    --allow-write write 0 CAFEBABE
 ```
 
 **Process Memory Options:**
@@ -445,7 +449,7 @@ binfiddle --process-self --address 0x7ffd12345678 --size 4 \
 | `--size` | Number of bytes to read or write (hex or decimal). |
 | `--allow-write` | Opt-in required for any process-memory write. |
 
-> **Note:** Cross-process writes are not yet supported; `--allow-write` only works for `--process-self`.
+> **Note:** Cross-process writes require the target region to be writable. Writes to read-only regions are rejected unless a future `--force-writable` option is added.
 
 #### `struct <TEMPLATE>` — Parse binary data using structure templates
 

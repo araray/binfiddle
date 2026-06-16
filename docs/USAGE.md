@@ -1172,11 +1172,15 @@ binfiddle --process-self --address 0x400000 --size 0x1000 search 474343
 # Overwrite 4 bytes in the current process (requires --allow-write)
 binfiddle --process-self --address 0x7ffd12345678 --size 4 \
     --allow-write write 0 DEADBEEF
+
+# Overwrite bytes in another process's writable memory
+binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
+    --allow-write write 0 CAFEBABE
 ```
 
 #### Limitations
 
-- **Cross-process writes are not supported**: `--allow-write` only works with `--process-self`.
+- **Writable regions only**: cross-process writes use `process_vm_writev` and can only modify already-writable memory. Read-only regions are rejected unless a future `--force-writable` option is added.
 - **Size must stay constant**: `insert` and `remove` are rejected because they would change the memory region size.
 - **No region enumeration for other processes** beyond `--list-regions`; you must supply a valid address and size.
 

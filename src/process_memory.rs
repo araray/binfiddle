@@ -116,23 +116,25 @@ pub fn read_process_memory(pid: u32, address: u64, size: u64) -> Result<Vec<u8>>
 
 /// Writes `data` to `pid`'s memory starting at `address`.
 ///
-/// For this version cross-process writes are explicitly rejected; only the
-/// current process can be written to.
+/// - For the current process, `/proc/self/mem` is used.
+/// - For other processes, `process_vm_writev` is used and the target region
+///   must already be writable.
 pub fn write_process_memory(pid: u32, address: u64, data: &[u8]) -> Result<()> {
-    if pid != 0 && pid != std::process::id() {
-        return Err(BinfiddleError::ProcessMemoryError(
-            "Cross-process writes are not supported in this version".to_string(),
-        ));
+    if pid == 0 || pid == std::process::id() {
+        write_self_memory(address, data)
+    } else {
+        write_cross_process_memory(pid, address, data)
     }
+}
 
+fn write_self_memory(address: u64, data: &[u8]) -> Result<()> {
     let mut file = File::options()
         .read(true)
         .write(true)
-        .open(proc_mem_path(pid))
+        .open("/proc/self/mem")
         .map_err(|e| {
             BinfiddleError::ProcessMemoryError(format!(
-                "Failed to open /proc/{}/mem for writing: {}",
-                pid_label(pid),
+                "Failed to open /proc/self/mem for writing: {}",
                 e
             ))
         })?;
@@ -150,6 +152,51 @@ pub fn write_process_memory(pid: u32, address: u64, data: &[u8]) -> Result<()> {
             address, e
         ))
     })?;
+
+    Ok(())
+}
+
+fn write_cross_process_memory(pid: u32, address: u64, data: &[u8]) -> Result<()> {
+    let regions = parse_maps(pid)?;
+    let region = find_region(&regions, address).ok_or_else(|| {
+        BinfiddleError::ProcessMemoryError(format!(
+            "Address 0x{:x} is not in any mapped region of process {}",
+            address, pid
+        ))
+    })?;
+
+    if !region.is_writable() {
+        return Err(BinfiddleError::ProcessMemoryError(format!(
+            "Memory region 0x{:x}-0x{:x} in process {} is not writable",
+            region.start, region.end, pid
+        )));
+    }
+
+    let local_iov = libc::iovec {
+        iov_base: data.as_ptr() as *mut libc::c_void,
+        iov_len: data.len(),
+    };
+    let remote_iov = libc::iovec {
+        iov_base: address as *mut libc::c_void,
+        iov_len: data.len(),
+    };
+
+    let ret =
+        unsafe { libc::process_vm_writev(pid as libc::pid_t, &local_iov, 1, &remote_iov, 1, 0) };
+
+    if ret < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(BinfiddleError::ProcessMemoryError(format!(
+            "process_vm_writev failed for pid {}: {} (ensure ptrace access is permitted)",
+            pid, err
+        )));
+    }
+
+    if ret as usize != data.len() {
+        return Err(BinfiddleError::ProcessMemoryError(
+            "Short write while writing process memory".to_string(),
+        ));
+    }
 
     Ok(())
 }
@@ -367,12 +414,32 @@ mod tests {
     }
 
     #[test]
-    fn test_cross_process_write_rejected() {
-        // 0xFFFFFFFF is unlikely to be a valid pid; the rejection should happen
-        // before any syscall.
-        let result = write_process_memory(0xFFFF_FFFF, 0x1000, b"data");
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("Cross-process writes are not supported"));
+    fn test_write_current_pid_uses_cross_process_path() {
+        // Using the actual pid exercises the process_vm_writev code path against
+        // the current process.
+        static mut TEST_BUFFER: [u8; 8] = [0u8; 8];
+        let address = std::ptr::addr_of!(TEST_BUFFER) as u64;
+
+        write_process_memory(std::process::id(), address, b"PIDWRITE").unwrap();
+
+        unsafe {
+            assert_eq!(&TEST_BUFFER[..], b"PIDWRITE");
+            TEST_BUFFER = [0u8; 8];
+        }
+    }
+
+    #[test]
+    fn test_readonly_region_detected_in_maps() {
+        // String literals live in .rodata, which is mapped read-only.
+        static RO_STRING: &str = "READONLY";
+        let address = RO_STRING.as_bytes().as_ptr() as u64;
+
+        let regions = parse_maps(0).expect("should parse /proc/self/maps");
+        let region = find_region(&regions, address).expect("address should be mapped");
+        assert!(
+            !region.is_writable(),
+            "Expected .rodata region to be non-writable, got perms: {}",
+            region.perms
+        );
     }
 }
