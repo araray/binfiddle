@@ -1201,7 +1201,7 @@ binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
 #### Limitations
 
 - **Writable regions only by default**: cross-process writes use `process_vm_writev` and can only modify already-writable memory.
-- **`--force-writable`**: uses `mprotect` for `--process-self` and ptrace syscall injection for `--pid` (Linux x86_64 only). It temporarily changes page protection and restores it afterward, but it is inherently risky.
+- **`--force-writable`**: uses `mprotect` for `--process-self` and ptrace syscall injection for `--pid` (Linux x86_64 and aarch64). It temporarily changes page protection and restores it afterward, but it is inherently risky.
 - **Size must stay constant**: `insert` and `remove` are rejected because they would change the memory region size.
 - **No region enumeration for other processes** beyond `--list-regions`; you must supply a valid address and size.
 

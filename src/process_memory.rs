@@ -312,7 +312,10 @@ fn process_vm_writev_data(pid: u32, address: u64, data: &[u8]) -> Result<()> {
 /// RAII guard that temporarily makes a remote memory region writable via
 /// ptrace-injected `mprotect` and restores the original protection on drop or
 /// explicit restore.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 struct PtraceMprotectGuard<'a> {
     target: nix::unistd::Pid,
     region: &'a MemoryRegion,
@@ -320,7 +323,10 @@ struct PtraceMprotectGuard<'a> {
     restored: bool,
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 impl<'a> PtraceMprotectGuard<'a> {
     fn make_writable(
         target: nix::unistd::Pid,
@@ -346,7 +352,10 @@ impl<'a> PtraceMprotectGuard<'a> {
     }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 impl<'a> Drop for PtraceMprotectGuard<'a> {
     fn drop(&mut self) {
         if !self.restored {
@@ -355,7 +364,10 @@ impl<'a> Drop for PtraceMprotectGuard<'a> {
     }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 fn force_write_cross_process_memory(
     pid: u32,
     address: u64,
@@ -378,7 +390,10 @@ fn force_write_cross_process_memory(
     result
 }
 
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+#[cfg(not(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+)))]
 fn force_write_cross_process_memory(
     _pid: u32,
     _address: u64,
@@ -386,25 +401,26 @@ fn force_write_cross_process_memory(
     _region: &MemoryRegion,
 ) -> Result<()> {
     Err(BinfiddleError::UnsupportedOperation(
-        "--force-writable for cross-process writes is only supported on Linux x86_64".to_string(),
+        "--force-writable for cross-process writes is only supported on Linux x86_64 and aarch64"
+            .to_string(),
     ))
 }
 
 /// Ensures the target process is detached from ptrace when this guard drops,
 /// even if the injection logic returns early or panics.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(target_os = "linux")]
 struct PtraceAttachGuard {
     target: nix::unistd::Pid,
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(target_os = "linux")]
 impl Drop for PtraceAttachGuard {
     fn drop(&mut self) {
         let _ = nix::sys::ptrace::detach(self.target, None);
     }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(target_os = "linux")]
 fn ptrace_scope_hint(errno: &nix::errno::Errno) -> String {
     if *errno != nix::errno::Errno::EPERM {
         return String::new();
@@ -424,8 +440,27 @@ fn ptrace_scope_hint(errno: &nix::errno::Errno) -> String {
 }
 
 /// Uses ptrace to inject an `mprotect` syscall into a stopped target process.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 fn ptrace_inject_mprotect(
+    target: nix::unistd::Pid,
+    region: &MemoryRegion,
+    prot: libc::c_int,
+) -> Result<()> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        ptrace_inject_mprotect_x86_64(target, region, prot)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        ptrace_inject_mprotect_aarch64(target, region, prot)
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn ptrace_inject_mprotect_x86_64(
     target: nix::unistd::Pid,
     region: &MemoryRegion,
     prot: libc::c_int,
@@ -573,6 +608,189 @@ fn ptrace_inject_mprotect(
 
         Ok(())
     })();
+
+    // PtraceAttachGuard::drop detaches the target even if inject_result is an Err.
+    inject_result
+}
+
+/// Writes a 32-bit value into a 64-bit aligned ptrace word, preserving the
+/// surrounding 32 bits. Used on aarch64 to inject a single `svc #0` instruction
+/// without corrupting the adjacent instruction.
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+fn ptrace_write_u32_at(target: nix::unistd::Pid, address: u64, value: u32) -> Result<()> {
+    use nix::sys::ptrace;
+
+    let aligned = address & !7;
+    let shift = (address - aligned) * 8;
+    let original = ptrace::read(target, aligned as *mut libc::c_void).map_err(|e| {
+        BinfiddleError::ProcessMemoryError(format!(
+            "Failed to read injection point from {}: {}",
+            target, e
+        ))
+    })? as u64;
+
+    let mask = !(0xffff_ffff_u64 << shift);
+    let new_word = (original & mask) | ((value as u64) << shift);
+
+    ptrace::write(target, aligned as *mut libc::c_void, new_word as i64).map_err(|e| {
+        BinfiddleError::ProcessMemoryError(format!(
+            "Failed to write injected instruction to {}: {}",
+            target, e
+        ))
+    })
+}
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+fn ptrace_inject_mprotect_aarch64(
+    target: nix::unistd::Pid,
+    region: &MemoryRegion,
+    prot: libc::c_int,
+) -> Result<()> {
+    use nix::sys::ptrace;
+    use nix::sys::wait::{waitpid, WaitStatus};
+
+    const SVC_0: u32 = 0xd4000001;
+
+    ptrace::attach(target).map_err(|e| {
+        let hint = ptrace_scope_hint(&e);
+        BinfiddleError::ProcessMemoryError(format!(
+            "Failed to attach to process {}: {}{}",
+            target, e, hint
+        ))
+    })?;
+
+    let _attach_guard = PtraceAttachGuard { target };
+
+    match waitpid(target, None) {
+        Ok(WaitStatus::Stopped(_, _)) => {}
+        Ok(other) => {
+            return Err(BinfiddleError::ProcessMemoryError(format!(
+                "Unexpected wait status while attaching to {}: {:?}",
+                target, other
+            )));
+        }
+        Err(e) => {
+            return Err(BinfiddleError::ProcessMemoryError(format!(
+                "waitpid failed after attach to {}: {}",
+                target, e
+            )));
+        }
+    };
+
+    // State captured during injection so we can always restore it.
+    let mut pc: Option<u64> = None;
+    let mut saved_regs: Option<nix::libc::user_regs_struct> = None;
+    let mut original_word: Option<u64> = None;
+
+    let inject_result = (|| {
+        let mut regs = ptrace::getregs(target).map_err(|e| {
+            BinfiddleError::ProcessMemoryError(format!(
+                "Failed to read registers of {}: {}",
+                target, e
+            ))
+        })?;
+
+        let current_pc = regs.pc;
+        pc = Some(current_pc);
+        saved_regs = Some(regs);
+
+        let page_size = page_size();
+        let protect_start = region.start & !(page_size - 1);
+        let protect_end = (region.end + page_size - 1) & !(page_size - 1);
+        let protect_len = protect_end - protect_start;
+
+        let word = ptrace::read(target, current_pc as *mut libc::c_void).map_err(|e| {
+            BinfiddleError::ProcessMemoryError(format!(
+                "Failed to read injection point from {}: {}",
+                target, e
+            ))
+        })? as u64;
+        original_word = Some(word);
+
+        ptrace_write_u32_at(target, current_pc, SVC_0)?;
+
+        // aarch64 syscall ABI: x0-x2 args, x8 syscall number.
+        regs.regs[0] = protect_start;
+        regs.regs[1] = protect_len;
+        regs.regs[2] = prot as u64;
+        regs.regs[8] = libc::SYS_mprotect as u64;
+        // pc already points at the injected svc #0.
+
+        ptrace::setregs(target, regs).map_err(|e| {
+            BinfiddleError::ProcessMemoryError(format!(
+                "Failed to set registers of {}: {}",
+                target, e
+            ))
+        })?;
+
+        // Run to syscall entry.
+        ptrace::syscall(target, None).map_err(|e| {
+            BinfiddleError::ProcessMemoryError(format!(
+                "Failed to continue {} to syscall entry: {}",
+                target, e
+            ))
+        })?;
+        match waitpid(target, None) {
+            Ok(WaitStatus::Stopped(_, nix::sys::signal::Signal::SIGTRAP)) => {}
+            Ok(other) => {
+                return Err(BinfiddleError::ProcessMemoryError(format!(
+                    "Unexpected wait status at syscall entry for {}: {:?}",
+                    target, other
+                )));
+            }
+            Err(e) => {
+                return Err(BinfiddleError::ProcessMemoryError(format!(
+                    "waitpid failed at syscall entry for {}: {}",
+                    target, e
+                )));
+            }
+        };
+
+        // Run to syscall exit.
+        ptrace::syscall(target, None).map_err(|e| {
+            BinfiddleError::ProcessMemoryError(format!(
+                "Failed to continue {} to syscall exit: {}",
+                target, e
+            ))
+        })?;
+        match waitpid(target, None) {
+            Ok(WaitStatus::Stopped(_, nix::sys::signal::Signal::SIGTRAP)) => {}
+            Ok(other) => {
+                return Err(BinfiddleError::ProcessMemoryError(format!(
+                    "Unexpected wait status at syscall exit for {}: {:?}",
+                    target, other
+                )));
+            }
+            Err(e) => {
+                return Err(BinfiddleError::ProcessMemoryError(format!(
+                    "waitpid failed at syscall exit for {}: {}",
+                    target, e
+                )));
+            }
+        };
+
+        let post_regs = ptrace::getregs(target).map_err(|e| {
+            BinfiddleError::ProcessMemoryError(format!(
+                "Failed to read post-syscall registers of {}: {}",
+                target, e
+            ))
+        })?;
+
+        if post_regs.regs[0] as i64 != 0 {
+            return Err(BinfiddleError::ProcessMemoryError(format!(
+                "mprotect syscall in process {} returned error {}",
+                target, post_regs.regs[0] as i64
+            )));
+        }
+
+        Ok(())
+    })();
+
+    // Best-effort restoration of original code and registers.
+    if let (Some(current_pc), Some(word), Some(saved)) = (pc, original_word, saved_regs) {
+        let _ = ptrace::write(target, current_pc as *mut libc::c_void, word as i64);
+        let _ = ptrace::setregs(target, saved);
+    }
 
     // PtraceAttachGuard::drop detaches the target even if inject_result is an Err.
     inject_result
