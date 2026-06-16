@@ -1571,6 +1571,36 @@ binfiddle -i input.bin write 0 FF -o output.bin
 binfiddle -i input.bin read 0..16 -o -
 ```
 
+#### Memory-Mapped File Input
+
+File input is memory-mapped using `memmap2` instead of being loaded entirely
+into RAM. This means binfiddle can open files that are larger than available
+memory for read-only operations such as `read`, `search`, `analyze`, and `diff`.
+
+```bash
+# Search a multi-gigabyte firmware image without loading it whole
+binfiddle -i firmware.bin search "7F454C46" --all
+
+# Analyze entropy of a large dump with minimal resident memory
+binfiddle -i memory.dump analyze entropy --block-size 4096
+```
+
+When a command mutates the data (`write`, `edit`), the mapped region is lazily
+copied into an owned in-memory buffer first. Size-changing edits (`insert`,
+`remove`, `replace`) therefore still require enough memory to hold the modified
+data.
+
+#### Large Files
+
+For best results with very large inputs:
+
+- Prefer read-only commands (`read`, `search`, `analyze`, `diff`) — they stream
+  pages from disk through the OS cache on demand.
+- Use `--in-file` or `-o` for writes only when necessary; writes copy the file
+  into memory before modifying it.
+- Avoid running `convert` on files larger than RAM because `convert` reads the
+  entire input to produce a transformed output buffer.
+
 ### Pipeline Usage
 
 Binfiddle is designed for Unix pipelines:

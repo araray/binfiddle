@@ -57,6 +57,39 @@ pub enum BinarySource {
     RawData(Vec<u8>),
 }
 
+/// Internal backing storage for [`BinaryData`].
+///
+/// File-backed data is mapped read-only with `memmap2`. Mutation methods lazily
+/// copy the mapped contents into an owned `Vec<u8>` before modifying them.
+#[derive(Debug)]
+enum DataBacking {
+    Owned(Vec<u8>),
+    Mmap(memmap2::Mmap),
+}
+
+impl DataBacking {
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            DataBacking::Owned(v) => v.as_slice(),
+            DataBacking::Mmap(m) => m.as_ref(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.as_bytes().len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.as_bytes().is_empty()
+    }
+}
+
+impl AsRef<[u8]> for DataBacking {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
 /// Represents a chunk of data with configurable bit length
 pub struct Chunk {
     data: Vec<u8>,
@@ -83,7 +116,7 @@ impl Chunk {
 
 /// Main struct representing the binary data being manipulated
 pub struct BinaryData {
-    data: Vec<u8>,
+    data: DataBacking,
     chunk_size: usize, // in bits
     width: usize,      // chunks per line
     source: BinarySource,
@@ -92,11 +125,23 @@ pub struct BinaryData {
 impl BinaryData {
     pub fn new(source: BinarySource, chunk_size: usize, width: usize) -> Result<Self> {
         let data = match &source {
-            BinarySource::File(path) => std::fs::read(path)?,
+            BinarySource::File(path) => {
+                let file = std::fs::File::open(path)?;
+                let metadata = file.metadata()?;
+                if metadata.len() == 0 {
+                    // memmap2 cannot map an empty file on all platforms, so keep it owned.
+                    DataBacking::Owned(Vec::new())
+                } else {
+                    // Safety: the file is opened read-only. The mapping is only read
+                    // until a mutation method is called, at which point the mapped
+                    // region is copied into an owned Vec before any writes occur.
+                    DataBacking::Mmap(unsafe { memmap2::Mmap::map(&file)? })
+                }
+            }
             BinarySource::Stdin => {
                 let mut buf = Vec::new();
                 std::io::stdin().read_to_end(&mut buf)?;
-                buf
+                DataBacking::Owned(buf)
             }
             BinarySource::MemoryAddress(_addr) => {
                 // Platform-specific implementation would go here
@@ -108,14 +153,18 @@ impl BinaryData {
                 address,
                 size,
                 fill_mode,
-            } => process_memory::read_process_memory_sparse(0, *address, *size, *fill_mode)?,
+            } => DataBacking::Owned(process_memory::read_process_memory_sparse(
+                0, *address, *size, *fill_mode,
+            )?),
             BinarySource::Process {
                 pid,
                 address,
                 size,
                 fill_mode,
-            } => process_memory::read_process_memory_sparse(*pid, *address, *size, *fill_mode)?,
-            BinarySource::RawData(data) => data.clone(),
+            } => DataBacking::Owned(process_memory::read_process_memory_sparse(
+                *pid, *address, *size, *fill_mode,
+            )?),
+            BinarySource::RawData(data) => DataBacking::Owned(data.clone()),
         };
 
         if chunk_size == 0 || (!data.is_empty() && chunk_size > data.len() * 8) {
@@ -140,8 +189,9 @@ impl BinaryData {
     }
 
     pub fn read_range(&self, start: usize, end: Option<usize>) -> Result<Chunk> {
-        let end = end.unwrap_or(self.data.len());
-        if start >= self.data.len() || end > self.data.len() || start >= end {
+        let bytes = self.data.as_bytes();
+        let end = end.unwrap_or(bytes.len());
+        if start >= bytes.len() || end > bytes.len() || start >= end {
             return Err(BinfiddleError::InvalidRange(format!(
                 "Invalid range [{}, {})",
                 start, end
@@ -156,40 +206,71 @@ impl BinaryData {
             self.chunk_size
         };
 
-        Chunk::new(self.data[start..end].to_vec(), effective_chunk_size)
+        Chunk::new(bytes[start..end].to_vec(), effective_chunk_size)
+    }
+
+    /// Ensures the backing storage is an owned `Vec<u8>`.
+    ///
+    /// This is called lazily by mutation methods so that read-only operations on
+    /// file-backed data can keep using the memory-mapped region.
+    fn ensure_owned(&mut self) {
+        if matches!(&self.data, DataBacking::Mmap(_)) {
+            let old = std::mem::replace(&mut self.data, DataBacking::Owned(Vec::new()));
+            if let DataBacking::Mmap(mmap) = old {
+                self.data = DataBacking::Owned(mmap.as_ref().to_vec());
+            }
+        }
     }
 
     pub fn write_range(&mut self, start: usize, data: &[u8]) -> Result<()> {
-        if start + data.len() > self.data.len() {
+        self.ensure_owned();
+        let bytes = match &mut self.data {
+            DataBacking::Owned(v) => v.as_mut_slice(),
+            DataBacking::Mmap(_) => unreachable!("ensure_owned just converted Mmap to Owned"),
+        };
+
+        if start + data.len() > bytes.len() {
             return Err(BinfiddleError::InvalidRange(
                 "Write operation would exceed data bounds".to_string(),
             ));
         }
 
-        self.data[start..start + data.len()].copy_from_slice(data);
+        bytes[start..start + data.len()].copy_from_slice(data);
         Ok(())
     }
 
     pub fn insert_data(&mut self, position: usize, data: &[u8]) -> Result<()> {
-        if position > self.data.len() {
+        self.ensure_owned();
+        let vec = match &mut self.data {
+            DataBacking::Owned(v) => v,
+            DataBacking::Mmap(_) => unreachable!("ensure_owned just converted Mmap to Owned"),
+        };
+
+        if position > vec.len() {
             return Err(BinfiddleError::InvalidRange(
                 "Insert position out of bounds".to_string(),
             ));
         }
 
-        self.data.splice(position..position, data.iter().cloned());
+        vec.splice(position..position, data.iter().cloned());
         Ok(())
     }
 
     pub fn remove_range(&mut self, start: usize, end: usize) -> Result<()> {
-        if start >= self.data.len() || end > self.data.len() || start >= end {
+        self.ensure_owned();
+        let vec = match &mut self.data {
+            DataBacking::Owned(v) => v,
+            DataBacking::Mmap(_) => unreachable!("ensure_owned just converted Mmap to Owned"),
+        };
+
+        if start >= vec.len() || end > vec.len() || start >= end {
             return Err(BinfiddleError::InvalidRange(format!(
                 "Invalid range [{}, {})",
                 start, end
             )));
         }
 
-        self.data.drain(start..end);
+        vec.drain(start..end);
         Ok(())
     }
 
@@ -219,6 +300,7 @@ impl BinaryData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn test_empty_binarydata_with_default_chunk_size() {
@@ -385,5 +467,45 @@ mod tests {
                 .get_bytes(),
             &TEST_DATA[..]
         );
+    }
+
+    #[test]
+    fn test_file_backed_binarydata_reads_via_mmap() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"hello mmap").unwrap();
+        let path = tmp.path().to_path_buf();
+
+        let data = BinaryData::new(BinarySource::File(path), 8, 16).unwrap();
+        assert_eq!(data.len(), 10);
+        assert_eq!(data.read_range(0, Some(5)).unwrap().get_bytes(), b"hello");
+        assert_eq!(data.read_range(6, Some(10)).unwrap().get_bytes(), b"mmap");
+    }
+
+    #[test]
+    fn test_empty_file_binarydata() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+
+        let data = BinaryData::new(BinarySource::File(path), 8, 16).unwrap();
+        assert_eq!(data.len(), 0);
+        assert!(data.is_empty());
+    }
+
+    #[test]
+    fn test_file_backed_mutation_converts_to_owned() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"ABCD").unwrap();
+        let path = tmp.path().to_path_buf();
+
+        let mut data = BinaryData::new(BinarySource::File(path), 8, 16).unwrap();
+        data.write_range(0, b"XYZ").unwrap();
+        assert_eq!(data.read_range(0, Some(4)).unwrap().get_bytes(), b"XYZD");
+
+        // Insert/remove also work after the conversion.
+        data.insert_data(4, b"!").unwrap();
+        assert_eq!(data.read_range(0, None).unwrap().get_bytes(), b"XYZD!");
+
+        data.remove_range(3, 4).unwrap();
+        assert_eq!(data.read_range(0, None).unwrap().get_bytes(), b"XYZ!");
     }
 }
