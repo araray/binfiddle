@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.17.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.18.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
 Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, and custom exploration of binary data across a variety of formats.
 
@@ -436,6 +436,14 @@ binfiddle --process-self --address 0x7ffd12345678 --size 4 \
 # Overwrite bytes in another process's writable memory
 binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
     --allow-write write 0 CAFEBABE
+
+# Force-write a read-only region in the current process (dangerous)
+binfiddle --process-self --address 0x7ffd12345678 --size 4 \
+    --allow-write --force-writable write 0 DEADBEEF
+
+# Force-write a read-only region in another process (Linux x86_64, dangerous)
+binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
+    --allow-write --force-writable write 0 CAFEBABE
 ```
 
 **Process Memory Options:**
@@ -448,8 +456,9 @@ binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
 | `--address` | Base address to read from or write to (hex or decimal). |
 | `--size` | Number of bytes to read or write (hex or decimal). |
 | `--allow-write` | Opt-in required for any process-memory write. |
+| `--force-writable` | Temporarily make read-only pages writable before writing. |
 
-> **Note:** Cross-process writes require the target region to be writable. Writes to read-only regions are rejected unless a future `--force-writable` option is added.
+> **Note:** `--force-writable` uses `mprotect` for the current process and ptrace syscall injection for cross-process writes (Linux x86_64 only). It is inherently risky and should be used with care.
 
 #### `struct <TEMPLATE>` — Parse binary data using structure templates
 

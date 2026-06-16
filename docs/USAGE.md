@@ -1176,11 +1176,20 @@ binfiddle --process-self --address 0x7ffd12345678 --size 4 \
 # Overwrite bytes in another process's writable memory
 binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
     --allow-write write 0 CAFEBABE
+
+# Force-write a read-only region in the current process (dangerous)
+binfiddle --process-self --address 0x7ffd12345678 --size 4 \
+    --allow-write --force-writable write 0 DEADBEEF
+
+# Force-write a read-only region in another process (Linux x86_64, dangerous)
+binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
+    --allow-write --force-writable write 0 CAFEBABE
 ```
 
 #### Limitations
 
-- **Writable regions only**: cross-process writes use `process_vm_writev` and can only modify already-writable memory. Read-only regions are rejected unless a future `--force-writable` option is added.
+- **Writable regions only by default**: cross-process writes use `process_vm_writev` and can only modify already-writable memory.
+- **`--force-writable`**: uses `mprotect` for `--process-self` and ptrace syscall injection for `--pid` (Linux x86_64 only). It temporarily changes page protection and restores it afterward, but it is inherently risky.
 - **Size must stay constant**: `insert` and `remove` are rejected because they would change the memory region size.
 - **No region enumeration for other processes** beyond `--list-regions`; you must supply a valid address and size.
 

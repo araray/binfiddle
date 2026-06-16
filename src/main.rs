@@ -31,6 +31,10 @@ struct Cli {
     #[arg(long)]
     allow_write: bool,
 
+    /// Temporarily make read-only process-memory pages writable before writing
+    #[arg(long, requires = "allow_write")]
+    force_writable: bool,
+
     /// Base address to read from when using --process-self or --pid (hex or decimal)
     #[arg(long)]
     address: Option<String>,
@@ -885,6 +889,7 @@ fn main() -> Result<()> {
                 pid,
                 address,
                 binary_data.read_range(0, None)?.get_bytes(),
+                cli.force_writable,
             )?;
         } else if cli.in_file {
             if let Some(path) = &cli.input {
