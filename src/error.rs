@@ -21,6 +21,9 @@ pub enum BinfiddleError {
     #[error("Operation not supported: {0}")]
     UnsupportedOperation(String),
 
+    #[error("Process memory error: {0}")]
+    ProcessMemoryError(String),
+
     #[error("Chain step {step} failed: {command}\n{stderr}")]
     ChainStepFailed {
         step: usize,

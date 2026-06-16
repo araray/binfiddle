@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.14.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.15.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
 Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, and custom exploration of binary data across a variety of formats.
 
@@ -39,6 +39,7 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 | **Patch** | Apply binary patches (works with diff --format patch output) |
 | **Convert** | Text encoding conversion and line ending normalization |
 | **Chain** | Pipe multiple binfiddle commands together without shell escaping |
+| **Process Memory** | Read memory from the current process via `/proc/self/mem` (Linux, experimental) |
 | **Struct** | Parse binary data using YAML templates for structure definitions |
 
 ### Key Differentiators
@@ -408,6 +409,28 @@ binfiddle --silent -i data.bin -o out.bin chain \
 |--------|-------------|
 | `--step <COMMAND>` | One step to execute (repeatable, required). Quoting follows shell rules. |
 
+#### `read` from current process memory — Linux experimental
+
+Read bytes from the running `binfiddle` process itself via `/proc/self/mem`. This is a minimal, read-only proof of concept for live process memory inspection.
+
+```bash
+# Read 16 bytes from a known address in the current process
+binfiddle --process-self --address 0x7ffd12345678 --size 16 read 0..16
+
+# Search current process memory for a pattern
+binfiddle --process-self --address 0x400000 --size 0x1000 search 474343
+```
+
+**Process Memory Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--process-self` | Read from `/proc/self/mem` instead of a file or stdin. |
+| `--address` | Base address to read from (hex or decimal). |
+| `--size` | Number of bytes to read (hex or decimal). |
+
+> **Note:** Writing to process memory is not supported in this version. Use `--output` to save any modified data to a file.
+
 #### `struct <TEMPLATE>` — Parse binary data using structure templates
 
 Parse and interpret binary data according to YAML structure templates, useful for analyzing file headers, network protocols, and data structures.
@@ -685,7 +708,7 @@ cargo build --release
 | 4 | Template system evolution | ✅ Complete |
 | 5 | Bit-level precision | ✅ Complete |
 | 6 | Command chaining & pipelines | ✅ Complete |
-| 7 | Live process memory | 🔲 Planned |
+| 7 | Live process memory | ✅ v1 Complete (/proc/self read-only) |
 | 8 | Advanced analysis & intelligence | 🔲 Planned |
 
 ## License

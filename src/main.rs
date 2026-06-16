@@ -1,6 +1,6 @@
 /// src/main.rs
 use binfiddle::utils::parsing::{parse_search_pattern, validate_search_pattern};
-use binfiddle::{BinaryData, BinarySource, Result, SearchConfig};
+use binfiddle::{BinaryData, BinarySource, BinfiddleError, Result, SearchConfig};
 use clap::{Parser, Subcommand};
 use std::io::{self, Read, Write};
 
@@ -12,8 +12,20 @@ struct Cli {
     command: Commands,
 
     /// Input file (use '-' for stdin)
-    #[arg(short, long)]
+    #[arg(short, long, group = "source")]
     input: Option<String>,
+
+    /// Read from current process memory via /proc/self/mem (Linux only)
+    #[arg(long, group = "source", requires = "address", requires = "size")]
+    process_self: bool,
+
+    /// Base address to read from when using --process-self (hex or decimal)
+    #[arg(long, requires = "process_self")]
+    address: Option<String>,
+
+    /// Number of bytes to read when using --process-self (hex or decimal)
+    #[arg(long, requires = "process_self")]
+    size: Option<String>,
 
     /// Modify file directly (requires input file)
     #[arg(long, requires = "input", conflicts_with = "output")]
@@ -247,6 +259,11 @@ fn main() -> Result<()> {
 
     // Handle chain command early, before normal input loading.
     if let Commands::Chain { step } = &cli.command {
+        if cli.process_self {
+            return Err(BinfiddleError::InvalidInput(
+                "--process-self cannot be used with chain".to_string(),
+            ));
+        }
         return binfiddle::ChainExecutor::execute(
             step,
             cli.input.as_deref(),
@@ -268,20 +285,38 @@ fn main() -> Result<()> {
 
     // Load data only for commands that need it
     let mut binary_data = if needs_input {
-        match cli.input.as_deref() {
-            Some("-") | None => {
-                let mut data = Vec::new();
-                io::stdin().read_to_end(&mut data)?;
-                BinaryData::new(BinarySource::RawData(data), cli.chunk_size, cli.width)?
-            }
-            Some(path) => {
-                BinaryData::new(BinarySource::File(path.into()), cli.chunk_size, cli.width)?
+        if cli.process_self {
+            let address = parse_address_or_size(
+                cli.address
+                    .as_deref()
+                    .expect("clap ensures address is present"),
+            )?;
+            let size =
+                parse_address_or_size(cli.size.as_deref().expect("clap ensures size is present"))?;
+            BinaryData::new(
+                BinarySource::ProcessSelf { address, size },
+                cli.chunk_size,
+                cli.width,
+            )?
+        } else {
+            match cli.input.as_deref() {
+                Some("-") | None => {
+                    let mut data = Vec::new();
+                    io::stdin().read_to_end(&mut data)?;
+                    BinaryData::new(BinarySource::RawData(data), cli.chunk_size, cli.width)?
+                }
+                Some(path) => {
+                    BinaryData::new(BinarySource::File(path.into()), cli.chunk_size, cli.width)?
+                }
             }
         }
     } else {
         // Create a dummy BinaryData for commands that don't need it
         BinaryData::new(BinarySource::RawData(Vec::new()), cli.chunk_size, cli.width)?
     };
+
+    // Remember whether the source is process memory so we can reject writes later.
+    let source_is_process_self = cli.process_self;
 
     // Execute command
     let changes_made = match &cli.command {
@@ -791,6 +826,13 @@ fn main() -> Result<()> {
 
     // Handle output
     if changes_made {
+        if source_is_process_self {
+            return Err(BinfiddleError::UnsupportedOperation(
+                "Writing to process memory is not supported in this version. \
+                 Use --output to write the result to a file."
+                    .to_string(),
+            ));
+        }
         if cli.in_file {
             if let Some(path) = &cli.input {
                 std::fs::write(path, binary_data.read_range(0, None)?.get_bytes())?;
@@ -808,4 +850,22 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Parse an address or size string that may be decimal or hex (with optional `0x` prefix).
+fn parse_address_or_size(value: &str) -> Result<u64> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(BinfiddleError::InvalidInput(
+            "Address/size cannot be empty".to_string(),
+        ));
+    }
+    let (radix, stripped) = if let Some(stripped) = value.strip_prefix("0x") {
+        (16, stripped)
+    } else {
+        (10, value)
+    };
+    u64::from_str_radix(stripped, radix).map_err(|e| {
+        BinfiddleError::InvalidInput(format!("Invalid address/size '{}': {}", value, e))
+    })
 }

@@ -15,6 +15,7 @@ This guide provides detailed usage instructions, examples, and common workflows 
   - [Converting Encodings](#converting-encodings)
   - [Applying Patches](#applying-patches)
   - [Chaining Commands](#chaining-commands)
+  - [Reading Current Process Memory](#reading-current-process-memory)
   - [Parsing Structures](#parsing-structures)
 - [Input and Output](#input-and-output)
   - [File I/O](#file-io)
@@ -1123,6 +1124,44 @@ binfiddle --silent -i data.bin -o out.bin chain \
 - `chain` bypasses the normal command execution path and launches each step as a subprocess connected by temporary files.
 - If an intermediate step fails or produces no byte output, the chain aborts with a clear error.
 - Use `--silent` to prevent intermediate commands from writing diagnostics to stderr.
+
+---
+
+### Reading Current Process Memory
+
+> **Experimental — Linux only**
+
+The `--process-self` flag reads memory from the current `binfiddle` process via `/proc/self/mem`. This is a minimal, read-only proof of concept intended for exploring live process memory without attaching to another process.
+
+#### Syntax
+
+```bash
+binfiddle --process-self --address <ADDR> --size <N> <COMMAND> [OPTIONS]
+```
+
+- `--process-self` selects `/proc/self/mem` as the input source.
+- `--address` is the base address to read from (hex or decimal).
+- `--size` is the number of bytes to read (hex or decimal).
+- It conflicts with `--input` and cannot be combined with `chain`.
+
+#### Examples
+
+```bash
+# Read 16 bytes from address 0x7ffd12345678
+binfiddle --process-self --address 0x7ffd12345678 --size 16 read 0..16
+
+# Search current process memory for a hex pattern
+binfiddle --process-self --address 0x400000 --size 0x1000 search 474343
+
+# Analyze entropy of a process memory region
+binfiddle --process-self --address 0x7f0000000 --size 0x10000 analyze entropy
+```
+
+#### Limitations
+
+- **Read-only**: `write`, `edit`, and `--in-file` are rejected when `--process-self` is used.
+- **Current process only**: cross-process `/proc/<pid>/mem` is not supported yet.
+- **No region enumeration**: you must supply a valid, accessible address and size.
 
 ---
 
