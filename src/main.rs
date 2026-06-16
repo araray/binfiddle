@@ -9,22 +9,34 @@ use std::io::{self, Read, Write};
 #[command(version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 
     /// Input file (use '-' for stdin)
     #[arg(short, long, group = "source")]
     input: Option<String>,
 
     /// Read from current process memory via /proc/self/mem (Linux only)
-    #[arg(long, group = "source", requires = "address", requires = "size")]
+    #[arg(long, group = "source")]
     process_self: bool,
 
-    /// Base address to read from when using --process-self (hex or decimal)
-    #[arg(long, requires = "process_self")]
+    /// Read from a process's memory via /proc/<pid>/mem (Linux only)
+    #[arg(long, group = "source")]
+    pid: Option<u32>,
+
+    /// List memory regions of the target process instead of running a command
+    #[arg(long)]
+    list_regions: bool,
+
+    /// Allow writing back to process memory (current process only)
+    #[arg(long)]
+    allow_write: bool,
+
+    /// Base address to read from when using --process-self or --pid (hex or decimal)
+    #[arg(long)]
     address: Option<String>,
 
-    /// Number of bytes to read when using --process-self (hex or decimal)
-    #[arg(long, requires = "process_self")]
+    /// Number of bytes to read when using --process-self or --pid (hex or decimal)
+    #[arg(long)]
     size: Option<String>,
 
     /// Modify file directly (requires input file)
@@ -257,11 +269,15 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Resolve the effective process-memory target pid, if any.
+    let target_pid = if cli.process_self { Some(0) } else { cli.pid };
+    let source_is_process_memory = target_pid.is_some();
+
     // Handle chain command early, before normal input loading.
-    if let Commands::Chain { step } = &cli.command {
-        if cli.process_self {
+    if let Some(Commands::Chain { step }) = &cli.command {
+        if source_is_process_memory {
             return Err(BinfiddleError::InvalidInput(
-                "--process-self cannot be used with chain".to_string(),
+                "--process-self and --pid cannot be used with chain".to_string(),
             ));
         }
         return binfiddle::ChainExecutor::execute(
@@ -272,9 +288,35 @@ fn main() -> Result<()> {
         );
     }
 
+    // Handle --list-regions before loading binary data.
+    if cli.list_regions {
+        let pid = target_pid.unwrap_or(0);
+        let regions = binfiddle::process_memory::parse_maps(pid)?;
+        print!("{}", binfiddle::process_memory::format_regions(&regions));
+        return Ok(());
+    }
+
+    let command = cli.command.as_ref().ok_or_else(|| {
+        BinfiddleError::InvalidInput("A subcommand is required (or use --list-regions)".to_string())
+    })?;
+
+    // Validate process-memory args.
+    if source_is_process_memory {
+        if cli.address.is_none() {
+            return Err(BinfiddleError::InvalidInput(
+                "--address is required when using --process-self or --pid".to_string(),
+            ));
+        }
+        if cli.size.is_none() {
+            return Err(BinfiddleError::InvalidInput(
+                "--size is required when using --process-self or --pid".to_string(),
+            ));
+        }
+    }
+
     // Check if this command needs binary_data loaded
     let needs_input = matches!(
-        cli.command,
+        command,
         Commands::Read { .. }
             | Commands::Write { .. }
             | Commands::Edit { .. }
@@ -285,19 +327,15 @@ fn main() -> Result<()> {
 
     // Load data only for commands that need it
     let mut binary_data = if needs_input {
-        if cli.process_self {
-            let address = parse_address_or_size(
-                cli.address
-                    .as_deref()
-                    .expect("clap ensures address is present"),
-            )?;
-            let size =
-                parse_address_or_size(cli.size.as_deref().expect("clap ensures size is present"))?;
-            BinaryData::new(
-                BinarySource::ProcessSelf { address, size },
-                cli.chunk_size,
-                cli.width,
-            )?
+        if let Some(pid) = target_pid {
+            let address = parse_address_or_size(cli.address.as_deref().unwrap())?;
+            let size = parse_address_or_size(cli.size.as_deref().unwrap())?;
+            let source = if pid == 0 {
+                BinarySource::ProcessSelf { address, size }
+            } else {
+                BinarySource::Process { pid, address, size }
+            };
+            BinaryData::new(source, cli.chunk_size, cli.width)?
         } else {
             match cli.input.as_deref() {
                 Some("-") | None => {
@@ -315,11 +353,8 @@ fn main() -> Result<()> {
         BinaryData::new(BinarySource::RawData(Vec::new()), cli.chunk_size, cli.width)?
     };
 
-    // Remember whether the source is process memory so we can reject writes later.
-    let source_is_process_self = cli.process_self;
-
     // Execute command
-    let changes_made = match &cli.command {
+    let changes_made = match command {
         Commands::Read { range } => {
             let (start, end) = binfiddle::utils::parsing::parse_range(range, binary_data.len())?;
             let chunk = binary_data.read_range(start, end)?;
@@ -826,14 +861,32 @@ fn main() -> Result<()> {
 
     // Handle output
     if changes_made {
-        if source_is_process_self {
-            return Err(BinfiddleError::UnsupportedOperation(
-                "Writing to process memory is not supported in this version. \
-                 Use --output to write the result to a file."
-                    .to_string(),
-            ));
-        }
-        if cli.in_file {
+        if source_is_process_memory {
+            if !cli.allow_write {
+                return Err(BinfiddleError::ProcessMemoryError(
+                    "Writing to process memory requires --allow-write".to_string(),
+                ));
+            }
+
+            let (pid, address, original_size) = match binary_data.source() {
+                BinarySource::ProcessSelf { address, size } => (0, *address, *size as usize),
+                BinarySource::Process { pid, address, size } => (*pid, *address, *size as usize),
+                _ => unreachable!(),
+            };
+
+            if binary_data.len() != original_size {
+                return Err(BinfiddleError::ProcessMemoryError(
+                    "Process memory write would change region size; insert/remove are not supported"
+                        .to_string(),
+                ));
+            }
+
+            binfiddle::process_memory::write_process_memory(
+                pid,
+                address,
+                binary_data.read_range(0, None)?.get_bytes(),
+            )?;
+        } else if cli.in_file {
             if let Some(path) = &cli.input {
                 std::fs::write(path, binary_data.read_range(0, None)?.get_bytes())?;
             }

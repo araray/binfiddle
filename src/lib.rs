@@ -1,9 +1,10 @@
 /// src/lib.rs
 pub mod commands;
 pub mod error;
+pub mod process_memory;
 pub mod utils;
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 
 pub use commands::{
     chain::ChainExecutor, parse_encoding, parse_ignore_ranges, AnalysisType, AnalyzeCommand,
@@ -35,12 +36,19 @@ pub enum ColorMode {
 }
 
 /// Represents the input source for binary data
+#[derive(Debug, Clone)]
 pub enum BinarySource {
     File(std::path::PathBuf),
     Stdin,
     MemoryAddress(usize),
     /// Read memory from the current process via `/proc/self/mem`.
     ProcessSelf {
+        address: u64,
+        size: u64,
+    },
+    /// Read memory from another process via `/proc/<pid>/mem`.
+    Process {
+        pid: u32,
         address: u64,
         size: u64,
     },
@@ -76,11 +84,12 @@ pub struct BinaryData {
     data: Vec<u8>,
     chunk_size: usize, // in bits
     width: usize,      // chunks per line
+    source: BinarySource,
 }
 
 impl BinaryData {
     pub fn new(source: BinarySource, chunk_size: usize, width: usize) -> Result<Self> {
-        let data = match source {
+        let data = match &source {
             BinarySource::File(path) => std::fs::read(path)?,
             BinarySource::Stdin => {
                 let mut buf = Vec::new();
@@ -93,8 +102,13 @@ impl BinaryData {
                     "Memory address access not yet implemented".to_string(),
                 ));
             }
-            BinarySource::ProcessSelf { address, size } => read_process_self(address, size)?,
-            BinarySource::RawData(data) => data,
+            BinarySource::ProcessSelf { address, size } => {
+                process_memory::read_process_memory(0, *address, *size)?
+            }
+            BinarySource::Process { pid, address, size } => {
+                process_memory::read_process_memory(*pid, *address, *size)?
+            }
+            BinarySource::RawData(data) => data.clone(),
         };
 
         if chunk_size == 0 || (!data.is_empty() && chunk_size > data.len() * 8) {
@@ -105,7 +119,13 @@ impl BinaryData {
             data,
             chunk_size,
             width,
+            source,
         })
+    }
+
+    /// Returns the original source used to load this data.
+    pub fn source(&self) -> &BinarySource {
+        &self.source
     }
 
     pub fn get_width(&self) -> usize {
@@ -177,53 +197,6 @@ impl BinaryData {
         self.chunk_size = chunk_size;
         Ok(())
     }
-}
-
-/// Reads memory from the current process via `/proc/self/mem`.
-///
-/// Linux-only. This is intentionally minimal: no region enumeration, no
-/// cross-process support, and no writes. Failures are surfaced as
-/// `BinfiddleError::ProcessMemoryError`.
-fn read_process_self(address: u64, size: u64) -> Result<Vec<u8>> {
-    use std::fs::File;
-
-    if size > usize::MAX as u64 {
-        return Err(BinfiddleError::ProcessMemoryError(
-            "Requested size exceeds addressable memory".to_string(),
-        ));
-    }
-    let size = size as usize;
-
-    let mut file = File::open("/proc/self/mem").map_err(|e| {
-        BinfiddleError::ProcessMemoryError(format!("Failed to open /proc/self/mem: {}", e))
-    })?;
-
-    file.seek(SeekFrom::Start(address)).map_err(|e| {
-        BinfiddleError::ProcessMemoryError(format!(
-            "Failed to seek to address 0x{:x}: {}",
-            address, e
-        ))
-    })?;
-
-    let mut buffer = vec![0u8; size];
-    let mut total_read = 0usize;
-
-    while total_read < size {
-        match file.read(&mut buffer[total_read..]) {
-            Ok(0) => break,
-            Ok(n) => total_read += n,
-            Err(e) => {
-                return Err(BinfiddleError::ProcessMemoryError(format!(
-                    "Failed to read process memory at 0x{:x}: {}",
-                    address + total_read as u64,
-                    e
-                )));
-            }
-        }
-    }
-
-    buffer.truncate(total_read);
-    Ok(buffer)
 }
 
 impl BinaryData {
@@ -372,6 +345,30 @@ mod tests {
             16,
         )
         .expect("should read /proc/self/mem");
+
+        assert_eq!(
+            data.read_range(0, Some(TEST_DATA.len()))
+                .unwrap()
+                .get_bytes(),
+            &TEST_DATA[..]
+        );
+    }
+
+    #[test]
+    fn test_read_process_by_pid() {
+        static TEST_DATA: [u8; 8] = *b"PIDMEM!!";
+        let address = &TEST_DATA as *const _ as u64;
+
+        let data = BinaryData::new(
+            BinarySource::Process {
+                pid: std::process::id(),
+                address,
+                size: TEST_DATA.len() as u64,
+            },
+            8,
+            16,
+        )
+        .expect("should read /proc/<pid>/mem");
 
         assert_eq!(
             data.read_range(0, Some(TEST_DATA.len()))

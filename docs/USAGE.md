@@ -1127,41 +1127,58 @@ binfiddle --silent -i data.bin -o out.bin chain \
 
 ---
 
-### Reading Current Process Memory
+### Process Memory
 
 > **Experimental — Linux only**
 
-The `--process-self` flag reads memory from the current `binfiddle` process via `/proc/self/mem`. This is a minimal, read-only proof of concept intended for exploring live process memory without attaching to another process.
+Process memory support lets you inspect and patch memory via `/proc/<pid>/mem`. You can target the current process with `--process-self` or another same-user process with `--pid <PID>`. The `--list-regions` flag prints the target's memory map so you can pick a valid address and size.
 
 #### Syntax
 
 ```bash
+# List mapped regions
+binfiddle --process-self --list-regions
+binfiddle --pid <PID> --list-regions
+
+# Read memory
 binfiddle --process-self --address <ADDR> --size <N> <COMMAND> [OPTIONS]
+binfiddle --pid <PID> --address <ADDR> --size <N> <COMMAND> [OPTIONS]
 ```
 
-- `--process-self` selects `/proc/self/mem` as the input source.
-- `--address` is the base address to read from (hex or decimal).
-- `--size` is the number of bytes to read (hex or decimal).
-- It conflicts with `--input` and cannot be combined with `chain`.
+- `--process-self` targets `/proc/self/mem`.
+- `--pid <PID>` targets `/proc/<PID>/mem`.
+- `--list-regions` prints regions from `/proc/<PID>/maps` and exits.
+- `--address` and `--size` are hex or decimal.
+- `--allow-write` is required for any write back to process memory.
 
 #### Examples
 
 ```bash
-# Read 16 bytes from address 0x7ffd12345678
+# List memory regions of the current process
+binfiddle --process-self --list-regions
+
+# List regions of another process
+binfiddle --pid 1234 --list-regions
+
+# Read 16 bytes from the current process
 binfiddle --process-self --address 0x7ffd12345678 --size 16 read 0..16
 
-# Search current process memory for a hex pattern
+# Read from another process
+binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 16 read 0..16
+
+# Search process memory for a hex pattern
 binfiddle --process-self --address 0x400000 --size 0x1000 search 474343
 
-# Analyze entropy of a process memory region
-binfiddle --process-self --address 0x7f0000000 --size 0x10000 analyze entropy
+# Overwrite 4 bytes in the current process (requires --allow-write)
+binfiddle --process-self --address 0x7ffd12345678 --size 4 \
+    --allow-write write 0 DEADBEEF
 ```
 
 #### Limitations
 
-- **Read-only**: `write`, `edit`, and `--in-file` are rejected when `--process-self` is used.
-- **Current process only**: cross-process `/proc/<pid>/mem` is not supported yet.
-- **No region enumeration**: you must supply a valid, accessible address and size.
+- **Cross-process writes are not supported**: `--allow-write` only works with `--process-self`.
+- **Size must stay constant**: `insert` and `remove` are rejected because they would change the memory region size.
+- **No region enumeration for other processes** beyond `--list-regions`; you must supply a valid address and size.
 
 ---
 

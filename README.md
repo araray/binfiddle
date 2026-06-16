@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.15.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.16.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
 Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, and custom exploration of binary data across a variety of formats.
 
@@ -39,7 +39,7 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 | **Patch** | Apply binary patches (works with diff --format patch output) |
 | **Convert** | Text encoding conversion and line ending normalization |
 | **Chain** | Pipe multiple binfiddle commands together without shell escaping |
-| **Process Memory** | Read memory from the current process via `/proc/self/mem` (Linux, experimental) |
+| **Process Memory** | Read memory from any same-user process via `/proc/<pid>/mem` and list mapped regions (Linux, experimental) |
 | **Struct** | Parse binary data using YAML templates for structure definitions |
 
 ### Key Differentiators
@@ -409,27 +409,43 @@ binfiddle --silent -i data.bin -o out.bin chain \
 |--------|-------------|
 | `--step <COMMAND>` | One step to execute (repeatable, required). Quoting follows shell rules. |
 
-#### `read` from current process memory — Linux experimental
+#### Process memory — Linux experimental
 
-Read bytes from the running `binfiddle` process itself via `/proc/self/mem`. This is a minimal, read-only proof of concept for live process memory inspection.
+Read memory from the current process or any same-user process via `/proc/<pid>/mem`, list mapped memory regions, and write back to the current process with an explicit opt-in.
 
 ```bash
-# Read 16 bytes from a known address in the current process
+# List memory regions of the current process
+binfiddle --process-self --list-regions
+
+# List regions of another process
+binfiddle --pid 1234 --list-regions
+
+# Read 16 bytes from the current process at a known address
 binfiddle --process-self --address 0x7ffd12345678 --size 16 read 0..16
 
-# Search current process memory for a pattern
+# Read from another process
+binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 16 read 0..16
+
+# Search process memory for a pattern
 binfiddle --process-self --address 0x400000 --size 0x1000 search 474343
+
+# Overwrite 4 bytes in the current process (requires --allow-write)
+binfiddle --process-self --address 0x7ffd12345678 --size 4 \
+    --allow-write write 0 DEADBEEF
 ```
 
 **Process Memory Options:**
 
 | Option | Description |
 |--------|-------------|
-| `--process-self` | Read from `/proc/self/mem` instead of a file or stdin. |
-| `--address` | Base address to read from (hex or decimal). |
-| `--size` | Number of bytes to read (hex or decimal). |
+| `--process-self` | Target the current process. |
+| `--pid <PID>` | Target another process. |
+| `--list-regions` | Print memory regions from `/proc/<pid>/maps`. |
+| `--address` | Base address to read from or write to (hex or decimal). |
+| `--size` | Number of bytes to read or write (hex or decimal). |
+| `--allow-write` | Opt-in required for any process-memory write. |
 
-> **Note:** Writing to process memory is not supported in this version. Use `--output` to save any modified data to a file.
+> **Note:** Cross-process writes are not yet supported; `--allow-write` only works for `--process-self`.
 
 #### `struct <TEMPLATE>` — Parse binary data using structure templates
 
@@ -627,6 +643,7 @@ src/
 ├── main.rs          # CLI entry point and argument parsing
 ├── lib.rs           # Library exports
 ├── error.rs         # Error types (BinfiddleError)
+├── process_memory.rs # Linux process memory helpers
 ├── commands/
 │   ├── mod.rs       # Command trait and exports
 │   ├── read.rs      # Read command
@@ -654,10 +671,12 @@ pub struct BinaryData {
 }
 
 pub enum BinarySource {
-    File(PathBuf),       // Read from file
-    Stdin,               // Read from stdin
-    RawData(Vec<u8>),    // In-memory data
-    MemoryAddress(usize), // Process memory (reserved)
+    File(PathBuf),         // Read from file
+    Stdin,                 // Read from stdin
+    RawData(Vec<u8>),      // In-memory data
+    ProcessSelf { .. },    // Current process memory (/proc/self/mem)
+    Process { .. },        // Another process's memory (/proc/<pid>/mem)
+    MemoryAddress(usize),  // Raw memory address (reserved)
 }
 ```
 
@@ -670,6 +689,7 @@ All operations return `Result<T, BinfiddleError>` with specific error types:
 - `InvalidChunkSize` — Chunk size is 0 or exceeds data
 - `InvalidInput` — Unknown format or invalid input
 - `UnsupportedOperation` — Feature not yet implemented (e.g., memory address access)
+- `ProcessMemoryError` — `/proc/<pid>/mem` access or permission failure
 
 ## Contributing
 
