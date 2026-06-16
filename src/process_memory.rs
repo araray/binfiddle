@@ -39,6 +39,18 @@ impl MemoryRegion {
     }
 }
 
+/// How to handle inaccessible bytes when reading process memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FillMode {
+    /// Fail the read if any requested byte is not accessible.
+    #[default]
+    Error,
+    /// Replace inaccessible bytes with zeros.
+    ZeroFill,
+    /// Omit inaccessible bytes (the result may be shorter than requested).
+    Skip,
+}
+
 /// Returns the path to a process's `/proc/<pid>/maps` file.
 fn proc_maps_path(pid: u32) -> PathBuf {
     if pid == 0 || pid == std::process::id() {
@@ -48,14 +60,94 @@ fn proc_maps_path(pid: u32) -> PathBuf {
     }
 }
 
-/// Reads `size` bytes from `pid`'s memory starting at `address`.
+/// Reads `size` bytes from `pid`'s memory starting at `address`, failing if any
+/// part of the range is inaccessible.
 pub fn read_process_memory(pid: u32, address: u64, size: u64) -> Result<Vec<u8>> {
+    read_process_memory_sparse(pid, address, size, FillMode::Error)
+}
+
+/// Reads `size` bytes from `pid`'s memory starting at `address`, handling
+/// inaccessible gaps according to `fill_mode`.
+pub fn read_process_memory_sparse(
+    pid: u32,
+    address: u64,
+    size: u64,
+    fill_mode: FillMode,
+) -> Result<Vec<u8>> {
     if size > usize::MAX as u64 {
         return Err(BinfiddleError::ProcessMemoryError(
             "Requested size exceeds addressable memory".to_string(),
         ));
     }
+    if size == 0 {
+        return Ok(Vec::new());
+    }
 
+    let end = address + size;
+    let regions = parse_maps(pid)?;
+    let mut result = Vec::with_capacity(size as usize);
+    let mut pos = address;
+
+    for region in &regions {
+        if region.end <= pos {
+            continue;
+        }
+        if region.start >= end {
+            break;
+        }
+
+        if region.start > pos {
+            let gap = region.start - pos;
+            handle_inaccessible_gap(pos, gap, fill_mode, &mut result, pid)?;
+            pos = region.start;
+        }
+
+        let read_start = pos;
+        let read_end = region.end.min(end);
+        let read_len = read_end - read_start;
+
+        if !region.is_readable() {
+            handle_inaccessible_gap(read_start, read_len, fill_mode, &mut result, pid)?;
+            pos = read_end;
+            continue;
+        }
+
+        let chunk = read_process_memory_chunk(pid, read_start, read_len)?;
+        result.extend(chunk);
+        pos = read_end;
+    }
+
+    if pos < end {
+        let gap = end - pos;
+        handle_inaccessible_gap(pos, gap, fill_mode, &mut result, pid)?;
+    }
+
+    Ok(result)
+}
+
+fn handle_inaccessible_gap(
+    address: u64,
+    gap: u64,
+    fill_mode: FillMode,
+    result: &mut Vec<u8>,
+    pid: u32,
+) -> Result<()> {
+    match fill_mode {
+        FillMode::Error => Err(BinfiddleError::ProcessMemoryError(format!(
+            "Inaccessible process memory at 0x{:x}-0x{:x} in process {} (use --zero-fill-inaccessible or --skip-inaccessible)",
+            address,
+            address + gap,
+            pid_label(pid)
+        ))),
+        FillMode::ZeroFill => {
+            result.resize(result.len() + gap as usize, 0);
+            Ok(())
+        }
+        FillMode::Skip => Ok(()),
+    }
+}
+
+fn read_process_memory_chunk(pid: u32, address: u64, size: u64) -> Result<Vec<u8>> {
     if pid == 0 || pid == std::process::id() {
         read_self_memory(address, size)
     } else {
@@ -1215,8 +1307,14 @@ mod tests {
         };
         assert!(!mapping.is_null());
 
+        // Make the page read-only so the force-writable path is exercised and
+        // the VMA is unlikely to merge with adjacent writable mappings.
+        unsafe {
+            assert_eq!(libc::mprotect(mapping, page_size, libc::PROT_READ), 0);
+        }
+
         let address = mapping as u64 + page_size as u64 - 1;
-        let result = write_process_memory(0, address, &[0u8; 2], false);
+        let result = write_process_memory(0, address, &[0u8; 2], true);
         assert!(
             result.is_err(),
             "Expected boundary check to reject writes past region end"
@@ -1242,8 +1340,12 @@ mod tests {
         };
         assert!(!mapping.is_null());
 
+        unsafe {
+            assert_eq!(libc::mprotect(mapping, page_size, libc::PROT_READ), 0);
+        }
+
         let address = mapping as u64 + page_size as u64 - 1;
-        let result = write_process_memory(std::process::id(), address, &[0u8; 2], false);
+        let result = write_process_memory(std::process::id(), address, &[0u8; 2], true);
         assert!(
             result.is_err(),
             "Expected boundary check to reject writes past region end"
@@ -1251,6 +1353,59 @@ mod tests {
 
         unsafe {
             libc::munmap(mapping, page_size);
+        }
+    }
+
+    #[test]
+    fn test_sparse_read_with_protected_page() {
+        let page_size = page_size() as usize;
+        let mapping = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                page_size * 2,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        assert!(!mapping.is_null());
+
+        unsafe {
+            std::ptr::write_bytes(mapping as *mut u8, 0xab, page_size);
+            std::ptr::write_bytes((mapping as usize + page_size) as *mut u8, 0xcd, page_size);
+            assert_eq!(
+                libc::mprotect(
+                    (mapping as usize + page_size) as *mut libc::c_void,
+                    page_size,
+                    libc::PROT_NONE
+                ),
+                0
+            );
+        }
+
+        let address = mapping as u64;
+
+        let zero_filled =
+            read_process_memory_sparse(0, address, (page_size * 2) as u64, FillMode::ZeroFill)
+                .unwrap();
+        assert_eq!(zero_filled.len(), page_size * 2);
+        assert!(zero_filled[..page_size].iter().all(|&b| b == 0xab));
+        assert!(zero_filled[page_size..].iter().all(|&b| b == 0x00));
+
+        let skipped =
+            read_process_memory_sparse(0, address, (page_size * 2) as u64, FillMode::Skip).unwrap();
+        assert_eq!(skipped.len(), page_size);
+        assert!(skipped.iter().all(|&b| b == 0xab));
+
+        assert!(
+            read_process_memory_sparse(0, address, (page_size * 2) as u64, FillMode::Error)
+                .is_err(),
+            "Expected Error fill mode to fail on inaccessible page"
+        );
+
+        unsafe {
+            libc::munmap(mapping, page_size * 2);
         }
     }
 }

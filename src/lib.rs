@@ -45,12 +45,14 @@ pub enum BinarySource {
     ProcessSelf {
         address: u64,
         size: u64,
+        fill_mode: process_memory::FillMode,
     },
     /// Read memory from another process via `/proc/<pid>/mem`.
     Process {
         pid: u32,
         address: u64,
         size: u64,
+        fill_mode: process_memory::FillMode,
     },
     RawData(Vec<u8>),
 }
@@ -102,12 +104,17 @@ impl BinaryData {
                     "Memory address access not yet implemented".to_string(),
                 ));
             }
-            BinarySource::ProcessSelf { address, size } => {
-                process_memory::read_process_memory(0, *address, *size)?
-            }
-            BinarySource::Process { pid, address, size } => {
-                process_memory::read_process_memory(*pid, *address, *size)?
-            }
+            BinarySource::ProcessSelf {
+                address,
+                size,
+                fill_mode,
+            } => process_memory::read_process_memory_sparse(0, *address, *size, *fill_mode)?,
+            BinarySource::Process {
+                pid,
+                address,
+                size,
+                fill_mode,
+            } => process_memory::read_process_memory_sparse(*pid, *address, *size, *fill_mode)?,
             BinarySource::RawData(data) => data.clone(),
         };
 
@@ -340,6 +347,7 @@ mod tests {
             BinarySource::ProcessSelf {
                 address,
                 size: TEST_DATA.len() as u64,
+                fill_mode: process_memory::FillMode::Error,
             },
             8,
             16,
@@ -364,6 +372,7 @@ mod tests {
                 pid: std::process::id(),
                 address,
                 size: TEST_DATA.len() as u64,
+                fill_mode: process_memory::FillMode::Error,
             },
             8,
             16,

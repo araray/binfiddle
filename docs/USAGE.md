@@ -1184,6 +1184,14 @@ binfiddle --process-self --address 0x7ffd12345678 --size 4 \
 # Force-write a read-only region in another process (Linux x86_64, dangerous)
 binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
     --allow-write --force-writable write 0 CAFEBABE
+
+# Search process memory for an ASCII pattern
+binfiddle --process-self --address 0x400000 --size 0x1000 \
+    search "PASSWORD" --input-format ascii --all
+
+# Read a range that spans an inaccessible page, filling gaps with zeros
+binfiddle --process-self --address 0x7f8a1b2c3000 --size 0x2000 \
+    --zero-fill-inaccessible read 0..0x2000
 ```
 
 #### Process Memory Safety
@@ -1191,6 +1199,7 @@ binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
 - **`--allow-write` is required** for any write back to process memory. Without it, `write` and `edit` commands are rejected.
 - **`--force-writable` requires `--allow-write`** and temporarily changes read-only pages to writable. Binfiddle restores the original protection after the write, but if the operation is interrupted or an error occurs the target pages may be left writable.
 - **Writes are bounded**: a write that would extend past the mapped region found in `/proc/<pid>/maps` is rejected.
+- **Inaccessible pages**: by default a read fails if it touches an unmapped or non-readable page. Use `--zero-fill-inaccessible` to replace those bytes with zeros (useful for `read` and `search`) or `--skip-inaccessible` to omit them (read only).
 - **Cross-process access requires ptrace permissions**: reads use `process_vm_readv` and writes use `process_vm_writev` / ptrace injection. On systems with Yama LSM, check `/proc/sys/kernel/yama/ptrace_scope`:
   - `0` — unrestricted (same-user processes are traceable).
   - `1` — restricted to parent-child and direct descendants (default on many distributions).
@@ -1202,6 +1211,7 @@ binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
 
 - **Writable regions only by default**: cross-process writes use `process_vm_writev` and can only modify already-writable memory.
 - **`--force-writable`**: uses `mprotect` for `--process-self` and ptrace syscall injection for `--pid` (Linux x86_64 and aarch64). It temporarily changes page protection and restores it afterward, but it is inherently risky.
+- **`--skip-inaccessible` is read-only**: it cannot be used with `search` because reported offsets would no longer match the original process address space.
 - **Size must stay constant**: `insert` and `remove` are rejected because they would change the memory region size.
 - **No region enumeration for other processes** beyond `--list-regions`; you must supply a valid address and size.
 

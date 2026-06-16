@@ -247,3 +247,152 @@ fn cross_process_force_writable_modifies_readonly_page() {
     let status = child.wait().expect("helper did not exit");
     assert!(status.success(), "helper exited with non-zero status");
 }
+
+#[test]
+fn zero_fill_inaccessible_fills_unmapped_self_address() {
+    // Reading address 0 without --zero-fill-inaccessible fails because it is
+    // not mapped; with the flag it is replaced by a zero byte.
+    let output = Command::new(binfiddle())
+        .args([
+            "--process-self",
+            "--address",
+            "0",
+            "--size",
+            "1",
+            "--zero-fill-inaccessible",
+            "--format",
+            "hex",
+            "read",
+            "0..1",
+        ])
+        .output()
+        .expect("failed to run binfiddle");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("00"),
+        "Expected zero-filled byte, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn zero_fill_inaccessible_requires_process_source() {
+    let output = Command::new(binfiddle())
+        .args([
+            "-i",
+            "/dev/null",
+            "--zero-fill-inaccessible",
+            "read",
+            "0..1",
+        ])
+        .output()
+        .expect("failed to run binfiddle");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--process-self") || stderr.contains("--pid"),
+        "Expected process-source requirement error, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn skip_inaccessible_requires_read_command() {
+    let output = Command::new(binfiddle())
+        .args([
+            "--process-self",
+            "--address",
+            "0x1000",
+            "--size",
+            "1",
+            "--skip-inaccessible",
+            "search",
+            "00",
+        ])
+        .output()
+        .expect("failed to run binfiddle");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("read command") || stderr.contains("only supported with the read command"),
+        "Expected read-command restriction error, got: {}",
+        stderr
+    );
+}
+
+#[test]
+#[ignore = "requires ptrace access (run with --ignored --test-threads=1)"]
+fn cross_process_search_finds_readonly_static() {
+    if !ptrace_scope_permits_parent_child() {
+        return;
+    }
+
+    let (helper_path, _helper_dir) = compile_force_write_helper();
+    let mut child = Command::new(&helper_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn force-write helper");
+
+    let stdout = child.stdout.take().expect("helper stdout missing");
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .expect("failed to read helper announcement");
+
+    let mut parts = line.split_whitespace();
+    let pid: u32 = parts
+        .next()
+        .expect("missing pid")
+        .parse()
+        .expect("invalid pid");
+    let address = parts.next().expect("missing address");
+
+    let search_output = Command::new(binfiddle())
+        .args([
+            "--pid",
+            &pid.to_string(),
+            "--address",
+            address,
+            "--size",
+            "8",
+            "search",
+            "CHANGEME",
+            "--input-format",
+            "ascii",
+            "--all",
+            "--offsets-only",
+        ])
+        .output()
+        .expect("failed to run binfiddle search");
+    if !search_output.status.success() {
+        let stderr = String::from_utf8_lossy(&search_output.stderr);
+        if stderr.contains("Operation not permitted") || stderr.contains("Permission denied") {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        panic!("search failed: {}", stderr);
+    }
+
+    let stdout = String::from_utf8_lossy(&search_output.stdout);
+    assert!(
+        stdout.contains("0x"),
+        "Expected search to report an offset, got: {}",
+        stdout
+    );
+
+    let mut stdin = child.stdin.take().expect("helper stdin missing");
+    stdin.write_all(b"\n").expect("failed to write to helper");
+    let status = child.wait().expect("helper did not exit");
+    assert!(status.success(), "helper exited with non-zero status");
+}

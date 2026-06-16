@@ -35,6 +35,14 @@ struct Cli {
     #[arg(long, requires = "allow_write")]
     force_writable: bool,
 
+    /// Replace inaccessible process-memory pages with zeros instead of failing
+    #[arg(long, conflicts_with = "skip_inaccessible")]
+    zero_fill_inaccessible: bool,
+
+    /// Skip inaccessible process-memory pages instead of failing (read only)
+    #[arg(long, conflicts_with = "zero_fill_inaccessible")]
+    skip_inaccessible: bool,
+
     /// Base address to read from when using --process-self or --pid (hex or decimal)
     #[arg(long)]
     address: Option<String>,
@@ -318,6 +326,36 @@ fn main() -> Result<()> {
         }
     }
 
+    let fill_mode = if cli.zero_fill_inaccessible {
+        if !source_is_process_memory {
+            return Err(BinfiddleError::InvalidInput(
+                "--zero-fill-inaccessible can only be used with --process-self or --pid"
+                    .to_string(),
+            ));
+        }
+        if !matches!(command, Commands::Read { .. } | Commands::Search { .. }) {
+            return Err(BinfiddleError::InvalidInput(
+                "--zero-fill-inaccessible is only supported with read and search commands"
+                    .to_string(),
+            ));
+        }
+        binfiddle::process_memory::FillMode::ZeroFill
+    } else if cli.skip_inaccessible {
+        if !source_is_process_memory {
+            return Err(BinfiddleError::InvalidInput(
+                "--skip-inaccessible can only be used with --process-self or --pid".to_string(),
+            ));
+        }
+        if !matches!(command, Commands::Read { .. }) {
+            return Err(BinfiddleError::InvalidInput(
+                "--skip-inaccessible is only supported with the read command".to_string(),
+            ));
+        }
+        binfiddle::process_memory::FillMode::Skip
+    } else {
+        binfiddle::process_memory::FillMode::Error
+    };
+
     // Check if this command needs binary_data loaded
     let needs_input = matches!(
         command,
@@ -335,9 +373,18 @@ fn main() -> Result<()> {
             let address = parse_address_or_size(cli.address.as_deref().unwrap())?;
             let size = parse_address_or_size(cli.size.as_deref().unwrap())?;
             let source = if pid == 0 {
-                BinarySource::ProcessSelf { address, size }
+                BinarySource::ProcessSelf {
+                    address,
+                    size,
+                    fill_mode,
+                }
             } else {
-                BinarySource::Process { pid, address, size }
+                BinarySource::Process {
+                    pid,
+                    address,
+                    size,
+                    fill_mode,
+                }
             };
             BinaryData::new(source, cli.chunk_size, cli.width)?
         } else {
@@ -873,8 +920,10 @@ fn main() -> Result<()> {
             }
 
             let (pid, address, original_size) = match binary_data.source() {
-                BinarySource::ProcessSelf { address, size } => (0, *address, *size as usize),
-                BinarySource::Process { pid, address, size } => (*pid, *address, *size as usize),
+                BinarySource::ProcessSelf { address, size, .. } => (0, *address, *size as usize),
+                BinarySource::Process {
+                    pid, address, size, ..
+                } => (*pid, *address, *size as usize),
                 _ => unreachable!(),
             };
 
