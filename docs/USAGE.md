@@ -620,7 +620,7 @@ binfiddle -i <FILE> analyze <ANALYSIS_TYPE> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `--block-size <N>` | Analyze in blocks of N bytes (0 = entire file) [default: 256] |
+| `--block-size <N>` | Analyze in blocks of N bytes (0 = entire file, supports K/M/G suffixes) [default: 256] |
 | `--output-format <FMT>` | Output format: human, csv, json [default: human] |
 | `--range <RANGE>` | Only analyze specified range |
 
@@ -665,6 +665,28 @@ Offset 0x00000400: 4.2000 bits/byte (mixed content)
 Offset 0x00000800: 7.8034 bits/byte (encrypted or random)
 Offset 0x00000c00: 5.8000 bits/byte (mixed content)
 ```
+
+#### Streaming Analyze for Huge Files
+
+When `--block-size` is provided, `analyze` reads the input in blocks of that
+size instead of memory-mapping the whole file. This makes block-based entropy
+and IC analysis practical on files that are larger than RAM. Histogram mode
+accumulates counts across all blocks and still returns a single global result.
+
+```bash
+# Entropy of a 100 GB disk image without paging it all in
+binfiddle -i disk.img analyze entropy --block-size 64M
+
+# Per-block IC analysis of a huge memory dump
+binfiddle -i memory.dump analyze ic --block-size 16M --output-format csv
+```
+
+Limitations of streaming mode:
+
+- `--range` is not supported because the surrounding file offsets are not kept
+  in memory.
+- Process-memory sources (`--process-self`, `--pid`) use the normal in-memory
+  path.
 
 #### Histogram Analysis
 

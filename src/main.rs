@@ -180,9 +180,9 @@ enum Commands {
         #[arg(value_parser = ["entropy", "histogram", "hist", "ic", "ioc"])]
         analysis_type: String,
 
-        /// Block size for block-based analysis (0 = entire file)
+        /// Block size for block-based analysis (0 = entire file, supports K/M/G suffixes)
         #[arg(long, default_value = "256")]
-        block_size: usize,
+        block_size: String,
 
         /// Output format: human, csv, json
         #[arg(long, default_value = "human", value_parser = ["human", "csv", "json"])]
@@ -449,6 +449,49 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Handle streaming analyze before loading binary data.
+    if let Commands::Analyze {
+        analysis_type,
+        block_size,
+        output_format,
+        range,
+    } = command
+    {
+        let block_size = parse_byte_size(block_size)?;
+        if block_size > 0 {
+            if source_is_process_memory {
+                return Err(BinfiddleError::InvalidInput(
+                    "--block-size streaming analyze cannot be used with --process-self or --pid"
+                        .to_string(),
+                ));
+            }
+            if range.is_some() {
+                return Err(BinfiddleError::InvalidInput(
+                    "--range is not supported with --block-size streaming analyze".to_string(),
+                ));
+            }
+
+            let analysis = analysis_type.parse::<binfiddle::AnalysisType>()?;
+            let format = output_format.parse::<binfiddle::AnalyzeOutputFormat>()?;
+            let config = binfiddle::AnalyzeConfig {
+                analysis_type: analysis,
+                block_size,
+                format,
+                range: None,
+            };
+            let analyze_cmd = binfiddle::AnalyzeCommand::new(config);
+
+            let input: Box<dyn Read> = match cli.input.as_deref() {
+                Some("-") | None => Box::new(io::stdin()),
+                Some(path) => Box::new(std::fs::File::open(path)?),
+            };
+
+            let output = analyze_cmd.analyze_stream(input)?;
+            println!("{}", output);
+            return Ok(());
+        }
+    }
+
     // Check if this command needs binary_data loaded
     let needs_input = matches!(
         command,
@@ -690,7 +733,7 @@ fn main() -> Result<()> {
             // Build analyze configuration
             let config = binfiddle::AnalyzeConfig {
                 analysis_type: analysis,
-                block_size: *block_size,
+                block_size: parse_byte_size(block_size)?,
                 format,
                 range: range_bounds,
             };
