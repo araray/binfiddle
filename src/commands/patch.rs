@@ -162,9 +162,9 @@ impl PatchCommand {
             }
 
             // Parse the line: OFFSET:OLD_HEX:NEW_HEX
-            let entry = self.parse_patch_line(line).map_err(|e| {
-                BinfiddleError::Parse(format!("Line {}: {}", line_num + 1, e))
-            })?;
+            let entry = self
+                .parse_patch_line(line)
+                .map_err(|e| BinfiddleError::Parse(format!("Line {}: {}", line_num + 1, e)))?;
 
             entries.push(entry);
         }
@@ -215,9 +215,8 @@ impl PatchCommand {
             (s, 16)
         };
 
-        usize::from_str_radix(s, radix).map_err(|e| {
-            BinfiddleError::Parse(format!("Invalid offset '{}': {}", s, e))
-        })
+        usize::from_str_radix(s, radix)
+            .map_err(|e| BinfiddleError::Parse(format!("Invalid offset '{}': {}", s, e)))
     }
 
     /// Parses a hex string into bytes.
@@ -238,16 +237,14 @@ impl PatchCommand {
         let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
 
         // Ensure even length
-        if s.len() % 2 != 0 {
+        if !s.len().is_multiple_of(2) {
             return Err(BinfiddleError::Parse(format!(
                 "Hex string '{}' has odd length",
                 s
             )));
         }
 
-        hex::decode(&s).map_err(|e| {
-            BinfiddleError::Parse(format!("Invalid hex '{}': {}", s, e))
-        })
+        hex::decode(&s).map_err(|e| BinfiddleError::Parse(format!("Invalid hex '{}': {}", s, e)))
     }
 
     /// Validates that a patch can be applied to the given data.
@@ -362,7 +359,11 @@ impl PatchCommand {
     ///
     /// Currently, only same-length changes are supported for simplicity.
     /// Different-length changes are reported as errors.
-    pub fn apply(&self, data: &[u8], entries: &[PatchEntry]) -> Result<(Vec<u8>, Vec<PatchResult>)> {
+    pub fn apply(
+        &self,
+        data: &[u8],
+        entries: &[PatchEntry],
+    ) -> Result<(Vec<u8>, Vec<PatchResult>)> {
         let mut result_data = data.to_vec();
         let mut results = Vec::new();
 

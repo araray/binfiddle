@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.11.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.18.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
 
 Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, and custom exploration of binary data across a variety of formats.
 
@@ -38,6 +38,8 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 | **Diff** | Compare binary files with multiple output formats |
 | **Patch** | Apply binary patches (works with diff --format patch output) |
 | **Convert** | Text encoding conversion and line ending normalization |
+| **Chain** | Pipe multiple binfiddle commands together without shell escaping |
+| **Process Memory** | Read memory from any same-user process via `/proc/<pid>/mem` and list mapped regions (Linux, experimental) |
 | **Struct** | Parse binary data using YAML templates for structure definitions |
 
 ### Key Differentiators
@@ -378,25 +380,105 @@ diff modified.bin reconstructed.bin && echo "Perfect match!"
 0x00000002:be:ca
 ```
 
+#### `chain --step <COMMAND>` — Execute multiple commands in sequence
+
+Run several binfiddle commands in order, passing the byte output of each step as the input to the next. This avoids shell pipe escaping and makes multi-step transformations explicit.
+
+Intermediate steps must produce byte output (e.g., `write`, `edit`, `replace`, `convert`). The final step may produce text output.
+
+```bash
+# Replace a header and then patch a byte
+binfiddle -i firmware.bin -o patched.bin chain \
+    --step "edit replace 0..4 44415431" \
+    --step "write 8 00"
+
+# Chain from stdin and read the result
+printf '\x00\x11\x22\x33' | binfiddle chain \
+    --step "edit replace 0..2 4142" \
+    --step "read 0..4"
+
+# Run silently so intermediate diagnostics do not pollute stderr
+binfiddle --silent -i data.bin -o out.bin chain \
+    --step "edit replace 0..8 1234567890abcdef" \
+    --step "write 0 ff"
+```
+
+**Chain Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--step <COMMAND>` | One step to execute (repeatable, required). Quoting follows shell rules. |
+
+#### Process memory — Linux experimental
+
+Read memory from the current process or any same-user process via `/proc/<pid>/mem`, list mapped memory regions, and write back to the current process with an explicit opt-in.
+
+```bash
+# List memory regions of the current process
+binfiddle --process-self --list-regions
+
+# List regions of another process
+binfiddle --pid 1234 --list-regions
+
+# Read 16 bytes from the current process at a known address
+binfiddle --process-self --address 0x7ffd12345678 --size 16 read 0..16
+
+# Read from another process
+binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 16 read 0..16
+
+# Search process memory for a pattern
+binfiddle --process-self --address 0x400000 --size 0x1000 search 474343
+
+# Overwrite 4 bytes in the current process (requires --allow-write)
+binfiddle --process-self --address 0x7ffd12345678 --size 4 \
+    --allow-write write 0 DEADBEEF
+
+# Overwrite bytes in another process's writable memory
+binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
+    --allow-write write 0 CAFEBABE
+
+# Force-write a read-only region in the current process (dangerous)
+binfiddle --process-self --address 0x7ffd12345678 --size 4 \
+    --allow-write --force-writable write 0 DEADBEEF
+
+# Force-write a read-only region in another process (Linux x86_64, dangerous)
+binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
+    --allow-write --force-writable write 0 CAFEBABE
+```
+
+**Process Memory Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--process-self` | Target the current process. |
+| `--pid <PID>` | Target another process. |
+| `--list-regions` | Print memory regions from `/proc/<pid>/maps`. |
+| `--address` | Base address to read from or write to (hex or decimal). |
+| `--size` | Number of bytes to read or write (hex or decimal). |
+| `--allow-write` | Opt-in required for any process-memory write. |
+| `--force-writable` | Temporarily make read-only pages writable before writing. |
+
+> **Note:** `--force-writable` uses `mprotect` for the current process and ptrace syscall injection for cross-process writes (Linux x86_64 only). It is inherently risky and should be used with care.
+
 #### `struct <TEMPLATE>` — Parse binary data using structure templates
 
 Parse and interpret binary data according to YAML structure templates, useful for analyzing file headers, network protocols, and data structures.
 
 ```bash
 # Parse an ELF file header
-binfiddle -i /bin/ls struct elf_header.yaml
+binfiddle struct elf_header.yaml < /bin/ls
 
 # List fields in a template without parsing data
 binfiddle struct my_format.yaml --list-fields
 
 # Get a specific field value
-binfiddle -i firmware.bin struct header.yaml --get version
+binfiddle struct header.yaml --get version < firmware.bin
 
 # Output as JSON
-binfiddle -i data.bin struct format.yaml --output-format json
+binfiddle struct format.yaml --output-format json < data.bin
 
 # Output as YAML
-binfiddle -i data.bin struct format.yaml --output-format yaml
+binfiddle struct format.yaml --output-format yaml < data.bin
 ```
 
 **Template Format (YAML):**
@@ -430,6 +512,23 @@ fields:
 | `hex_string` | Variable | Raw bytes as hex |
 | `string` | Variable | ASCII/UTF-8 string |
 | `bytes` | Variable | Raw byte array |
+| `computed` | — | Virtual field from an expression |
+
+**Dynamic Templates:**
+
+Templates support field references (`$fieldname`), magic variables (`$@prev_end`, `$@file_size`), conditional fields (`when:`), computed fields, bitfields, counted arrays, and bit-level fields (`bit_offset`/`bit_size`).
+
+```yaml
+fields:
+  - name: filename_length
+    offset: 0x1A
+    size: 2
+    type: u16
+  - name: filename
+    offset: 0x1E
+    size: $filename_length
+    type: string
+```
 
 **Struct Options:**
 
@@ -557,6 +656,7 @@ src/
 ├── main.rs          # CLI entry point and argument parsing
 ├── lib.rs           # Library exports
 ├── error.rs         # Error types (BinfiddleError)
+├── process_memory.rs # Linux process memory helpers
 ├── commands/
 │   ├── mod.rs       # Command trait and exports
 │   ├── read.rs      # Read command
@@ -564,7 +664,10 @@ src/
 │   ├── edit.rs      # Edit command (insert/remove/replace)
 │   ├── search.rs    # Search command (exact/regex/mask/parallel)
 │   ├── analyze.rs   # Analyze command (entropy/histogram/IC)
-│   └── diff.rs      # Diff command (simple/unified/side-by-side/patch)
+│   ├── diff.rs      # Diff command (simple/unified/side-by-side/patch)
+│   ├── convert.rs   # Convert command (encoding/line endings/BOM)
+│   ├── patch.rs     # Patch command (apply/revert binary patches)
+│   └── struct_cmd.rs # Struct command (template-based parsing)
 └── utils/
     ├── mod.rs       # Utility exports
     ├── parsing.rs   # Range and format parsing
@@ -581,9 +684,12 @@ pub struct BinaryData {
 }
 
 pub enum BinarySource {
-    File(PathBuf),       // Read from file
-    Stdin,               // Read from stdin
-    RawData(Vec<u8>),    // In-memory data
+    File(PathBuf),         // Read from file
+    Stdin,                 // Read from stdin
+    RawData(Vec<u8>),      // In-memory data
+    ProcessSelf { .. },    // Current process memory (/proc/self/mem)
+    Process { .. },        // Another process's memory (/proc/<pid>/mem)
+    MemoryAddress(usize),  // Raw memory address (reserved)
 }
 ```
 
@@ -591,10 +697,12 @@ pub enum BinarySource {
 
 All operations return `Result<T, BinfiddleError>` with specific error types:
 - `Io` — File not found, permission denied, etc.
-- `Parse` — Invalid hex, decimal, or format strings
+- `Parse` — Invalid hex, decimal, template YAML, or format strings
 - `InvalidRange` — Out of bounds or invalid range specification
 - `InvalidChunkSize` — Chunk size is 0 or exceeds data
 - `InvalidInput` — Unknown format or invalid input
+- `UnsupportedOperation` — Feature not yet implemented (e.g., memory address access)
+- `ProcessMemoryError` — `/proc/<pid>/mem` access or permission failure
 
 ## Contributing
 
@@ -613,33 +721,28 @@ cargo test -- --nocapture
 cargo build --release
 
 # Build for all platforms
-./build_releases.sh
+./scripts/build_releases.sh --native
 ```
 
 ### Code Style
 
 - Follow Rust standard formatting (`cargo fmt`)
-- Run clippy for lints (`cargo clippy`)
+- Run clippy with zero warnings (`cargo clippy -- -D warnings`)
 - Add tests for new functionality
 - Document public APIs with doc comments
 
 ## Roadmap
 
-TBD
-
-### Completed Features
-
-- ✅ **Read/Write/Edit** — Core binary manipulation
-- ✅ **Search** — Exact, regex, and wildcard pattern matching with parallel processing
-- ✅ **Analyze** — Entropy, histogram, and Index of Coincidence analysis
-- ✅ **Diff** — Binary comparison with multiple output formats
-
-### Planned Features
-
-- **Patch** — Apply binary patches from diff output
-- **Convert** — Encoding and line ending conversion
-- **Struct** — Structure-aware parsing with templates
-- **Memory** — Live process memory inspection
+| Phase | Theme | Status |
+|-------|-------|--------|
+| 1 | Core read/write/edit | ✅ Complete |
+| 2 | Search, analyze, diff | ✅ Complete |
+| 3 | Convert, patch, struct | ✅ Complete |
+| 4 | Template system evolution | ✅ Complete |
+| 5 | Bit-level precision | ✅ Complete |
+| 6 | Command chaining & pipelines | ✅ Complete |
+| 7 | Live process memory | ✅ v1 Complete (/proc/self read-only) |
+| 8 | Advanced analysis & intelligence | 🔲 Planned |
 
 ## License
 

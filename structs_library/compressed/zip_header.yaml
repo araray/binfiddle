@@ -126,17 +126,31 @@ fields:
     description: "Length of extra field following filename"
 
   # ============================================================================
-  # Variable-length fields (not at fixed offsets)
+  # Variable-length fields (dynamic offsets/sizes using field references)
   # ============================================================================
-  # 
-  # Filename (offset: 0x1E, size: filename_length)
-  #   ASCII or UTF-8 (if bit 11 of flags set)
+
+  - name: filename
+    offset: 0x1E
+    size: $filename_length
+    type: string
+    description: "Filename (variable length)"
+
+  - name: extra_field
+    offset: $filename_length + 0x1E
+    size: $extra_field_length
+    type: bytes
+    description: "Extra field data (variable length)"
+
+  - name: header_total_size
+    type: computed
+    value: 0x1E + $filename_length + $extra_field_length
+    description: "Total size of the local file header"
+
+  # ============================================================================
+  # Notes on remaining ZIP structure
+  # ============================================================================
   #
-  # Extra field (offset: 0x1E + filename_length, size: extra_field_length)
-  #   Contains extensible data blocks (timestamps, Unix permissions, etc.)
-  #   Each block: Header ID (2), Data Size (2), Data (variable)
-  #
-  # Compressed data (offset: 0x1E + filename_length + extra_field_length)
+  # Compressed data follows at offset 0x1E + filename_length + extra_field_length
   #   Size: compressed_size bytes
   #
   # Data descriptor (optional, if bit 3 of flags set)

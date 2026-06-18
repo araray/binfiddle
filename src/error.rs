@@ -20,6 +20,19 @@ pub enum BinfiddleError {
 
     #[error("Operation not supported: {0}")]
     UnsupportedOperation(String),
+
+    #[error("Process memory error: {0}")]
+    ProcessMemoryError(String),
+
+    #[error("Chain step {step} failed: {command}\n{stderr}")]
+    ChainStepFailed {
+        step: usize,
+        command: String,
+        stderr: String,
+    },
+
+    #[error("Checksum verification failed")]
+    ChecksumVerificationFailed,
 }
 
 pub type Result<T> = std::result::Result<T, BinfiddleError>;

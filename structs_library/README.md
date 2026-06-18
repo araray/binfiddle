@@ -6,13 +6,13 @@ Comprehensive collection of binary structure templates for use with the `binfidd
 
 ```bash
 # Parse a binary file using a template
-binfiddle struct structs_library/executables/elf64_header.yaml -i /bin/ls
+binfiddle struct structs_library/executables/elf64_header.yaml < /bin/ls
 
 # Get a specific field value
-binfiddle struct structs_library/images/png_header.yaml -i image.png --get width
+binfiddle struct structs_library/images/png_header.yaml --get width < image.png
 
 # Output as JSON
-binfiddle struct structs_library/network/ipv4_header.yaml -i packet.bin --format json
+binfiddle struct structs_library/network/ipv4_header.yaml --format json < packet.bin
 
 # List all fields in a template
 binfiddle struct structs_library/audio/wav_riff_header.yaml --list-fields
@@ -75,13 +75,18 @@ fields:
   - name: field_name
     offset: 0x00
     size: 4
-    type: u32  # u8, u16, u32, u64, i8, i16, i32, i64, hex_string, string, bytes
+    type: u32  # u8, u16, u32, u64, i8, i16, i32, i64, hex_string, string, bytes, computed
     description: "Field purpose"
     assert: "expected_value"  # Optional - validates field value
     enum:  # Optional - maps values to names
       0: "Zero"
       1: "One"
     display: hex  # Optional - format override (hex, dec, bin, oct)
+    when: $version >= 2  # Optional - conditional parsing
+    bitfields:  # Optional - extract bitfields from integer fields
+      - name: is_set
+        bits: 0
+        type: bool
 ```
 
 ## Supported Field Types
@@ -89,6 +94,121 @@ fields:
 - **Integers**: `u8`, `u16`, `u32`, `u64` (unsigned), `i8`, `i16`, `i32`, `i64` (signed)
 - **Strings**: `string` (ASCII/UTF-8, null-terminated or fixed length)
 - **Raw Data**: `hex_string` (displayed as hex), `bytes` (raw bytes)
+- **Computed**: `computed` — virtual field calculated from an expression
+
+## Dynamic Templates
+
+Templates support a small expression language for dynamic offsets, sizes, conditions, and computed values.
+
+### Expressions
+
+- **Field references**: `$fieldname`, `$fieldname.bitfield`
+- **Magic variables**:
+  - `$@current` — current parse offset
+  - `$@prev_end` — end of previous field
+  - `$@file_size` — total input size
+  - `$@base` — base offset of the current template
+- **Operators**: `+`, `-`, `*`, `/`, `%`, `**`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `and`/`&&`, `or`/`||`, `not`
+- **Numbers**: decimal (`42`) or hex (`0x2a`)
+
+### Dynamic Offset/Size Example
+
+```yaml
+fields:
+  - name: filename_length
+    offset: 0x1A
+    size: 2
+    type: u16
+  - name: filename
+    offset: 0x1E
+    size: $filename_length
+    type: string
+```
+
+### Conditional Field Example
+
+```yaml
+fields:
+  - name: version
+    offset: 0
+    size: 1
+    type: u8
+  - name: extra
+    offset: 1
+    size: 1
+    type: u8
+    when: $version >= 2
+```
+
+### Computed Field Example
+
+```yaml
+fields:
+  - name: total_size
+    type: computed
+    value: $header_size + $payload_size
+```
+
+### Bitfield Example
+
+```yaml
+fields:
+  - name: flags
+    offset: 0
+    size: 1
+    type: u8
+    bitfields:
+      - name: is_compressed
+        bits: 0
+        type: bool
+      - name: level
+        bits: 2..5
+        type: u8
+```
+
+### Bit-Level Field Example
+
+Fields can be declared at arbitrary bit positions and widths. Bit ordering
+follows the template's `endian` setting:
+
+- `endian: big` — MSB-first within each byte (network protocols, registers).
+- `endian: little` — LSB-first within each byte (some file formats).
+
+```yaml
+endian: big
+fields:
+  - name: data_offset
+    offset: 0x0C
+    bit_size: 4
+    type: u8
+
+  - name: reserved
+    offset: 0x0C
+    bit_offset: 4
+    bit_size: 3
+    type: u8
+
+  - name: ns_flag
+    offset: 0x0C
+    bit_offset: 7
+    bit_size: 1
+    type: u8
+```
+
+### Array Example
+
+```yaml
+fields:
+  - name: count
+    offset: 0
+    size: 1
+    type: u8
+  - name: entries
+    offset: 1
+    size: 1
+    type: u8
+    count: $count
+```
 
 ## Contributing
 

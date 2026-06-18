@@ -30,7 +30,7 @@ Binfiddle is a developer-focused binary manipulation toolkit designed to be flex
 ## Unique Capabilities of binfiddle
 
 - **Seamless CLI Integration:**
-     Binfiddle is engineered to work flawlessly with Unix pipes, making it easy to integrate into custom workflows and automated scripts. For instance, diff-ing outputs or chaining multiple binary transformations is straightforward.
+     Binfiddle is engineered to work flawlessly with Unix pipes, making it easy to integrate into custom workflows and automated scripts. For complex transformations, the built-in `chain` command sequences multiple binfiddle steps without the escaping issues of nested shell pipes. Experimental support for process memory inspection via `/proc/<pid>/mem` also enables live analysis of the current or same-user processes from the same command-line interface.
 - **Modular Design:**
      Unlike monolithic tools, binfiddle’s modular approach allows users to perform specific operations (read, write, edit) without launching a full interactive session. This is especially useful when combined with other command-line utilities.
 - **Enhanced Differential Analysis:**

@@ -23,6 +23,7 @@
 use super::Command;
 use crate::error::{BinfiddleError, Result};
 use crate::BinaryData;
+use std::io::Read;
 
 /// Analysis type to perform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,9 +36,11 @@ pub enum AnalysisType {
     IndexOfCoincidence,
 }
 
-impl AnalysisType {
+impl std::str::FromStr for AnalysisType {
+    type Err = BinfiddleError;
+
     /// Parses an analysis type from a string.
-    pub fn from_str(s: &str) -> Result<Self> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "entropy" => Ok(AnalysisType::Entropy),
             "histogram" | "hist" => Ok(AnalysisType::Histogram),
@@ -61,9 +64,11 @@ pub enum OutputFormat {
     Json,
 }
 
-impl OutputFormat {
+impl std::str::FromStr for OutputFormat {
+    type Err = BinfiddleError;
+
     /// Parses an output format from a string.
-    pub fn from_str(s: &str) -> Result<Self> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "human" | "text" => Ok(OutputFormat::Human),
             "csv" => Ok(OutputFormat::Csv),
@@ -207,7 +212,7 @@ impl AnalyzeCommand {
             .collect();
 
         // Sort by count descending
-        histogram.sort_by(|a, b| b.count.cmp(&a.count));
+        histogram.sort_by_key(|b| std::cmp::Reverse(b.count));
 
         histogram
     }
@@ -225,7 +230,11 @@ impl AnalyzeCommand {
             frequencies[byte as usize] += 1;
         }
 
-        let len = if data.is_empty() { 1.0 } else { data.len() as f64 };
+        let len = if data.is_empty() {
+            1.0
+        } else {
+            data.len() as f64
+        };
 
         (0u16..256)
             .map(|byte_val| {
@@ -403,7 +412,11 @@ impl AnalyzeCommand {
     }
 
     /// Formats histogram results according to the configured output format.
-    pub fn format_histogram_results(&self, histogram: &[ByteFrequency], total_bytes: usize) -> String {
+    pub fn format_histogram_results(
+        &self,
+        histogram: &[ByteFrequency],
+        total_bytes: usize,
+    ) -> String {
         match self.config.format {
             OutputFormat::Human => self.format_histogram_human(histogram, total_bytes),
             OutputFormat::Csv => self.format_histogram_csv(histogram),
@@ -557,7 +570,9 @@ impl AnalyzeCommand {
             if start >= data.len() || end > data.len() || start >= end {
                 return Err(BinfiddleError::InvalidRange(format!(
                     "Invalid range [{}, {}) for data of length {}",
-                    start, end, data.len()
+                    start,
+                    end,
+                    data.len()
                 )));
             }
             &data[start..end]
@@ -576,6 +591,112 @@ impl AnalyzeCommand {
             }
             AnalysisType::IndexOfCoincidence => {
                 let results = self.analyze_ic(data);
+                Ok(self.format_ic_results(&results))
+            }
+        }
+    }
+
+    /// Builds a histogram from aggregated byte counts.
+    fn histogram_from_counts(counts: &[u64; 256], total_bytes: usize) -> Vec<ByteFrequency> {
+        if total_bytes == 0 {
+            return Vec::new();
+        }
+
+        let len = total_bytes as f64;
+        let mut histogram: Vec<ByteFrequency> = counts
+            .iter()
+            .enumerate()
+            .filter(|(_, &count)| count > 0)
+            .map(|(byte_val, &count)| ByteFrequency {
+                byte_value: byte_val as u8,
+                count: count as usize,
+                percentage: (count as f64 / len) * 100.0,
+            })
+            .collect();
+
+        histogram.sort_by_key(|b| std::cmp::Reverse(b.count));
+        histogram
+    }
+
+    /// Streams an analysis over a reader in fixed-size blocks.
+    ///
+    /// The configured `block_size` is used as both the read chunk size and the
+    /// analysis block size. This avoids loading the entire input into memory,
+    /// making block-by-block entropy and IC analysis practical for files that
+    /// are larger than RAM. The histogram analysis type accumulates counts
+    /// across all blocks and returns a single global histogram.
+    pub fn analyze_stream<R: Read>(&self, mut reader: R) -> Result<String> {
+        let block_size = self.config.block_size;
+        if block_size == 0 {
+            return Err(BinfiddleError::InvalidInput(
+                "Streaming analysis requires --block-size > 0".to_string(),
+            ));
+        }
+
+        let mut buffer = vec![0u8; block_size];
+        let mut offset = 0usize;
+
+        match self.config.analysis_type {
+            AnalysisType::Entropy => {
+                let mut results = Vec::new();
+                loop {
+                    let n = reader.read(&mut buffer)?;
+                    if n == 0 {
+                        break;
+                    }
+                    results.push(EntropyResult {
+                        offset,
+                        size: n,
+                        entropy: Self::calculate_entropy(&buffer[..n]),
+                    });
+                    offset += n;
+                }
+                if results.is_empty() {
+                    results.push(EntropyResult {
+                        offset: 0,
+                        size: 0,
+                        entropy: 0.0,
+                    });
+                }
+                Ok(self.format_entropy_results(&results))
+            }
+            AnalysisType::Histogram => {
+                let mut counts = [0u64; 256];
+                let mut total = 0usize;
+                loop {
+                    let n = reader.read(&mut buffer)?;
+                    if n == 0 {
+                        break;
+                    }
+                    for &byte in &buffer[..n] {
+                        counts[byte as usize] += 1;
+                    }
+                    total += n;
+                }
+                let histogram = Self::histogram_from_counts(&counts, total);
+                Ok(self.format_histogram_results(&histogram, total))
+            }
+            AnalysisType::IndexOfCoincidence => {
+                let mut results = Vec::new();
+                loop {
+                    let n = reader.read(&mut buffer)?;
+                    if n == 0 {
+                        break;
+                    }
+                    results.push(IcResult {
+                        offset,
+                        size: n,
+                        ic: Self::calculate_ic(&buffer[..n]),
+                    });
+                    offset += n;
+                }
+                if results.is_empty() {
+                    results.push(IcResult {
+                        offset: 0,
+                        size: 0,
+                        ic: 0.0,
+                    });
+                }
                 Ok(self.format_ic_results(&results))
             }
         }
@@ -781,44 +902,44 @@ mod tests {
     #[test]
     fn test_analysis_type_parsing() {
         assert!(matches!(
-            AnalysisType::from_str("entropy").unwrap(),
+            "entropy".parse::<AnalysisType>().unwrap(),
             AnalysisType::Entropy
         ));
         assert!(matches!(
-            AnalysisType::from_str("HISTOGRAM").unwrap(),
+            "HISTOGRAM".parse::<AnalysisType>().unwrap(),
             AnalysisType::Histogram
         ));
         assert!(matches!(
-            AnalysisType::from_str("ic").unwrap(),
+            "ic".parse::<AnalysisType>().unwrap(),
             AnalysisType::IndexOfCoincidence
         ));
         assert!(matches!(
-            AnalysisType::from_str("ioc").unwrap(),
+            "ioc".parse::<AnalysisType>().unwrap(),
             AnalysisType::IndexOfCoincidence
         ));
-        assert!(AnalysisType::from_str("invalid").is_err());
+        assert!("invalid".parse::<AnalysisType>().is_err());
     }
 
     #[test]
     fn test_output_format_parsing() {
         assert!(matches!(
-            OutputFormat::from_str("human").unwrap(),
+            "human".parse::<OutputFormat>().unwrap(),
             OutputFormat::Human
         ));
         assert!(matches!(
-            OutputFormat::from_str("CSV").unwrap(),
+            "CSV".parse::<OutputFormat>().unwrap(),
             OutputFormat::Csv
         ));
         assert!(matches!(
-            OutputFormat::from_str("json").unwrap(),
+            "json".parse::<OutputFormat>().unwrap(),
             OutputFormat::Json
         ));
-        assert!(OutputFormat::from_str("xml").is_err());
+        assert!("xml".parse::<OutputFormat>().is_err());
     }
 
     #[test]
     fn test_range_restriction() {
-        let data = vec![0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF];
+        let data = [0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF];
         let config = AnalyzeConfig {
             analysis_type: AnalysisType::Entropy,
             block_size: 0,
@@ -847,5 +968,78 @@ mod tests {
         assert_eq!(interpret_ic(0.01), "possibly compressed");
         assert_eq!(interpret_ic(0.03), "structured binary");
         assert_eq!(interpret_ic(0.07), "text-like patterns");
+    }
+
+    #[test]
+    fn test_stream_entropy_uniform_data() {
+        let data = [0x00u8; 10];
+        let config = AnalyzeConfig {
+            analysis_type: AnalysisType::Entropy,
+            block_size: 4,
+            format: OutputFormat::Human,
+            range: None,
+        };
+        let cmd = AnalyzeCommand::new(config);
+        let output = cmd.analyze_stream(&data[..]).unwrap();
+        assert!(output.contains("Blocks: 3"));
+        assert!(output.contains("0x00000000"));
+    }
+
+    #[test]
+    fn test_stream_entropy_two_value_data() {
+        let mut data = vec![0x00u8; 4];
+        data.extend(vec![0xFFu8; 4]);
+        let config = AnalyzeConfig {
+            analysis_type: AnalysisType::Entropy,
+            block_size: 8,
+            format: OutputFormat::Human,
+            range: None,
+        };
+        let cmd = AnalyzeCommand::new(config);
+        let output = cmd.analyze_stream(&data[..]).unwrap();
+        // Two equally frequent values -> entropy ~1.0
+        assert!(output.contains("1.0000"));
+    }
+
+    #[test]
+    fn test_stream_histogram_accumulates_counts() {
+        let data = [0xAA, 0xAA, 0xBB, 0xCC];
+        let config = AnalyzeConfig {
+            analysis_type: AnalysisType::Histogram,
+            block_size: 2,
+            format: OutputFormat::Human,
+            range: None,
+        };
+        let cmd = AnalyzeCommand::new(config);
+        let output = cmd.analyze_stream(&data[..]).unwrap();
+        assert!(output.contains("Total bytes: 4"));
+        assert!(output.contains("0xaa"));
+    }
+
+    #[test]
+    fn test_stream_ic_per_block() {
+        let data = [0x00, 0x00, 0xFF, 0xFF];
+        let config = AnalyzeConfig {
+            analysis_type: AnalysisType::IndexOfCoincidence,
+            block_size: 2,
+            format: OutputFormat::Human,
+            range: None,
+        };
+        let cmd = AnalyzeCommand::new(config);
+        let output = cmd.analyze_stream(&data[..]).unwrap();
+        assert!(output.contains("0x00000000"));
+        assert!(output.contains("0x00000002"));
+    }
+
+    #[test]
+    fn test_stream_requires_block_size() {
+        let config = AnalyzeConfig {
+            analysis_type: AnalysisType::Entropy,
+            block_size: 0,
+            format: OutputFormat::Human,
+            range: None,
+        };
+        let cmd = AnalyzeCommand::new(config);
+        assert!(cmd.analyze_stream(&[][..]).is_err());
     }
 }

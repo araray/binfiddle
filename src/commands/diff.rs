@@ -51,7 +51,9 @@ pub enum DiffFormat {
     Summary,
 }
 
-impl DiffFormat {
+impl std::str::FromStr for DiffFormat {
+    type Err = BinfiddleError;
+
     /// Parse a format string into a DiffFormat enum.
     ///
     /// # Arguments
@@ -62,7 +64,7 @@ impl DiffFormat {
     ///
     /// # Errors
     /// Returns `InvalidInput` if the format string is not recognized.
-    pub fn from_str(s: &str) -> Result<Self> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "simple" => Ok(DiffFormat::Simple),
             "unified" => Ok(DiffFormat::Unified),
@@ -76,7 +78,9 @@ impl DiffFormat {
             ))),
         }
     }
+}
 
+impl DiffFormat {
     /// Automatically selects the best format based on difference density.
     ///
     /// # Arguments
@@ -520,6 +524,7 @@ impl DiffCommand {
     }
 
     /// Formats a single line in unified diff format.
+    #[allow(clippy::too_many_arguments)]
     fn format_unified_line(
         &self,
         output: &mut String,
@@ -576,7 +581,7 @@ impl DiffCommand {
                 output.push(' ');
             } else {
                 let byte = data[offset];
-                let ch = if byte >= 0x20 && byte <= 0x7E {
+                let ch = if (0x20..=0x7E).contains(&byte) {
                     byte as char
                 } else {
                     '.'
@@ -720,6 +725,7 @@ impl DiffCommand {
     }
 
     /// Formats one side of a side-by-side line.
+    #[allow(clippy::too_many_arguments)]
     fn format_side_line(
         &self,
         data: &[u8],
@@ -772,10 +778,10 @@ impl DiffCommand {
         let mut output = String::new();
 
         // Header comment
-        output.push_str(&format!("# binfiddle patch file\n"));
+        output.push_str("# binfiddle patch file\n");
         output.push_str(&format!("# source: {}\n", file1_name));
         output.push_str(&format!("# target: {}\n", file2_name));
-        output.push_str(&format!("# format: OFFSET:OLD_HEX:NEW_HEX\n"));
+        output.push_str("# format: OFFSET:OLD_HEX:NEW_HEX\n");
         output.push_str(&format!("# differences: {}\n", differences.len()));
         output.push_str("#\n");
 
@@ -1008,26 +1014,26 @@ mod tests {
 
     #[test]
     fn test_diff_format_parsing() {
-        assert_eq!(DiffFormat::from_str("simple").unwrap(), DiffFormat::Simple);
+        assert_eq!("simple".parse::<DiffFormat>().unwrap(), DiffFormat::Simple);
         assert_eq!(
-            DiffFormat::from_str("unified").unwrap(),
+            "unified".parse::<DiffFormat>().unwrap(),
             DiffFormat::Unified
         );
         assert_eq!(
-            DiffFormat::from_str("side-by-side").unwrap(),
+            "side-by-side".parse::<DiffFormat>().unwrap(),
             DiffFormat::SideBySide
         );
         assert_eq!(
-            DiffFormat::from_str("sidebyside").unwrap(),
+            "sidebyside".parse::<DiffFormat>().unwrap(),
             DiffFormat::SideBySide
         );
-        assert_eq!(DiffFormat::from_str("patch").unwrap(), DiffFormat::Patch);
+        assert_eq!("patch".parse::<DiffFormat>().unwrap(), DiffFormat::Patch);
         assert_eq!(
-            DiffFormat::from_str("summary").unwrap(),
+            "summary".parse::<DiffFormat>().unwrap(),
             DiffFormat::Summary
         );
-        assert_eq!(DiffFormat::from_str("auto").unwrap(), DiffFormat::Simple); // Placeholder
-        assert!(DiffFormat::from_str("invalid").is_err());
+        assert_eq!("auto".parse::<DiffFormat>().unwrap(), DiffFormat::Simple); // Placeholder
+        assert!("invalid".parse::<DiffFormat>().is_err());
     }
 
     #[test]
@@ -1059,8 +1065,8 @@ mod tests {
         let data1 = vec![0x00; 1000];
         let mut data2 = vec![0x00; 1000];
         // Change 80% of bytes
-        for i in 0..800 {
-            data2[i] = 0xFF;
+        for byte in data2.iter_mut().take(800) {
+            *byte = 0xFF;
         }
 
         let differences = cmd.compare(&data1, &data2);

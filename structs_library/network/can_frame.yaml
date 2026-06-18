@@ -1,0 +1,57 @@
+# CAN 2.0A Standard Frame Header
+# Specification: ISO 11898-1
+# Purpose: Demonstrate bit-level parsing across byte boundaries
+#
+# This template parses the first 18 bits of a CAN 2.0A standard frame
+# stored in big-endian (MSB-first) bit order.
+#
+# Bit layout:
+#   bits 0..11  : Arbitration ID (11 bits)
+#   bit  11     : RTR (Remote Transmission Request)
+#   bit  12     : IDE (Identifier Extension, 0 for standard frame)
+#   bit  13     : r0 (reserved bit)
+#   bits 14..18 : DLC (Data Length Code, 0-8)
+#
+# Reference: https://www.iso.org/standard/63648.html
+
+name: CAN 2.0A Standard Frame Header
+endian: big
+fields:
+  - name: arbitration_id
+    offset: 0
+    bit_size: 11
+    type: u16
+    description: "11-bit arbitration identifier"
+
+  - name: rtr
+    offset: 1
+    bit_offset: 3
+    bit_size: 1
+    type: u8
+    description: "Remote Transmission Request (1 = remote frame)"
+
+  - name: ide
+    offset: 1
+    bit_offset: 4
+    bit_size: 1
+    type: u8
+    description: "Identifier Extension bit (0 = standard 11-bit ID)"
+
+  - name: r0
+    offset: 1
+    bit_offset: 5
+    bit_size: 1
+    type: u8
+    description: "Reserved bit"
+
+  - name: dlc
+    offset: 1
+    bit_offset: 6
+    bit_size: 4
+    type: u8
+    description: "Data Length Code (0-8 bytes)"
+
+  - name: data_byte_count
+    type: computed
+    value: $dlc
+    description: "Number of data bytes following the header"

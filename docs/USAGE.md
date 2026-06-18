@@ -10,10 +10,13 @@ This guide provides detailed usage instructions, examples, and common workflows 
   - [Writing Data](#writing-data)
   - [Editing Data](#editing-data)
   - [Searching Data](#searching-data)
+  - [Hashing Data](#hashing-data)
   - [Analyzing Data](#analyzing-data)
   - [Comparing Files (Diff)](#comparing-files-diff)
   - [Converting Encodings](#converting-encodings)
   - [Applying Patches](#applying-patches)
+  - [Chaining Commands](#chaining-commands)
+  - [Reading Current Process Memory](#reading-current-process-memory)
   - [Parsing Structures](#parsing-structures)
 - [Input and Output](#input-and-output)
   - [File I/O](#file-io)
@@ -47,6 +50,7 @@ binfiddle analyze --help      # Analyze command help
 binfiddle diff --help         # Diff command help
 binfiddle convert --help      # Convert command help
 binfiddle patch --help        # Patch command help
+binfiddle chain --help        # Chain command help
 binfiddle struct --help       # Struct command help
 binfiddle --version           # Version information
 ```
@@ -490,6 +494,29 @@ binfiddle search "[\x20-\x7E]{10,}\x00" --input-format regex -i data.bin --all
 | `--context <N>` | Show N bytes before/after each match |
 | `--no-overlap` | Prevent overlapping matches |
 | `--color <MODE>` | Color output: always, auto, never |
+| `--block-size <SIZE>` | Stream input in blocks (e.g. `64M`, `1G`) |
+
+#### Streaming Search for Very Large Files
+
+By default `search` memory-maps the input. For files that are larger than RAM,
+or when you want to avoid paging the whole file into memory, use
+`--block-size` to stream the input in fixed-size blocks. Boundary matches are
+still detected.
+
+```bash
+# Search a 100 GB file without loading it whole
+binfiddle -i huge.bin search "7F454C46" --all --block-size 64M
+
+# Stop at the first match while streaming
+binfiddle -i huge.bin search "CAFEBABE" --block-size 256M
+```
+
+Limitations of streaming mode:
+
+- Only `hex`, `ascii`, `dec`, `oct`, `bin`, and `mask` patterns are supported.
+  Regex patterns need an unbounded lookback window, so they require the default
+  memory-mapped path.
+- `--context` is disabled because the surrounding bytes are not kept in memory.
 
 #### Search Output Formats
 
@@ -517,6 +544,81 @@ binfiddle search "[\x20-\x7E]{10,}\x00" --input-format regex -i data.bin --all
 
 ---
 
+
+### Hashing Data
+
+The `hash` command computes common digests over binary data.
+
+#### Supported Algorithms
+
+| Algorithm | Digest Size | Use Case |
+|-----------|-------------|----------|
+| `md5` | 128-bit | Legacy checksums |
+| `sha1` | 160-bit | Legacy / git-style verification |
+| `sha256` | 256-bit | Cryptographic verification |
+| `blake3` | 256-bit | Fast, modern cryptographic hash |
+| `crc32` | 32-bit | Data integrity / zip-style checksums |
+| `xxhash64` | 64-bit | Fast non-cryptographic checksum |
+
+#### Syntax
+
+```bash
+binfiddle -i <FILE> hash <ALGORITHM> [OPTIONS]
+```
+
+#### Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--output-format` | Output encoding (`hex`, `base64`) | `hex` |
+| `--block-size <N>` | Hash non-overlapping blocks of N bytes (`0` = whole file) | `0` |
+| `--stream` | Read the input incrementally instead of memory-mapping | off |
+| `--read-block-size <N>` | Chunk size when `--stream` is used (supports K/M/G suffixes) | `1M` |
+| `--check <FILE>` | Verify checksums from a file (md5sum/sha256sum format) | — |
+
+#### Examples
+
+```bash
+# SHA-256 of an entire file
+binfiddle -i firmware.bin hash sha256
+
+# MD5 checksum
+binfiddle -i file.bin hash md5
+
+# Per-block CRC32 (useful for finding corrupted regions)
+binfiddle -i disk.img hash crc32 --block-size 4096
+
+# BLAKE3 of a file
+binfiddle -i data.bin hash blake3
+
+# SHA-1 in base64
+binfiddle -i file.bin hash sha1 --output-format base64
+
+# xxhash64 (very fast)
+binfiddle -i large.bin hash xxhash64
+
+# Stream-hash a file that does not fit in memory
+binfiddle -i huge.bin hash sha256 --stream --read-block-size 64M
+
+# Verify a checksum file (md5sum/sha256sum format)
+binfiddle hash sha256 --check SHA256SUMS
+```
+
+`--check` expects lines in the standard `DIGEST  FILENAME` format produced by
+GNU coreutils. It prints `OK`/`FAILED` per file and a summary, and exits with
+a non-zero status if any file fails verification.
+
+#### Block-Based Output
+
+When `--block-size` is set, each block is printed on its own line with its
+starting offset:
+
+```
+0x00000000: a3b2c1d4
+0x00001000: e5f6a7b8
+...
+```
+
 ### Analyzing Data
 
 The `analyze` command provides statistical analysis of binary data.
@@ -539,7 +641,7 @@ binfiddle -i <FILE> analyze <ANALYSIS_TYPE> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `--block-size <N>` | Analyze in blocks of N bytes (0 = entire file) [default: 256] |
+| `--block-size <N>` | Analyze in blocks of N bytes (0 = entire file, supports K/M/G suffixes) [default: 256] |
 | `--output-format <FMT>` | Output format: human, csv, json [default: human] |
 | `--range <RANGE>` | Only analyze specified range |
 
@@ -584,6 +686,28 @@ Offset 0x00000400: 4.2000 bits/byte (mixed content)
 Offset 0x00000800: 7.8034 bits/byte (encrypted or random)
 Offset 0x00000c00: 5.8000 bits/byte (mixed content)
 ```
+
+#### Streaming Analyze for Huge Files
+
+When `--block-size` is provided, `analyze` reads the input in blocks of that
+size instead of memory-mapping the whole file. This makes block-based entropy
+and IC analysis practical on files that are larger than RAM. Histogram mode
+accumulates counts across all blocks and still returns a single global result.
+
+```bash
+# Entropy of a 100 GB disk image without paging it all in
+binfiddle -i disk.img analyze entropy --block-size 64M
+
+# Per-block IC analysis of a huge memory dump
+binfiddle -i memory.dump analyze ic --block-size 16M --output-format csv
+```
+
+Limitations of streaming mode:
+
+- `--range` is not supported because the surrounding file offsets are not kept
+  in memory.
+- Process-memory sources (`--process-self`, `--pid`) use the normal in-memory
+  path.
 
 #### Histogram Analysis
 
@@ -1077,6 +1201,143 @@ done
 
 ---
 
+### Chaining Commands
+
+The `chain` command runs multiple binfiddle commands in sequence, passing the byte output of each step as the input to the next. This avoids shell pipe escaping and makes multi-step workflows explicit and portable.
+
+#### Syntax
+
+```bash
+binfiddle [OPTIONS] chain --step <COMMAND> [--step <COMMAND>] ...
+```
+
+- `--step` is repeatable and required.
+- Each step is parsed with shell quoting rules.
+- Intermediate steps must produce byte output (e.g., `write`, `edit`, `replace`, `convert`).
+- The final step may produce text output (e.g., `read`, `search`, `analyze`).
+
+#### Examples
+
+```bash
+# Replace a header and then patch a byte
+binfiddle -i firmware.bin -o patched.bin chain \
+    --step "edit replace 0..4 44415431" \
+    --step "write 8 00"
+
+# Read result after modification, without shell pipes
+binfiddle -i data.bin chain \
+    --step "edit replace 0..8 1234567890abcdef" \
+    --step "read 0..16"
+
+# Chain from stdin
+printf '\x00\x11\x22\x33' | binfiddle --input - chain \
+    --step "edit replace 0..2 4142" \
+    --step "read 0..4"
+
+# Suppress intermediate diagnostics
+binfiddle --silent -i data.bin -o out.bin chain \
+    --step "edit replace 0..2 9999" \
+    --step "write 0 42"
+```
+
+#### Important Notes
+
+- `chain` bypasses the normal command execution path and launches each step as a subprocess connected by temporary files.
+- If an intermediate step fails or produces no byte output, the chain aborts with a clear error.
+- Use `--silent` to prevent intermediate commands from writing diagnostics to stderr.
+
+---
+
+### Process Memory
+
+> **Experimental — Linux only**
+
+Process memory support lets you inspect and patch memory via `/proc/<pid>/mem`. You can target the current process with `--process-self` or another same-user process with `--pid <PID>`. The `--list-regions` flag prints the target's memory map so you can pick a valid address and size.
+
+#### Syntax
+
+```bash
+# List mapped regions
+binfiddle --process-self --list-regions
+binfiddle --pid <PID> --list-regions
+
+# Read memory
+binfiddle --process-self --address <ADDR> --size <N> <COMMAND> [OPTIONS]
+binfiddle --pid <PID> --address <ADDR> --size <N> <COMMAND> [OPTIONS]
+```
+
+- `--process-self` targets `/proc/self/mem`.
+- `--pid <PID>` targets `/proc/<PID>/mem`.
+- `--list-regions` prints regions from `/proc/<PID>/maps` and exits.
+- `--address` and `--size` are hex or decimal.
+- `--allow-write` is required for any write back to process memory.
+
+#### Examples
+
+```bash
+# List memory regions of the current process
+binfiddle --process-self --list-regions
+
+# List regions of another process
+binfiddle --pid 1234 --list-regions
+
+# Read 16 bytes from the current process
+binfiddle --process-self --address 0x7ffd12345678 --size 16 read 0..16
+
+# Read from another process
+binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 16 read 0..16
+
+# Search process memory for a hex pattern
+binfiddle --process-self --address 0x400000 --size 0x1000 search 474343
+
+# Overwrite 4 bytes in the current process (requires --allow-write)
+binfiddle --process-self --address 0x7ffd12345678 --size 4 \
+    --allow-write write 0 DEADBEEF
+
+# Overwrite bytes in another process's writable memory
+binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
+    --allow-write write 0 CAFEBABE
+
+# Force-write a read-only region in the current process (dangerous)
+binfiddle --process-self --address 0x7ffd12345678 --size 4 \
+    --allow-write --force-writable write 0 DEADBEEF
+
+# Force-write a read-only region in another process (Linux x86_64, dangerous)
+binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
+    --allow-write --force-writable write 0 CAFEBABE
+
+# Search process memory for an ASCII pattern
+binfiddle --process-self --address 0x400000 --size 0x1000 \
+    search "PASSWORD" --input-format ascii --all
+
+# Read a range that spans an inaccessible page, filling gaps with zeros
+binfiddle --process-self --address 0x7f8a1b2c3000 --size 0x2000 \
+    --zero-fill-inaccessible read 0..0x2000
+```
+
+#### Process Memory Safety
+
+- **`--allow-write` is required** for any write back to process memory. Without it, `write` and `edit` commands are rejected.
+- **`--force-writable` requires `--allow-write`** and temporarily changes read-only pages to writable. Binfiddle restores the original protection after the write, but if the operation is interrupted or an error occurs the target pages may be left writable.
+- **Writes are bounded**: a write that would extend past the mapped region found in `/proc/<pid>/maps` is rejected.
+- **Inaccessible pages**: by default a read fails if it touches an unmapped or non-readable page. Use `--zero-fill-inaccessible` to replace those bytes with zeros (useful for `read` and `search`) or `--skip-inaccessible` to omit them (read only).
+- **Cross-process access requires ptrace permissions**: reads use `process_vm_readv` and writes use `process_vm_writev` / ptrace injection. On systems with Yama LSM, check `/proc/sys/kernel/yama/ptrace_scope`:
+  - `0` — unrestricted (same-user processes are traceable).
+  - `1` — restricted to parent-child and direct descendants (default on many distributions).
+  - `2` — administrator-only.
+  - `3` — no ptrace allowed.
+- **Use at your own risk**: modifying running process memory can crash the target, corrupt data, or trigger security mitigations. Always target your own processes and prefer writable regions.
+
+#### Limitations
+
+- **Writable regions only by default**: cross-process writes use `process_vm_writev` and can only modify already-writable memory.
+- **`--force-writable`**: uses `mprotect` for `--process-self` and ptrace syscall injection for `--pid` (Linux x86_64 and aarch64). It temporarily changes page protection and restores it afterward, but it is inherently risky.
+- **`--skip-inaccessible` is read-only**: it cannot be used with `search` because reported offsets would no longer match the original process address space.
+- **Size must stay constant**: `insert` and `remove` are rejected because they would change the memory region size.
+- **No region enumeration for other processes** beyond `--list-regions`; you must supply a valid address and size.
+
+---
+
 ### Parsing Structures
 
 The `struct` command parses binary data according to YAML structure templates, making it easy to analyze file headers, network protocols, and data structures.
@@ -1085,7 +1346,7 @@ The `struct` command parses binary data according to YAML structure templates, m
 
 ```bash
 # Parse a binary file using a template
-binfiddle -i firmware.bin struct header_template.yaml
+binfiddle struct header_template.yaml < firmware.bin
 
 # Example output:
 # Structure: Firmware Header
@@ -1142,13 +1403,21 @@ fields:
 | Option | Required | Description |
 |--------|----------|-------------|
 | `name` | Yes | Field identifier |
-| `offset` | Yes | Byte offset (decimal or hex with 0x prefix) |
-| `size` | Yes | Size in bytes |
+| `offset` | Yes* | Byte offset or expression (default: `$@prev_end`) |
+| `size` | Yes* | Size in bytes or expression (omitted for `computed` or when `bit_size` is used) |
+| `bit_offset` | No | Bit index inside the byte at `offset` (0-7, default 0) |
+| `bit_size` | No | Size in bits (1-64). When present, the field is read at bit precision |
 | `type` | No | Data type (default: `bytes`) |
 | `assert` | No | Expected hex value for validation |
 | `enum` | No | Map numeric values to names |
 | `description` | No | Field description |
 | `display` | No | Display format override |
+| `when` | No | Conditional expression for parsing |
+| `value` | No | Expression for `computed` fields |
+| `bitfields` | No | Extract bitfields from integer fields |
+| `count` | No | Number of elements for arrays |
+
+* `offset`/`size` can be expressions such as `$filename_length` or `$@prev_end + 4`.
 
 #### Supported Field Types
 
@@ -1165,6 +1434,121 @@ fields:
 | `hex_string` | Variable | Raw bytes as hex (default display) |
 | `string` | Variable | Null-terminated or fixed-length ASCII/UTF-8 |
 | `bytes` | Variable | Raw byte array |
+| `computed` | — | Virtual field calculated from an expression |
+
+#### Advanced Template Features
+
+Templates support a small expression language for dynamic parsing.
+
+**Field References and Magic Variables**:
+
+| Reference | Meaning |
+|-----------|---------|
+| `$fieldname` | Numeric value of a previously parsed field |
+| `$fieldname.subfield` | Bitfield value |
+| `$@current` | Current parse offset |
+| `$@prev_end` | End offset of the previous field |
+| `$@file_size` | Total size of the input data |
+| `$@base` | Base offset of the current template |
+
+**Dynamic offset/size**:
+
+```yaml
+fields:
+  - name: filename_length
+    offset: 0x1A
+    size: 2
+    type: u16
+  - name: filename
+    offset: 0x1E
+    size: $filename_length
+    type: string
+```
+
+**Conditional fields** (`when`):
+
+```yaml
+fields:
+  - name: version
+    offset: 0
+    size: 1
+    type: u8
+  - name: extra
+    offset: 1
+    size: 1
+    type: u8
+    when: $version >= 2
+```
+
+**Computed fields**:
+
+```yaml
+fields:
+  - name: total_size
+    type: computed
+    value: $header_size + $payload_size
+```
+
+**Bitfields**:
+
+```yaml
+fields:
+  - name: flags
+    offset: 0
+    size: 1
+    type: u8
+    bitfields:
+      - name: is_compressed
+        bits: 0
+        type: bool
+      - name: compression_level
+        bits: 2..5
+        type: u8
+```
+
+**Counted arrays**:
+
+```yaml
+fields:
+  - name: count
+    offset: 0
+    size: 1
+    type: u8
+  - name: values
+    offset: 1
+    size: 1
+    type: u8
+    count: $count
+```
+
+**Bit-level fields**:
+
+Parse packed bit fields at arbitrary positions. Bit ordering follows the
+template `endian`:
+
+- `big` — MSB-first (network protocols, hardware registers).
+- `little` — LSB-first (some file formats).
+
+```yaml
+endian: big
+fields:
+  - name: data_offset
+    offset: 0x0C
+    bit_size: 4
+    type: u8
+
+  - name: reserved
+    offset: 0x0C
+    bit_offset: 4
+    bit_size: 3
+    type: u8
+
+  - name: ns_flag
+    offset: 0x0C
+    bit_offset: 7
+    bit_size: 1
+    type: u8
+```
 
 #### List Template Fields
 
@@ -1189,24 +1573,24 @@ binfiddle struct elf_header.yaml --list-fields
 
 ```bash
 # Get a single field value
-binfiddle -i /bin/ls struct elf_header.yaml --get e_entry
+binfiddle struct elf_header.yaml --get e_entry < /bin/ls
 # Output: 286416
 
 # Get multiple fields
-binfiddle -i /bin/ls struct elf_header.yaml --get e_type --get e_machine
+binfiddle struct elf_header.yaml --get e_type --get e_machine < /bin/ls
 ```
 
 #### Output Formats
 
 ```bash
 # Human-readable table (default)
-binfiddle -i data.bin struct template.yaml --output-format human
+binfiddle struct template.yaml --output-format human < data.bin
 
 # JSON output
-binfiddle -i data.bin struct template.yaml --output-format json
+binfiddle struct template.yaml --output-format json < data.bin
 
 # YAML output
-binfiddle -i data.bin struct template.yaml --output-format yaml
+binfiddle struct template.yaml --output-format yaml < data.bin
 ```
 
 #### Assertions and Validation
@@ -1298,6 +1682,22 @@ cat file.bin | binfiddle -i - read 0..16
 cat file.bin | binfiddle read 0..16
 ```
 
+#### Progress Bars
+
+Long-running commands (`hash`, `search --all`, `analyze`, `convert`) can show an
+`indicatif` progress bar on stderr when you pass `--progress`. The bar displays
+bytes processed, throughput, and ETA.
+
+```bash
+binfiddle -i huge.bin hash sha256 --stream --read-block-size 64M --progress
+binfiddle -i huge.bin search DEADBEEF --all --block-size 64M --progress
+binfiddle -i huge.bin analyze entropy --block-size 64M --progress
+```
+
+Progress bars are opt-in and are always suppressed when stderr is not a TTY
+(e.g. in scripts or pipes), when `--silent` is used, or inside command chaining,
+so stdout remains clean for further processing.
+
 #### Writing to Files
 
 ```bash
@@ -1307,6 +1707,36 @@ binfiddle -i input.bin write 0 FF -o output.bin
 # Use "-" for stdout (for piping)
 binfiddle -i input.bin read 0..16 -o -
 ```
+
+#### Memory-Mapped File Input
+
+File input is memory-mapped using `memmap2` instead of being loaded entirely
+into RAM. This means binfiddle can open files that are larger than available
+memory for read-only operations such as `read`, `search`, `analyze`, and `diff`.
+
+```bash
+# Search a multi-gigabyte firmware image without loading it whole
+binfiddle -i firmware.bin search "7F454C46" --all
+
+# Analyze entropy of a large dump with minimal resident memory
+binfiddle -i memory.dump analyze entropy --block-size 4096
+```
+
+When a command mutates the data (`write`, `edit`), the mapped region is lazily
+copied into an owned in-memory buffer first. Size-changing edits (`insert`,
+`remove`, `replace`) therefore still require enough memory to hold the modified
+data.
+
+#### Large Files
+
+For best results with very large inputs:
+
+- Prefer read-only commands (`read`, `search`, `analyze`, `diff`) — they stream
+  pages from disk through the OS cache on demand.
+- Use `--in-file` or `-o` for writes only when necessary; writes copy the file
+  into memory before modifying it.
+- Avoid running `convert` on files larger than RAM because `convert` reads the
+  entire input to produce a transformed output buffer.
 
 ### Pipeline Usage
 
@@ -1349,6 +1779,13 @@ binfiddle -i file.bin --in-file write 0 FF -o out.bin  # ERROR
 cp file.bin file.bin.bak
 binfiddle -i file.bin --in-file write 0 FF
 ```
+
+**In-place `write` uses a mutable memory map.** When `--in-file` is combined
+with the `write` command, binfiddle maps the file read-write and flushes each
+change directly to disk. This avoids copying the entire file into memory, so
+you can patch large files efficiently. Size-changing operations (`insert`,
+`remove`, `replace`) still require an in-memory copy and are written back when
+finished.
 
 ---
 
@@ -1744,6 +2181,7 @@ binfiddle --version
 │   oct       336 255 276 357                                     │
 │   bin       11011110 10101101 10111110 11101111                 │
 │   ascii     .... (output only)                                  │
+│   raw       Raw bytes, no formatting (output only)              │
 │   regex     [A-Z]{4} (search only)                              │
 │   mask      DE ?? BE EF (search only)                           │
 ├─────────────────────────────────────────────────────────────────┤
@@ -1755,6 +2193,8 @@ binfiddle --version
 │   --input-format  Input format for values                       │
 │   --chunk-size N  Bits per chunk (default: 8)                   │
 │   --width N       Chunks per line (default: 16)                 │
+│   --show-offset   Show hex address prefix on each line          │
+│   --show-ascii    Show ASCII sidebar (implies --show-offset)    │
 │   --silent        Suppress diff output                          │
 │   --all           Find all matches (search)                     │
 │   --count         Count matches only (search)                   │

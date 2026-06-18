@@ -2,9 +2,9 @@
 
 ## Summary Statistics
 
-- **Total Templates**: 44
+- **Total Templates**: 45
 - **Categories**: 12
-- **New in this session**: 19 templates
+- **New in this session**: 20 templates
 - **Coverage**: Executables, Mobile, ML Models, Firmware, Containers, Filesystem, Network, Security
 
 ## Category Breakdown
@@ -87,9 +87,10 @@ Document file formats.
 
 **Coverage**: PDF
 
-### Network (6 templates)
+### Network (7 templates)
 Network protocol headers.
 
+- `can_frame.yaml` - CAN 2.0A standard frame header (bit-level)
 - `dns_header.yaml` - DNS message header (queries/responses)
 - `ethernet_frame.yaml` - Ethernet II frame header
 - `ipv4_header.yaml` - IPv4 packet header
@@ -97,7 +98,7 @@ Network protocol headers.
 - `tcp_header.yaml` - TCP segment header
 - `udp_header.yaml` - UDP datagram header
 
-**Coverage**: DNS, Ethernet, IPv4, IPv6, TCP, UDP
+**Coverage**: CAN, DNS, Ethernet, IPv4, IPv6, TCP, UDP
 
 ### Mobile (1 template)
 Mobile platform formats (Android, iOS).

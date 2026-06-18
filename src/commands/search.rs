@@ -10,13 +10,17 @@
 /// src/commands/search.rs
 use super::Command;
 use crate::error::{BinfiddleError, Result};
-use crate::utils::display::{format_match, format_match_with_context, format_match_colored, format_match_with_context_colored};
+use crate::utils::display::{
+    format_match, format_match_colored, format_match_with_context,
+    format_match_with_context_colored,
+};
 use crate::utils::parsing::SearchPattern;
 use crate::{BinaryData, ColorMode};
 
 use memchr::memmem;
 use rayon::prelude::*;
 use regex::bytes::Regex;
+use std::io::Read;
 
 /// Minimum file size (in bytes) to trigger parallel search.
 /// Below this threshold, sequential search is typically faster due to parallelization overhead.
@@ -97,6 +101,24 @@ impl SearchCommand {
             SearchPattern::Exact(needle) => self.search_exact(data, needle),
             SearchPattern::Regex(pattern) => self.search_regex(data, pattern),
             SearchPattern::Mask(mask) => self.search_mask(data, mask),
+        }
+    }
+
+    /// Streams a search over a reader in fixed-size blocks.
+    ///
+    /// This avoids loading the entire input into memory. The input is read in
+    /// blocks of `block_size` bytes, with an overlap region large enough to
+    /// catch matches that span block boundaries.
+    ///
+    /// Regex patterns are not supported in streaming mode because a regex may
+    /// need an arbitrarily large lookback window.
+    pub fn search_stream<R: Read>(&self, reader: R, block_size: usize) -> Result<Vec<SearchMatch>> {
+        match &self.config.pattern {
+            SearchPattern::Exact(needle) => self.search_exact_stream(reader, needle, block_size),
+            SearchPattern::Mask(mask) => self.search_mask_stream(reader, mask, block_size),
+            SearchPattern::Regex(_) => Err(BinfiddleError::UnsupportedOperation(
+                "Streaming search is not supported for regex patterns".to_string(),
+            )),
         }
     }
 
@@ -226,6 +248,171 @@ impl SearchCommand {
         true
     }
 
+    /// Streams an exact search over a reader.
+    fn search_exact_stream<R: Read>(
+        &self,
+        mut reader: R,
+        needle: &[u8],
+        block_size: usize,
+    ) -> Result<Vec<SearchMatch>> {
+        let needle_len = needle.len();
+        if needle_len == 0 {
+            return Err(BinfiddleError::InvalidInput(
+                "Search pattern cannot be empty".to_string(),
+            ));
+        }
+
+        let overlap = needle_len.saturating_sub(1);
+        let effective_block = block_size.max(needle_len);
+        let buf_len = effective_block + overlap;
+        let mut buf = vec![0u8; buf_len];
+        let mut pos = 0usize;
+        let mut eof = false;
+        let mut global_offset = 0usize;
+        let mut matches = Vec::new();
+        let finder = memmem::Finder::new(needle);
+
+        loop {
+            while pos < buf_len && !eof {
+                match reader.read(&mut buf[pos..buf_len]) {
+                    Ok(0) => eof = true,
+                    Ok(n) => pos += n,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+
+            if pos == 0 {
+                break;
+            }
+
+            let search_limit = if eof {
+                pos
+            } else {
+                pos.saturating_sub(overlap)
+            };
+            let mut search_start = 0;
+
+            while search_start < pos {
+                match finder.find(&buf[search_start..pos]) {
+                    Some(relative) => {
+                        let absolute = search_start + relative;
+                        let in_overlap = !eof && absolute >= search_limit;
+
+                        if !in_overlap {
+                            matches.push(SearchMatch {
+                                offset: global_offset + absolute,
+                                data: needle.to_vec(),
+                            });
+
+                            if !self.config.find_all {
+                                return Ok(matches);
+                            }
+                        }
+
+                        search_start = if self.config.no_overlap {
+                            absolute + needle_len
+                        } else {
+                            absolute + 1
+                        };
+                    }
+                    None => break,
+                }
+            }
+
+            if eof {
+                break;
+            }
+
+            let consumed = search_limit;
+            buf.copy_within(consumed..pos, 0);
+            global_offset += consumed;
+            pos -= consumed;
+        }
+
+        Ok(matches)
+    }
+
+    /// Streams a mask search over a reader.
+    fn search_mask_stream<R: Read>(
+        &self,
+        mut reader: R,
+        mask: &[Option<u8>],
+        block_size: usize,
+    ) -> Result<Vec<SearchMatch>> {
+        let mask_len = mask.len();
+        if mask_len == 0 {
+            return Err(BinfiddleError::InvalidInput(
+                "Mask pattern cannot be empty".to_string(),
+            ));
+        }
+
+        let overlap = mask_len.saturating_sub(1);
+        let effective_block = block_size.max(mask_len);
+        let buf_len = effective_block + overlap;
+        let mut buf = vec![0u8; buf_len];
+        let mut pos = 0usize;
+        let mut eof = false;
+        let mut global_offset = 0usize;
+        let mut matches = Vec::new();
+
+        loop {
+            while pos < buf_len && !eof {
+                match reader.read(&mut buf[pos..buf_len]) {
+                    Ok(0) => eof = true,
+                    Ok(n) => pos += n,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+
+            if pos == 0 {
+                break;
+            }
+
+            let search_limit = if eof {
+                pos
+            } else {
+                pos.saturating_sub(overlap)
+            };
+            let mut start = 0;
+
+            while start <= pos.saturating_sub(mask_len) {
+                if self.matches_mask(&buf[start..start + mask_len], mask) {
+                    let in_overlap = !eof && start >= search_limit;
+
+                    if !in_overlap {
+                        matches.push(SearchMatch {
+                            offset: global_offset + start,
+                            data: buf[start..start + mask_len].to_vec(),
+                        });
+
+                        if !self.config.find_all {
+                            return Ok(matches);
+                        }
+                    }
+
+                    start = if self.config.no_overlap {
+                        start + mask_len
+                    } else {
+                        start + 1
+                    };
+                } else {
+                    start += 1;
+                }
+            }
+
+            if eof {
+                break;
+            }
+
+            let consumed = search_limit;
+            buf.copy_within(consumed..pos, 0);
+            global_offset += consumed;
+            pos -= consumed;
+        }
+
+        Ok(matches)
+    }
+
     /// Performs parallel search on large data sets.
     ///
     /// This method automatically uses parallel processing for data larger than
@@ -289,7 +476,8 @@ impl SearchCommand {
 
                             // Only include if this match starts within our primary chunk region
                             // (not in the overlap region that belongs to the next chunk)
-                            let primary_end = (*chunk_start + PARALLEL_CHUNK_SIZE).min(haystack.len());
+                            let primary_end =
+                                (*chunk_start + PARALLEL_CHUNK_SIZE).min(haystack.len());
                             if absolute_offset < primary_end || *chunk_end == haystack.len() {
                                 chunk_matches.push(SearchMatch {
                                     offset: absolute_offset,
@@ -335,7 +523,11 @@ impl SearchCommand {
     }
 
     /// Parallel mask-based search with wildcard support.
-    fn search_mask_parallel(&self, haystack: &[u8], mask: &[Option<u8>]) -> Result<Vec<SearchMatch>> {
+    fn search_mask_parallel(
+        &self,
+        haystack: &[u8],
+        mask: &[Option<u8>],
+    ) -> Result<Vec<SearchMatch>> {
         if mask.is_empty() {
             return Err(BinfiddleError::InvalidInput(
                 "Mask pattern cannot be empty".to_string(),
@@ -655,9 +847,12 @@ mod tests {
 
         let matches = cmd.search(&data).unwrap();
         let output = cmd.format_results(&data, &matches).unwrap();
-        
+
         // Should contain ANSI escape codes when color is Always
-        assert!(output.contains("\x1b["), "Colored output should contain ANSI codes");
+        assert!(
+            output.contains("\x1b["),
+            "Colored output should contain ANSI codes"
+        );
         // Should still contain the actual data
         assert!(output.contains("be ef"), "Output should contain match data");
     }
@@ -672,9 +867,12 @@ mod tests {
 
         let matches = cmd.search(&data).unwrap();
         let output = cmd.format_results(&data, &matches).unwrap();
-        
+
         // Should contain ANSI escape codes
-        assert!(output.contains("\x1b["), "Colored context output should contain ANSI codes");
+        assert!(
+            output.contains("\x1b["),
+            "Colored context output should contain ANSI codes"
+        );
         // Should contain context labels
         assert!(output.contains("Before:"), "Should show before context");
         assert!(output.contains("Match:"), "Should show match");
@@ -690,9 +888,12 @@ mod tests {
 
         let matches = cmd.search(&data).unwrap();
         let output = cmd.format_results(&data, &matches).unwrap();
-        
+
         // Should NOT contain ANSI escape codes when color is Never
-        assert!(!output.contains("\x1b["), "No-color output should not contain ANSI codes");
+        assert!(
+            !output.contains("\x1b["),
+            "No-color output should not contain ANSI codes"
+        );
         // Should still contain the actual data
         assert!(output.contains("be ef"), "Output should contain match data");
     }
@@ -716,7 +917,7 @@ mod tests {
     fn test_parallel_exact_search_large_data() {
         // Create data larger than PARALLEL_THRESHOLD
         let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
-        // Insert pattern at known locations
+                                                      // Insert pattern at known locations
         let pattern = [0xDE, 0xAD, 0xBE, 0xEF];
         for offset in [0, 100_000, 500_000, 1_000_000, 1_500_000, 2_097_148] {
             if offset + pattern.len() <= data.len() {
@@ -741,7 +942,7 @@ mod tests {
     fn test_parallel_mask_search_large_data() {
         // Create data larger than PARALLEL_THRESHOLD
         let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
-        // Insert pattern at known locations
+                                                      // Insert pattern at known locations
         let pattern = [0xDE, 0xAD, 0xBE, 0xEF];
         for offset in [0, 256_000, 512_000, 1_024_000] {
             if offset + pattern.len() <= data.len() {
@@ -768,7 +969,7 @@ mod tests {
         // PARALLEL_CHUNK_SIZE is 256KB, so put pattern at boundary
         let chunk_boundary = 256 * 1024;
         let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
-        
+
         // Pattern spanning the chunk boundary
         let pattern = [0xDE, 0xAD, 0xBE, 0xEF];
         let boundary_offset = chunk_boundary - 2; // Pattern starts 2 bytes before boundary
@@ -786,7 +987,7 @@ mod tests {
     fn test_parallel_no_overlap() {
         // Test no_overlap with parallel search
         let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
-        // Create overlapping patterns: 00 00 00 00 at multiple locations
+                                                      // Create overlapping patterns: 00 00 00 00 at multiple locations
         let overlapping_start = 1_000_000;
         for i in 0..8 {
             data[overlapping_start + i] = 0x00;
@@ -797,12 +998,12 @@ mod tests {
         let cmd = SearchCommand::new(config);
 
         let matches = cmd.search_parallel(&data).unwrap();
-        
+
         // With no_overlap, consecutive 00 00 patterns should not overlap
         // Check that matches don't overlap
         for i in 1..matches.len() {
             assert!(
-                matches[i].offset >= matches[i-1].offset + matches[i-1].data.len(),
+                matches[i].offset >= matches[i - 1].offset + matches[i - 1].data.len(),
                 "Matches should not overlap"
             );
         }
@@ -813,7 +1014,7 @@ mod tests {
         // Verify parallel and sequential produce same results
         let mut data = vec![0x00u8; 2 * 1024 * 1024]; // 2MB
         let pattern = [0xCA, 0xFE, 0xBA, 0xBE];
-        
+
         // Insert patterns at various locations
         for i in 0..100 {
             let offset = i * 20_000;
@@ -828,10 +1029,82 @@ mod tests {
         let sequential = cmd.search(&data).unwrap();
         let parallel = cmd.search_parallel(&data).unwrap();
 
-        assert_eq!(sequential.len(), parallel.len(), "Match count should be equal");
+        assert_eq!(
+            sequential.len(),
+            parallel.len(),
+            "Match count should be equal"
+        );
         for (seq, par) in sequential.iter().zip(parallel.iter()) {
             assert_eq!(seq.offset, par.offset, "Offsets should match");
             assert_eq!(seq.data, par.data, "Data should match");
         }
+    }
+
+    #[test]
+    fn test_stream_exact_finds_match() {
+        let config = make_config(SearchPattern::Exact(vec![0xCA, 0xFE, 0xBA, 0xBE]));
+        let cmd = SearchCommand::new(config);
+        let data: Vec<u8> = (0..10_000)
+            .map(|i| if i == 1234 { 0xCA } else { i as u8 })
+            .collect();
+        let mut patched = data.clone();
+        patched[1234..1238].copy_from_slice(&[0xCA, 0xFE, 0xBA, 0xBE]);
+
+        let matches = cmd.search_stream(&patched[..], 256).unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset, 1234);
+    }
+
+    #[test]
+    fn test_stream_exact_boundary_match() {
+        // Place a pattern so it straddles the block boundary.
+        let pattern = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let mut data = vec![0x00u8; 300];
+        data[250..254].copy_from_slice(&pattern); // spans block 256 boundary
+
+        let config = make_config(SearchPattern::Exact(pattern.clone()));
+        let cmd = SearchCommand::new(config);
+        let matches = cmd.search_stream(&data[..], 128).unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset, 250);
+    }
+
+    #[test]
+    fn test_stream_mask_boundary_match() {
+        let mask = vec![Some(0xDE), None, Some(0xBE), None];
+        let mut data = vec![0x00u8; 300];
+        data[250..254].copy_from_slice(&[0xDE, 0x11, 0xBE, 0x22]);
+
+        let config = make_config(SearchPattern::Mask(mask));
+        let cmd = SearchCommand::new(config);
+        let matches = cmd.search_stream(&data[..], 128).unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset, 250);
+    }
+
+    #[test]
+    fn test_stream_no_overlap() {
+        let mut config = make_config(SearchPattern::Exact(vec![0xAA, 0xBB]));
+        config.no_overlap = true;
+        let cmd = SearchCommand::new(config);
+        let data = [0xAA, 0xBB, 0xAA, 0xBB, 0xAA, 0xBB];
+
+        let matches = cmd.search_stream(&data[..], 3).unwrap();
+        assert_eq!(matches.len(), 3);
+        assert_eq!(matches[0].offset, 0);
+        assert_eq!(matches[1].offset, 2);
+        assert_eq!(matches[2].offset, 4);
+    }
+
+    #[test]
+    fn test_stream_find_first_only() {
+        let mut config = make_config(SearchPattern::Exact(vec![0xCC]));
+        config.find_all = false;
+        let cmd = SearchCommand::new(config);
+        let data = [0x00, 0xCC, 0x00, 0xCC];
+
+        let matches = cmd.search_stream(&data[..], 2).unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset, 1);
     }
 }
