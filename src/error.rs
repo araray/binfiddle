@@ -30,6 +30,9 @@ pub enum BinfiddleError {
         command: String,
         stderr: String,
     },
+
+    #[error("Checksum verification failed")]
+    ChecksumVerificationFailed,
 }
 
 pub type Result<T> = std::result::Result<T, BinfiddleError>;

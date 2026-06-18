@@ -9,7 +9,9 @@ use super::Command;
 use crate::error::{BinfiddleError, Result};
 use crate::BinaryData;
 use sha2::Digest;
+use std::fs::File;
 use std::io::Read;
+use std::path::{Path, PathBuf};
 
 /// Hash algorithm to compute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,6 +263,123 @@ impl HashCommand {
 
         Ok(output)
     }
+
+    /// Streams a hash and returns the raw digest bytes.
+    fn compute_stream_raw<R: Read>(
+        &self,
+        mut reader: R,
+        read_chunk_size: usize,
+    ) -> Result<Vec<u8>> {
+        let mut hasher = self.new_incremental_hasher();
+        let mut buffer = vec![0u8; read_chunk_size];
+        loop {
+            let n = reader.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buffer[..n]);
+        }
+        Ok(hasher.finalize())
+    }
+
+    /// Verifies checksums from a file in md5sum/sha256sum format.
+    ///
+    /// Returns a report string and a boolean indicating whether every entry
+    /// passed. The report uses `OK`/`FAILED` lines followed by a summary.
+    pub fn check(&self, checksum_file: &Path, read_chunk_size: usize) -> Result<(String, bool)> {
+        if self.config.block_size != 0 {
+            return Err(BinfiddleError::InvalidInput(
+                "--check requires --block-size 0 (whole file)".to_string(),
+            ));
+        }
+
+        let base_dir = checksum_file.parent().unwrap_or_else(|| Path::new("."));
+        let contents = std::fs::read_to_string(checksum_file)?;
+
+        let mut passed = 0usize;
+        let mut failed = 0usize;
+        let mut report = String::new();
+
+        for line in contents.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+                continue;
+            }
+
+            let (expected_hex, filename) = parse_checksum_line(line)?;
+            let expected = hex_to_bytes(expected_hex).map_err(|e| {
+                BinfiddleError::InvalidInput(format!("Invalid digest on line '{}': {}", line, e))
+            })?;
+
+            let file_path = if Path::new(filename).is_absolute() {
+                PathBuf::from(filename)
+            } else {
+                base_dir.join(filename)
+            };
+
+            let file = File::open(&file_path)?;
+            let actual = self.compute_stream_raw(file, read_chunk_size)?;
+
+            let status = if actual == expected {
+                passed += 1;
+                "OK"
+            } else {
+                failed += 1;
+                "FAILED"
+            };
+
+            if !report.is_empty() {
+                report.push('\n');
+            }
+            report.push_str(&format!("{}: {}", filename, status));
+        }
+
+        if !report.is_empty() {
+            report.push('\n');
+        }
+        report.push_str(&format!("{} passed, {} failed", passed, failed));
+
+        Ok((report, failed == 0))
+    }
+}
+
+/// Parses a single checksum-file line into `(digest, filename)`.
+///
+/// Supports the GNU coreutils format `DIGEST  FILENAME` (two spaces) with an
+/// optional binary marker (`*`) before the filename, and falls back to
+/// whitespace splitting.
+fn parse_checksum_line(line: &str) -> Result<(&str, &str)> {
+    if let Some(pos) = line.find("  ") {
+        let (digest, rest) = line.split_at(pos);
+        let filename = rest.trim_start().trim_start_matches('*');
+        return Ok((digest.trim(), filename));
+    }
+
+    let mut parts = line.split_whitespace();
+    let digest = parts.next().ok_or_else(|| {
+        BinfiddleError::InvalidInput(format!("Malformed checksum line: '{}'", line))
+    })?;
+    let filename = parts.next().ok_or_else(|| {
+        BinfiddleError::InvalidInput(format!("Malformed checksum line: '{}'", line))
+    })?;
+
+    Ok((digest, filename))
+}
+
+/// Converts a lowercase/uppercase hex string into its raw bytes.
+fn hex_to_bytes(hex: &str) -> std::result::Result<Vec<u8>, String> {
+    let hex = hex.trim();
+    if !hex.len().is_multiple_of(2) {
+        return Err("odd number of hex digits".to_string());
+    }
+
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&hex[i..i + 2], 16)
+                .map_err(|e| format!("invalid hex pair '{}': {}", &hex[i..i + 2], e))
+        })
+        .collect()
 }
 
 impl Command for HashCommand {
@@ -408,5 +527,66 @@ mod tests {
         );
         assert!("hex".parse::<HashOutputFormat>().is_ok());
         assert!("unknown".parse::<HashOutputFormat>().is_err());
+    }
+
+    #[test]
+    fn test_check_passes_and_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_a = dir.path().join("a.txt");
+        let file_b = dir.path().join("b.txt");
+        std::fs::write(&file_a, b"hello").unwrap();
+        std::fs::write(&file_b, b"world").unwrap();
+
+        let checksum_file = dir.path().join("checksums.sha256");
+        let cmd = HashCommand::new(HashConfig {
+            algorithm: HashAlgorithm::Sha256,
+            ..Default::default()
+        });
+        let good = cmd.digest(b"hello");
+        let bad = "0".repeat(64);
+        std::fs::write(&checksum_file, format!("{}  a.txt\n{}  b.txt\n", good, bad)).unwrap();
+
+        let (report, ok) = cmd.check(&checksum_file, 1024).unwrap();
+        assert!(!ok);
+        assert!(report.contains("a.txt: OK"));
+        assert!(report.contains("b.txt: FAILED"));
+        assert!(report.contains("1 passed, 1 failed"));
+    }
+
+    #[test]
+    fn test_check_ignores_comments_and_empty_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("data.bin");
+        std::fs::write(&file, b"data").unwrap();
+
+        let checksum_file = dir.path().join("checksums.md5");
+        let cmd = HashCommand::new(HashConfig {
+            algorithm: HashAlgorithm::Md5,
+            ..Default::default()
+        });
+        let digest = cmd.digest(b"data");
+        std::fs::write(
+            &checksum_file,
+            format!("# this is a comment\n\n{}  data.bin\n", digest),
+        )
+        .unwrap();
+
+        let (report, ok) = cmd.check(&checksum_file, 1024).unwrap();
+        assert!(ok);
+        assert!(report.contains("data.bin: OK"));
+    }
+
+    #[test]
+    fn test_check_rejects_block_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let checksum_file = dir.path().join("checksums.sha256");
+        std::fs::write(&checksum_file, b"dummy").unwrap();
+
+        let cmd = HashCommand::new(HashConfig {
+            algorithm: HashAlgorithm::Sha256,
+            block_size: 4,
+            ..Default::default()
+        });
+        assert!(cmd.check(&checksum_file, 1024).is_err());
     }
 }

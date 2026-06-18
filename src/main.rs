@@ -142,6 +142,10 @@ enum Commands {
         /// Read chunk size when streaming (supports K/M/G suffixes, default 1M)
         #[arg(long, default_value = "1M")]
         read_block_size: String,
+
+        /// Verify checksums from a file (md5sum/sha256sum format)
+        #[arg(long, value_name = "CHECKSUM_FILE")]
+        check: Option<String>,
     },
 
     /// Search for patterns in binary data
@@ -507,6 +511,7 @@ fn main() -> Result<()> {
         block_size,
         stream,
         read_block_size,
+        check: _,
     } = command
     {
         if *stream {
@@ -537,13 +542,47 @@ fn main() -> Result<()> {
         }
     }
 
+    // Handle checksum verification before loading binary data.
+    if let Commands::Hash {
+        algorithm,
+        output_format,
+        block_size,
+        check: Some(check_file),
+        read_block_size,
+        ..
+    } = command
+    {
+        if *block_size != 0 {
+            return Err(BinfiddleError::InvalidInput(
+                "--check requires --block-size 0 (whole file)".to_string(),
+            ));
+        }
+
+        let algorithm = algorithm.parse::<binfiddle::HashAlgorithm>()?;
+        let output_format = output_format.parse::<binfiddle::HashOutputFormat>()?;
+        let config = binfiddle::HashConfig {
+            algorithm,
+            output_format,
+            block_size: 0,
+        };
+        let hash_cmd = binfiddle::HashCommand::new(config);
+
+        let read_chunk_size = parse_byte_size(read_block_size)?;
+        let (report, ok) = hash_cmd.check(check_file.as_ref(), read_chunk_size)?;
+        println!("{}", report);
+        if !ok {
+            return Err(BinfiddleError::ChecksumVerificationFailed);
+        }
+        return Ok(());
+    }
+
     // Check if this command needs binary_data loaded
     let needs_input = matches!(
         command,
         Commands::Read { .. }
             | Commands::Write { .. }
             | Commands::Edit { .. }
-            | Commands::Hash { .. }
+            | Commands::Hash { check: None, .. }
             | Commands::Search { .. }
             | Commands::Convert { .. }
             | Commands::Analyze { .. }
@@ -801,6 +840,7 @@ fn main() -> Result<()> {
             block_size,
             stream: _,
             read_block_size: _,
+            check: _,
         } => {
             let algorithm = algorithm.parse::<binfiddle::HashAlgorithm>()?;
             let output_format = output_format.parse::<binfiddle::HashOutputFormat>()?;

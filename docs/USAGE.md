@@ -574,6 +574,7 @@ binfiddle -i <FILE> hash <ALGORITHM> [OPTIONS]
 | `--block-size <N>` | Hash non-overlapping blocks of N bytes (`0` = whole file) | `0` |
 | `--stream` | Read the input incrementally instead of memory-mapping | off |
 | `--read-block-size <N>` | Chunk size when `--stream` is used (supports K/M/G suffixes) | `1M` |
+| `--check <FILE>` | Verify checksums from a file (md5sum/sha256sum format) | — |
 
 #### Examples
 
@@ -598,7 +599,14 @@ binfiddle -i large.bin hash xxhash64
 
 # Stream-hash a file that does not fit in memory
 binfiddle -i huge.bin hash sha256 --stream --read-block-size 64M
+
+# Verify a checksum file (md5sum/sha256sum format)
+binfiddle hash sha256 --check SHA256SUMS
 ```
+
+`--check` expects lines in the standard `DIGEST  FILENAME` format produced by
+GNU coreutils. It prints `OK`/`FAILED` per file and a summary, and exits with
+a non-zero status if any file fails verification.
 
 #### Block-Based Output
 

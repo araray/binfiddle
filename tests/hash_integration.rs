@@ -283,3 +283,84 @@ fn hash_stream_block_hashing() {
     assert_eq!(lines.len(), 3, "Expected 3 block hashes, got: {}", stdout);
     assert!(lines[0].starts_with("0x00000000:"));
 }
+
+#[test]
+fn hash_check_from_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_a = dir.path().join("a.bin");
+    let file_b = dir.path().join("b.bin");
+    std::fs::write(&file_a, b"hello").unwrap();
+    std::fs::write(&file_b, b"world").unwrap();
+
+    // Compute known digest for a.bin.
+    let good = Command::new(binfiddle())
+        .arg("--input")
+        .arg(&file_a)
+        .arg("hash")
+        .arg("sha256")
+        .output()
+        .unwrap()
+        .stdout;
+    let good = String::from_utf8_lossy(&good).trim().to_string();
+
+    let checksum_file = dir.path().join("checksums.sha256");
+    std::fs::write(
+        &checksum_file,
+        format!("{}  a.bin\n{}  b.bin\n", good, "0".repeat(64)),
+    )
+    .unwrap();
+
+    let output = Command::new(binfiddle())
+        .arg("hash")
+        .arg("sha256")
+        .arg("--check")
+        .arg(&checksum_file)
+        .output()
+        .expect("failed to run binfiddle hash --check");
+
+    assert!(
+        !output.status.success(),
+        "Expected checksum verification to fail"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("a.bin: OK"), "Got: {}", stdout);
+    assert!(stdout.contains("b.bin: FAILED"), "Got: {}", stdout);
+    assert!(stdout.contains("1 passed, 1 failed"), "Got: {}", stdout);
+}
+
+#[test]
+fn hash_check_all_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("data.bin");
+    std::fs::write(&file, b"check me").unwrap();
+
+    let digest = Command::new(binfiddle())
+        .arg("--input")
+        .arg(&file)
+        .arg("hash")
+        .arg("md5")
+        .output()
+        .unwrap()
+        .stdout;
+    let digest = String::from_utf8_lossy(&digest).trim().to_string();
+
+    let checksum_file = dir.path().join("checksums.md5");
+    std::fs::write(&checksum_file, format!("{}  data.bin\n", digest)).unwrap();
+
+    let output = Command::new(binfiddle())
+        .arg("hash")
+        .arg("md5")
+        .arg("--check")
+        .arg(&checksum_file)
+        .output()
+        .expect("failed to run binfiddle hash --check");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("data.bin: OK"), "Got: {}", stdout);
+    assert!(stdout.contains("1 passed, 0 failed"), "Got: {}", stdout);
+}
