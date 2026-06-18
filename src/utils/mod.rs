@@ -4,6 +4,7 @@
 /// src/utils/mod.rs
 pub mod display;
 pub mod parsing;
+pub mod progress;
 
 // Re-export commonly used functions at the module level
 pub use display::{display_bytes, display_bytes_with_offset};

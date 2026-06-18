@@ -1,5 +1,6 @@
 /// src/main.rs
 use binfiddle::utils::parsing::{parse_search_pattern, validate_search_pattern};
+use binfiddle::utils::progress::{Progress, ProgressReader};
 use binfiddle::{BinaryData, BinarySource, BinfiddleError, Result, SearchConfig};
 use clap::{Parser, Subcommand};
 use std::io::{self, Read, Write};
@@ -440,10 +441,17 @@ fn main() -> Result<()> {
         };
         let search_cmd = binfiddle::SearchCommand::new(config);
 
-        let input: Box<dyn Read> = match cli.input.as_deref() {
-            Some("-") | None => Box::new(io::stdin()),
-            Some(path) => Box::new(std::fs::File::open(path)?),
+        let (input, total): (Box<dyn Read>, Option<u64>) = match cli.input.as_deref() {
+            Some("-") | None => (Box::new(io::stdin()), None),
+            Some(path) => {
+                let file = std::fs::File::open(path)?;
+                let total = file.metadata().ok().map(|m| m.len());
+                (Box::new(file), total)
+            }
         };
+
+        let progress = Progress::new(total, "Searching", cli.silent);
+        let input = ProgressReader::new(input, progress);
 
         let matches = search_cmd.search_stream(input, block_size)?;
 
@@ -493,10 +501,17 @@ fn main() -> Result<()> {
             };
             let analyze_cmd = binfiddle::AnalyzeCommand::new(config);
 
-            let input: Box<dyn Read> = match cli.input.as_deref() {
-                Some("-") | None => Box::new(io::stdin()),
-                Some(path) => Box::new(std::fs::File::open(path)?),
+            let (input, total): (Box<dyn Read>, Option<u64>) = match cli.input.as_deref() {
+                Some("-") | None => (Box::new(io::stdin()), None),
+                Some(path) => {
+                    let file = std::fs::File::open(path)?;
+                    let total = file.metadata().ok().map(|m| m.len());
+                    (Box::new(file), total)
+                }
             };
+
+            let progress = Progress::new(total, "Analyzing", cli.silent);
+            let input = ProgressReader::new(input, progress);
 
             let output = analyze_cmd.analyze_stream(input)?;
             println!("{}", output);
@@ -531,10 +546,17 @@ fn main() -> Result<()> {
             let hash_cmd = binfiddle::HashCommand::new(config);
 
             let read_chunk_size = parse_byte_size(read_block_size)?;
-            let input: Box<dyn Read> = match cli.input.as_deref() {
-                Some("-") | None => Box::new(io::stdin()),
-                Some(path) => Box::new(std::fs::File::open(path)?),
+            let (input, total): (Box<dyn Read>, Option<u64>) = match cli.input.as_deref() {
+                Some("-") | None => (Box::new(io::stdin()), None),
+                Some(path) => {
+                    let file = std::fs::File::open(path)?;
+                    let total = file.metadata().ok().map(|m| m.len());
+                    (Box::new(file), total)
+                }
             };
+
+            let progress = Progress::new(total, "Hashing", cli.silent);
+            let input = ProgressReader::new(input, progress);
 
             let output = hash_cmd.compute_stream(input, read_chunk_size)?;
             println!("{}", output);
@@ -778,8 +800,18 @@ fn main() -> Result<()> {
             // Search directly against the backing bytes without copying the whole file.
             let bytes = binary_data.as_bytes();
 
+            // Show a spinner for full scans, which can be slow on large files.
+            let progress = if *all {
+                Some(Progress::new(None, "Searching", cli.silent))
+            } else {
+                None
+            };
+
             // Perform search
             let matches = search_cmd.search(bytes)?;
+            if let Some(progress) = progress {
+                progress.finish();
+            }
 
             // Report results
             if matches.is_empty() {
@@ -823,13 +855,26 @@ fn main() -> Result<()> {
             };
 
             // Create and execute analyze command
-            let analyze_cmd = binfiddle::AnalyzeCommand::new(config);
+            let analyze_cmd = binfiddle::AnalyzeCommand::new(config.clone());
 
             // Analyze directly against the backing bytes without copying the whole file.
             let bytes = binary_data.as_bytes();
 
+            // Show progress for block-based analysis; use a spinner otherwise.
+            let output = if config.block_size > 0 && config.range.is_none() {
+                let total = Some(bytes.len() as u64);
+                let progress = Progress::new(total, "Analyzing", cli.silent);
+                let cursor = std::io::Cursor::new(bytes);
+                let reader = ProgressReader::new(cursor, progress);
+                analyze_cmd.analyze_stream(reader)?
+            } else {
+                let progress = Progress::new(None, "Analyzing", cli.silent);
+                let result = analyze_cmd.analyze(bytes)?;
+                progress.finish();
+                result
+            };
+
             // Perform analysis and print results
-            let output = analyze_cmd.analyze(bytes)?;
             println!("{}", output);
 
             false // Analyze doesn't modify data
@@ -852,9 +897,14 @@ fn main() -> Result<()> {
             };
             let hash_cmd = binfiddle::HashCommand::new(config);
 
-            // Hash directly against the backing bytes without copying the whole file.
+            // Hash directly against the backing bytes without copying the whole file,
+            // showing a progress bar for large inputs.
             let bytes = binary_data.as_bytes();
-            let output = hash_cmd.compute(bytes)?;
+            let total = Some(bytes.len() as u64);
+            let progress = Progress::new(total, "Hashing", cli.silent);
+            let cursor = std::io::Cursor::new(bytes);
+            let reader = ProgressReader::new(cursor, progress);
+            let output = hash_cmd.compute_stream(reader, 1024 * 1024)?;
             println!("{}", output);
 
             false // Hash doesn't modify data
@@ -984,8 +1034,12 @@ fn main() -> Result<()> {
             // Convert directly against the backing bytes without copying the whole file.
             let bytes = binary_data.as_bytes();
 
+            // Show a spinner because conversion can take a while on large files.
+            let progress = Progress::new(None, "Converting", cli.silent);
+
             // Perform conversion
             let converted = convert_cmd.convert(bytes)?;
+            progress.finish();
 
             // Output the converted data
             // Convert always produces output (doesn't modify in-place via BinaryData)

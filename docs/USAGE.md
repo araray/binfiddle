@@ -1682,6 +1682,14 @@ cat file.bin | binfiddle -i - read 0..16
 cat file.bin | binfiddle read 0..16
 ```
 
+#### Progress Bars
+
+Long-running commands (`hash`, `search --all`, `analyze`, `convert`) show an
+`indicatif` progress bar on stderr when the terminal is interactive. The bar
+displays bytes processed, throughput, and ETA. Progress output is automatically
+suppressed when stderr is not a TTY (e.g. in scripts or pipes) or when
+`--silent` is used, so stdout remains clean for further processing.
+
 #### Writing to Files
 
 ```bash
