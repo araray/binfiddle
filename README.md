@@ -3,13 +3,13 @@
 **Binary utilities for developers and hackers**
 
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.90%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.18.0 | Cross-platform (Windows/Linux/macOS) | x86_64/Arm64 Support*
+*Version 0.27.0 | Cross-platform (Windows/Linux/macOS) | x86_64 / Arm64 Support | Linux process-memory features*
 
-Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, and custom exploration of binary data across a variety of formats.
+Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, hashing, checksum verification, and custom exploration of binary data across a variety of formats.
 
-Whether you're reverse-engineering firmware, debugging binary protocols, analyzing malware samples, or building custom workflows for binary files, Binfiddle provides essential tools without the bloat.
+Whether you're reverse-engineering firmware, debugging binary protocols, analyzing malware samples, patching live processes, or building custom workflows for binary files, Binfiddle provides essential tools without the bloat.
 
 ## 🌐 Overview
 
@@ -17,9 +17,11 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Command Reference](#command-reference)
+- [Large Files & Streaming](#large-files--streaming)
 - [Examples](#examples)
 - [Architecture](#architecture)
 - [Contributing](#contributing)
+- [Roadmap](#roadmap)
 - [License](#license)
 
 ## Features
@@ -36,21 +38,26 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 | **Search** | Find patterns using exact match, regex, or wildcards |
 | **Analyze** | Statistical analysis: entropy, histograms, Index of Coincidence |
 | **Diff** | Compare binary files with multiple output formats |
-| **Patch** | Apply binary patches (works with diff --format patch output) |
+| **Patch** | Apply binary patches (works with `diff --format patch` output) |
 | **Convert** | Text encoding conversion and line ending normalization |
+| **Hash** | Compute MD5, SHA-1, SHA-256, BLAKE3, CRC32, xxhash64 digests |
+| **Verify** | Check files against md5sum/sha256sum-style checksum lists |
 | **Chain** | Pipe multiple binfiddle commands together without shell escaping |
-| **Process Memory** | Read memory from any same-user process via `/proc/<pid>/mem` and list mapped regions (Linux, experimental) |
+| **Process Memory** | Read/write memory from any same-user process via `/proc/<pid>/mem` (Linux) |
 | **Struct** | Parse binary data using YAML templates for structure definitions |
+| **Progress Bars** | Opt-in throughput/ETA feedback for long-running commands |
 
 ### Key Differentiators
 
 | Feature | Binfiddle | Traditional Tools |
 |---------|-----------|-------------------|
 | **Pipeline Integration** | First-class stdin/stdout support | Often interactive-only |
-| **Unified Operations** | Read/Write/Edit/Search/Analyze/Diff in single tool | Separate tools per operation |
+| **Unified Operations** | Read/Write/Edit/Search/Analyze/Diff/Hash in one tool | Separate tools per operation |
 | **Configurable Chunking** | 1-64 bit granularity | Fixed 8-bit (byte) chunks |
-| **Multi-Format I/O** | hex/dec/oct/bin/ascii/raw | Usually hex-only |
-| **Script Friendly** | Deterministic, non-interactive | Often requires user interaction |
+| **Multi-Format I/O** | hex/dec/oct/bin/ascii/raw/base64 | Usually hex-only |
+| **Large Files** | Memory-mapped + streaming modes | Loads whole file into RAM |
+| **Live Process Inspection** | Read/write process memory on Linux | Requires separate debuggers |
+| **Script Friendly** | Deterministic, non-interactive, progress bars opt-in | Often requires user interaction |
 | **Built-in Analysis** | Entropy, histograms, IC analysis | Requires external tools |
 
 ### Design Principles
@@ -59,6 +66,7 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 - **Safety by Default**: No silent data loss, explicit modification flags required
 - **Determinism**: Identical inputs produce byte-identical outputs
 - **Memory Safety**: Built in Rust with no buffer overflows or data races
+- **Non-Interactive First**: Progress bars are opt-in; stdout stays clean for scripts
 
 ## Installation
 
@@ -88,16 +96,25 @@ Available targets:
 - `x86_64-apple-darwin` (macOS Intel)
 - `aarch64-apple-darwin` (macOS Apple Silicon)
 
+> Linux process-memory features (`--process-self`, `--pid`, `--force-writable`) are only available on Linux builds.
+
 ### Build for Other Platforms
 
 ```bash
 # Use the build script
-./build_releases.sh --native    # Current platform only
-./build_releases.sh --help      # See all options
+./scripts/build_releases.sh --native    # Current platform only
+./scripts/build_releases.sh --help      # See all options
 
 # Or manually with cargo
 rustup target add x86_64-pc-windows-gnu
 cargo build --release --target x86_64-pc-windows-gnu
+```
+
+### Cross-check
+
+```bash
+# Verify aarch64 Linux cross-compilation
+cargo check --target aarch64-unknown-linux-gnu
 ```
 
 ## Quick Start
@@ -124,6 +141,12 @@ binfiddle -i firmware.bin analyze entropy --block-size 4096
 # Compare two binary files
 binfiddle diff original.bin modified.bin --diff-format unified
 
+# Hash a file
+binfiddle -i firmware.bin hash sha256
+
+# Verify a checksum list
+binfiddle hash sha256 --check SHA256SUMS
+
 # Pipeline usage
 cat data.bin | binfiddle read 0..32 | grep "7f 45"
 
@@ -132,6 +155,9 @@ binfiddle -i firmware.bin read 0..256 --show-ascii
 
 # Raw binary output (pipe-friendly, no formatting)
 binfiddle -i archive.bin read 0..4 --format raw | file -
+
+# Show a progress bar on a long operation
+binfiddle -i huge.bin hash sha256 --stream --read-block-size 64M --progress
 ```
 
 ## Command Reference
@@ -149,7 +175,23 @@ binfiddle -i archive.bin read 0..4 --format raw | file -
 | `--width <N>` | — | Chunks per output line (0=no wrap) | 16 |
 | `--show-offset` | — | Show hex address prefix on each line | false |
 | `--show-ascii` | — | Show ASCII sidebar (implies offset display) | false |
-| `--silent` | — | Suppress change diff output | false |
+| `--silent` | — | Suppress change diff output and warnings | false |
+| `--progress` | — | Show progress bars for long-running commands | false |
+| `--color <MODE>` | — | Color output: always, auto, never | auto |
+
+### Process-Memory Global Options (Linux only)
+
+| Option | Description |
+|--------|-------------|
+| `--process-self` | Target the current process |
+| `--pid <PID>` | Target another process |
+| `--list-regions` | List mapped memory regions |
+| `--address <ADDR>` | Base address (hex or decimal) |
+| `--size <N>` | Number of bytes (hex or decimal) |
+| `--allow-write` | Opt-in required for process-memory writes |
+| `--force-writable` | Temporarily make read-only pages writable |
+| `--zero-fill-inaccessible` | Fill unreadable pages with zeroes |
+| `--skip-inaccessible` | Skip unreadable pages (read command only) |
 
 ### Commands
 
@@ -215,11 +257,36 @@ binfiddle -i file.bin search "CAFE" --all --context 8
 
 # Prevent overlapping matches
 binfiddle -i file.bin search "AA AA" --all --no-overlap
+
+# Stream-search a file larger than RAM
+binfiddle -i huge.bin search "7F454C46" --all --block-size 64M
+```
+
+#### `hash <ALGORITHM>` — Compute digests
+
+```bash
+# Whole-file hashes
+binfiddle -i file.bin hash md5
+binfiddle -i file.bin hash sha1
+binfiddle -i file.bin hash sha256
+binfiddle -i file.bin hash blake3
+binfiddle -i file.bin hash crc32
+binfiddle -i file.bin hash xxhash64
+
+# Base64 output
+binfiddle -i file.bin hash sha256 --output-format base64
+
+# Per-block CRC32 (find corrupted regions)
+binfiddle -i disk.img hash crc32 --block-size 4096
+
+# Stream-hash a file that does not fit in memory
+binfiddle -i huge.bin hash sha256 --stream --read-block-size 64M --progress
+
+# Verify a checksum list
+binfiddle hash sha256 --check SHA256SUMS
 ```
 
 #### `analyze <TYPE>` — Statistical analysis of binary data
-
-Analyze binary data for entropy, byte distribution, and cryptanalysis metrics.
 
 ```bash
 # Entropy analysis (find encrypted/compressed sections)
@@ -236,6 +303,9 @@ binfiddle -i file.bin analyze entropy --output-format csv > entropy.csv
 
 # Output as JSON
 binfiddle -i file.bin analyze histogram --output-format json
+
+# Stream-analyze a huge file
+binfiddle -i huge.bin analyze entropy --block-size 64M --progress
 ```
 
 **Analysis Types:**
@@ -257,8 +327,6 @@ binfiddle -i file.bin analyze histogram --output-format json
 | 7.5 - 8.0 | Encrypted or random data |
 
 #### `diff <FILE1> <FILE2>` — Compare two binary files
-
-Compare binary files byte-by-byte and display differences in various formats.
 
 ```bash
 # Simple format (one line per difference)
@@ -294,8 +362,6 @@ binfiddle diff file1.bin file2.bin --summary
 
 #### `convert` — Text encoding and line ending conversion
 
-Convert text encodings and normalize line endings for embedded text data.
-
 ```bash
 # Convert UTF-8 to UTF-16LE
 binfiddle -i document.txt convert --to utf-16le -o document_utf16.txt
@@ -329,8 +395,6 @@ binfiddle -i windows_doc.txt convert \
 | `--on-error` | strict, replace, ignore | replace | Error handling mode |
 
 #### `patch <TARGET> <PATCH_FILE>` — Apply binary patches
-
-Apply patches generated by `binfiddle diff --format patch` or created manually.
 
 ```bash
 # Apply a patch file to create a new output
@@ -441,9 +505,13 @@ binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
 binfiddle --process-self --address 0x7ffd12345678 --size 4 \
     --allow-write --force-writable write 0 DEADBEEF
 
-# Force-write a read-only region in another process (Linux x86_64, dangerous)
+# Force-write a read-only region in another process (Linux x86_64/aarch64, dangerous)
 binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
     --allow-write --force-writable write 0 CAFEBABE
+
+# Sparse read: zero-fill inaccessible pages
+binfiddle --process-self --address 0x400000 --size 0x100000 \
+    --zero-fill-inaccessible read 0..0x100000
 ```
 
 **Process Memory Options:**
@@ -457,8 +525,10 @@ binfiddle --pid 1234 --address 0x7f8a1b2c3000 --size 4 \
 | `--size` | Number of bytes to read or write (hex or decimal). |
 | `--allow-write` | Opt-in required for any process-memory write. |
 | `--force-writable` | Temporarily make read-only pages writable before writing. |
+| `--zero-fill-inaccessible` | Fill unreadable pages with zeroes. |
+| `--skip-inaccessible` | Skip unreadable pages (read command only). |
 
-> **Note:** `--force-writable` uses `mprotect` for the current process and ptrace syscall injection for cross-process writes (Linux x86_64 only). It is inherently risky and should be used with care.
+> **Note:** `--force-writable` uses `mprotect` for the current process and ptrace syscall injection for cross-process writes. It is inherently risky and should be used with care.
 
 #### `struct <TEMPLATE>` — Parse binary data using structure templates
 
@@ -559,6 +629,24 @@ fields:
 | `oct` | `336 255 276 357` |
 | `bin` | `11011110 10101101 10111110 11101111` |
 | `ascii` | `....` (non-printable shown as `.`) |
+| `raw` | Raw binary bytes (no formatting) |
+
+## Large Files & Streaming
+
+Binfiddle handles large files through two mechanisms:
+
+1. **Memory-mapped file input** (`memmap2`) — read-only operations on file-backed data do not load the whole file into RAM.
+2. **Streaming/block modes** — commands can read the input in fixed-size blocks, keeping only a small window resident.
+
+Commands that benefit from streaming:
+
+| Command | Flag | Example |
+|---------|------|---------|
+| `hash` | `--stream --read-block-size` | `binfiddle -i huge.bin hash sha256 --stream --read-block-size 64M` |
+| `search` | `--block-size` | `binfiddle -i huge.bin search DEADBEEF --all --block-size 64M` |
+| `analyze` | `--block-size` | `binfiddle -i huge.bin analyze entropy --block-size 64M` |
+
+Size-changing edits (`insert`, `remove`, `replace`) still require an in-memory copy because the file length changes.
 
 ## Examples
 
@@ -578,6 +666,9 @@ binfiddle -i firmware.bin edit replace 0x200..0x210 "v2.0.0" \
 
 # Find encrypted sections via entropy
 binfiddle -i firmware.bin analyze entropy --block-size 4096
+
+# Hash the firmware
+binfiddle -i firmware.bin hash sha256
 ```
 
 ### Binary Diffing
@@ -607,6 +698,11 @@ binfiddle -i malware.bin analyze histogram --output-format json
 
 # Search for shellcode patterns
 binfiddle -i dump.bin search "31 c0 50 68" --all --context 16
+
+# Compute multiple hashes for a sample
+binfiddle -i malware.bin hash md5
+binfiddle -i malware.bin hash sha256
+binfiddle -i malware.bin hash xxhash64
 ```
 
 ### Data Recovery
@@ -633,6 +729,9 @@ MAGIC=$(binfiddle -i file.bin read 0..4)
 if [ "$MAGIC" = "7f 45 4c 46" ]; then
     echo "ELF file detected"
 fi
+
+# Verify a release checksum list
+binfiddle hash sha256 --check SHA256SUMS
 ```
 
 ### Scripted Patching
@@ -647,49 +746,67 @@ for offset in "${OFFSETS[@]}"; do
 done
 ```
 
+### Batch Checksums
+
+```bash
+# Create a SHA-256 checksum file for every file in a directory
+for f in *.bin; do
+    binfiddle -i "$f" hash sha256
+done > SHA256SUMS
+
+# Verify them later
+binfiddle hash sha256 --check SHA256SUMS
+```
+
 ## Architecture
 
 ### Module Structure
 
 ```
 src/
-├── main.rs          # CLI entry point and argument parsing
-├── lib.rs           # Library exports
-├── error.rs         # Error types (BinfiddleError)
-├── process_memory.rs # Linux process memory helpers
+├── main.rs             # CLI entry point and argument parsing
+├── lib.rs              # Library exports
+├── error.rs            # Error types (BinfiddleError)
+├── process_memory.rs   # Linux process memory helpers
 ├── commands/
-│   ├── mod.rs       # Command trait and exports
-│   ├── read.rs      # Read command
-│   ├── write.rs     # Write command
-│   ├── edit.rs      # Edit command (insert/remove/replace)
-│   ├── search.rs    # Search command (exact/regex/mask/parallel)
-│   ├── analyze.rs   # Analyze command (entropy/histogram/IC)
-│   ├── diff.rs      # Diff command (simple/unified/side-by-side/patch)
-│   ├── convert.rs   # Convert command (encoding/line endings/BOM)
-│   ├── patch.rs     # Patch command (apply/revert binary patches)
-│   └── struct_cmd.rs # Struct command (template-based parsing)
+│   ├── mod.rs          # Command trait and exports
+│   ├── read.rs         # Read command
+│   ├── write.rs        # Write command
+│   ├── edit.rs         # Edit command (insert/remove/replace)
+│   ├── search.rs       # Search command (exact/regex/mask/parallel)
+│   ├── hash.rs         # Hash and checksum verification
+│   ├── analyze.rs      # Analyze command (entropy/histogram/IC)
+│   ├── diff.rs         # Diff command (simple/unified/side-by-side/patch)
+│   ├── convert.rs      # Convert command (encoding/line endings/BOM)
+│   ├── patch.rs        # Patch command (apply/revert binary patches)
+│   ├── chain.rs        # Command chaining
+│   └── struct_cmd.rs   # Struct command (template-based parsing)
 └── utils/
-    ├── mod.rs       # Utility exports
-    ├── parsing.rs   # Range and format parsing
-    └── display.rs   # Output formatting
+    ├── mod.rs          # Utility exports
+    ├── parsing.rs      # Range and format parsing
+    ├── display.rs      # Output formatting
+    └── progress.rs     # Progress bar helpers
 ```
 
 ### Core Data Model
 
 ```rust
 pub struct BinaryData {
-    data: Vec<u8>,       // Underlying byte storage
     chunk_size: usize,   // Display chunk size in bits (1-64)
     width: usize,        // Chunks per output line
+    source: BinarySource,
+    // Backing storage is either an owned Vec<u8>, a read-only Mmap,
+    // or a writable MmapMut for in-place file modifications.
 }
 
 pub enum BinarySource {
-    File(PathBuf),         // Read from file
-    Stdin,                 // Read from stdin
-    RawData(Vec<u8>),      // In-memory data
-    ProcessSelf { .. },    // Current process memory (/proc/self/mem)
-    Process { .. },        // Another process's memory (/proc/<pid>/mem)
-    MemoryAddress(usize),  // Raw memory address (reserved)
+    File(PathBuf),              // Read from file (memory-mapped)
+    WritableFile(PathBuf),      // File opened for in-place mutation
+    Stdin,                      // Read from stdin
+    RawData(Vec<u8>),           // In-memory data
+    ProcessSelf { .. },         // Current process memory
+    Process { .. },             // Another process's memory
+    MemoryAddress(usize),       // Raw memory address (reserved)
 }
 ```
 
@@ -701,8 +818,9 @@ All operations return `Result<T, BinfiddleError>` with specific error types:
 - `InvalidRange` — Out of bounds or invalid range specification
 - `InvalidChunkSize` — Chunk size is 0 or exceeds data
 - `InvalidInput` — Unknown format or invalid input
-- `UnsupportedOperation` — Feature not yet implemented (e.g., memory address access)
+- `UnsupportedOperation` — Feature not yet implemented
 - `ProcessMemoryError` — `/proc/<pid>/mem` access or permission failure
+- `ChecksumVerificationFailed` — `hash --check` mismatch
 
 ## Contributing
 
@@ -712,22 +830,25 @@ Contributions are welcome!
 
 ```bash
 # Run tests
-cargo test
+cargo test --release
 
 # Run with verbose output
-cargo test -- --nocapture
+cargo test --release -- --nocapture
 
 # Build release
 cargo build --release
 
 # Build for all platforms
 ./scripts/build_releases.sh --native
+
+# Cross-check aarch64 Linux
+cargo check --target aarch64-unknown-linux-gnu
 ```
 
 ### Code Style
 
 - Follow Rust standard formatting (`cargo fmt`)
-- Run clippy with zero warnings (`cargo clippy -- -D warnings`)
+- Run clippy with zero warnings (`cargo clippy --all-targets -- -D warnings`)
 - Add tests for new functionality
 - Document public APIs with doc comments
 
@@ -741,8 +862,9 @@ cargo build --release
 | 4 | Template system evolution | ✅ Complete |
 | 5 | Bit-level precision | ✅ Complete |
 | 6 | Command chaining & pipelines | ✅ Complete |
-| 7 | Live process memory | ✅ v1 Complete (/proc/self read-only) |
-| 8 | Advanced analysis & intelligence | 🔲 Planned |
+| 7 | Live process memory | ✅ Complete |
+| 8 | Large files, hashing, streaming, progress | ✅ Complete |
+| 9 | Advanced analysis & intelligence | 🔲 Planned |
 
 ## License
 
@@ -754,6 +876,9 @@ This project is licensed under the BSD-3-Clause License. See [LICENSE](LICENSE) 
 - CLI parsing by [clap](https://github.com/clap-rs/clap)
 - Pattern matching by [memchr](https://github.com/BurntSushi/memchr) and [regex](https://github.com/rust-lang/regex)
 - Parallel processing by [rayon](https://github.com/rayon-rs/rayon)
+- Memory mapping by [memmap2](https://github.com/RazrFalcon/memmap2-rs)
+- Progress bars by [indicatif](https://github.com/console-rs/indicatif)
+- Hashing by [sha2](https://github.com/RustCrypto/hashes), [sha1](https://github.com/RustCrypto/hashes), [blake3](https://github.com/BLAKE3-team/BLAKE3), [md5](https://github.com/stainless-steel/md5), [crc32fast](https://github.com/srijs/rust-crc32fast), and [xxhash-rust](https://github.com/DoumanAsh/xxhash-rust)
 
 ---
 
@@ -766,4 +891,7 @@ binfiddle -i binary read "$RANGE" -o text.bin
 
 # Analyze entropy of extracted section
 binfiddle -i text.bin analyze entropy --block-size 256
+
+# Hash the extracted section
+binfiddle -i text.bin hash sha256
 ```
