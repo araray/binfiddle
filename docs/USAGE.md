@@ -1684,11 +1684,19 @@ cat file.bin | binfiddle read 0..16
 
 #### Progress Bars
 
-Long-running commands (`hash`, `search --all`, `analyze`, `convert`) show an
-`indicatif` progress bar on stderr when the terminal is interactive. The bar
-displays bytes processed, throughput, and ETA. Progress output is automatically
-suppressed when stderr is not a TTY (e.g. in scripts or pipes) or when
-`--silent` is used, so stdout remains clean for further processing.
+Long-running commands (`hash`, `search --all`, `analyze`, `convert`) can show an
+`indicatif` progress bar on stderr when you pass `--progress`. The bar displays
+bytes processed, throughput, and ETA.
+
+```bash
+binfiddle -i huge.bin hash sha256 --stream --read-block-size 64M --progress
+binfiddle -i huge.bin search DEADBEEF --all --block-size 64M --progress
+binfiddle -i huge.bin analyze entropy --block-size 64M --progress
+```
+
+Progress bars are opt-in and are always suppressed when stderr is not a TTY
+(e.g. in scripts or pipes), when `--silent` is used, or inside command chaining,
+so stdout remains clean for further processing.
 
 #### Writing to Files
 

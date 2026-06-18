@@ -16,9 +16,13 @@ impl Progress {
     ///
     /// - `total`: total number of bytes, or `None` for an indeterminate spinner.
     /// - `message`: short description shown on the left of the bar.
-    /// - `silent`: if true, the bar is hidden.
-    pub fn new(total: Option<u64>, message: &str, silent: bool) -> Self {
-        let hidden = silent || !atty::is(atty::Stream::Stderr);
+    /// - `enabled`: if false, the bar is hidden. Should be set from the
+    ///   `--progress` CLI flag (and combined with `--silent` by the caller).
+    pub fn new(total: Option<u64>, message: &str, enabled: bool) -> Self {
+        // Progress bars are opt-in only. Even when enabled, only draw them on
+        // an interactive stderr so pipes and scripts (including command
+        // chaining, which captures stderr) never get progress artifacts.
+        let hidden = !enabled || !atty::is(atty::Stream::Stderr);
         let bar = if hidden {
             ProgressBar::hidden()
         } else {

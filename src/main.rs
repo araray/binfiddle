@@ -72,6 +72,10 @@ struct Cli {
     #[arg(long)]
     silent: bool,
 
+    /// Show progress bars for long-running commands
+    #[arg(long)]
+    progress: bool,
+
     /// Chunk size in bits (default: 8)
     #[arg(short, long, default_value = "8")]
     chunk_size: usize,
@@ -450,7 +454,7 @@ fn main() -> Result<()> {
             }
         };
 
-        let progress = Progress::new(total, "Searching", cli.silent);
+        let progress = Progress::new(total, "Searching", cli.progress && !cli.silent);
         let input = ProgressReader::new(input, progress);
 
         let matches = search_cmd.search_stream(input, block_size)?;
@@ -510,7 +514,7 @@ fn main() -> Result<()> {
                 }
             };
 
-            let progress = Progress::new(total, "Analyzing", cli.silent);
+            let progress = Progress::new(total, "Analyzing", cli.progress && !cli.silent);
             let input = ProgressReader::new(input, progress);
 
             let output = analyze_cmd.analyze_stream(input)?;
@@ -555,7 +559,7 @@ fn main() -> Result<()> {
                 }
             };
 
-            let progress = Progress::new(total, "Hashing", cli.silent);
+            let progress = Progress::new(total, "Hashing", cli.progress && !cli.silent);
             let input = ProgressReader::new(input, progress);
 
             let output = hash_cmd.compute_stream(input, read_chunk_size)?;
@@ -802,7 +806,11 @@ fn main() -> Result<()> {
 
             // Show a spinner for full scans, which can be slow on large files.
             let progress = if *all {
-                Some(Progress::new(None, "Searching", cli.silent))
+                Some(Progress::new(
+                    None,
+                    "Searching",
+                    cli.progress && !cli.silent,
+                ))
             } else {
                 None
             };
@@ -863,12 +871,12 @@ fn main() -> Result<()> {
             // Show progress for block-based analysis; use a spinner otherwise.
             let output = if config.block_size > 0 && config.range.is_none() {
                 let total = Some(bytes.len() as u64);
-                let progress = Progress::new(total, "Analyzing", cli.silent);
+                let progress = Progress::new(total, "Analyzing", cli.progress && !cli.silent);
                 let cursor = std::io::Cursor::new(bytes);
                 let reader = ProgressReader::new(cursor, progress);
                 analyze_cmd.analyze_stream(reader)?
             } else {
-                let progress = Progress::new(None, "Analyzing", cli.silent);
+                let progress = Progress::new(None, "Analyzing", cli.progress && !cli.silent);
                 let result = analyze_cmd.analyze(bytes)?;
                 progress.finish();
                 result
@@ -901,7 +909,7 @@ fn main() -> Result<()> {
             // showing a progress bar for large inputs.
             let bytes = binary_data.as_bytes();
             let total = Some(bytes.len() as u64);
-            let progress = Progress::new(total, "Hashing", cli.silent);
+            let progress = Progress::new(total, "Hashing", cli.progress && !cli.silent);
             let cursor = std::io::Cursor::new(bytes);
             let reader = ProgressReader::new(cursor, progress);
             let output = hash_cmd.compute_stream(reader, 1024 * 1024)?;
@@ -1035,7 +1043,7 @@ fn main() -> Result<()> {
             let bytes = binary_data.as_bytes();
 
             // Show a spinner because conversion can take a while on large files.
-            let progress = Progress::new(None, "Converting", cli.silent);
+            let progress = Progress::new(None, "Converting", cli.progress && !cli.silent);
 
             // Perform conversion
             let converted = convert_cmd.convert(bytes)?;
