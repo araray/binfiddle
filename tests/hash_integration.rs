@@ -141,3 +141,145 @@ fn hash_block_based_crc32() {
     assert!(lines[1].starts_with("0x00000003:"));
     assert!(lines[2].starts_with("0x00000006:"));
 }
+
+#[test]
+fn hash_sha1_of_known_string() {
+    let input = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(input.path(), b"hello").unwrap();
+
+    let output = Command::new(binfiddle())
+        .arg("--input")
+        .arg(input.path())
+        .arg("hash")
+        .arg("sha1")
+        .output()
+        .expect("failed to run binfiddle hash");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    assert_eq!(stdout, "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d");
+}
+
+#[test]
+fn hash_xxhash64_of_known_string() {
+    let input = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(input.path(), b"hello").unwrap();
+
+    let output = Command::new(binfiddle())
+        .arg("--input")
+        .arg(input.path())
+        .arg("hash")
+        .arg("xxhash64")
+        .output()
+        .expect("failed to run binfiddle hash");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    assert_eq!(stdout, "26c7827d889f6da3");
+}
+
+#[test]
+fn hash_base64_output() {
+    let input = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(input.path(), b"hello").unwrap();
+
+    let output = Command::new(binfiddle())
+        .arg("--input")
+        .arg(input.path())
+        .arg("hash")
+        .arg("md5")
+        .arg("--output-format")
+        .arg("base64")
+        .output()
+        .expect("failed to run binfiddle hash");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    assert_eq!(stdout, "XUFAKrxLKna5cZ2REBfFkg==");
+}
+
+#[test]
+fn hash_stream_matches_non_stream() {
+    let input = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(input.path(), b"hello world this is a stream test").unwrap();
+
+    let non_stream = Command::new(binfiddle())
+        .arg("--input")
+        .arg(input.path())
+        .arg("hash")
+        .arg("sha256")
+        .output()
+        .expect("failed to run binfiddle hash");
+
+    let stream = Command::new(binfiddle())
+        .arg("--input")
+        .arg(input.path())
+        .arg("hash")
+        .arg("sha256")
+        .arg("--stream")
+        .arg("--read-block-size")
+        .arg("8")
+        .output()
+        .expect("failed to run binfiddle hash stream");
+
+    assert!(
+        non_stream.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&non_stream.stderr)
+    );
+    assert!(
+        stream.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&stream.stderr)
+    );
+
+    assert_eq!(
+        String::from_utf8_lossy(&non_stream.stdout).trim(),
+        String::from_utf8_lossy(&stream.stdout).trim()
+    );
+}
+
+#[test]
+fn hash_stream_block_hashing() {
+    let input = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(input.path(), b"123456789").unwrap();
+
+    let output = Command::new(binfiddle())
+        .arg("--input")
+        .arg(input.path())
+        .arg("hash")
+        .arg("crc32")
+        .arg("--block-size")
+        .arg("3")
+        .arg("--stream")
+        .arg("--read-block-size")
+        .arg("5")
+        .output()
+        .expect("failed to run binfiddle hash stream");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 3, "Expected 3 block hashes, got: {}", stdout);
+    assert!(lines[0].starts_with("0x00000000:"));
+}

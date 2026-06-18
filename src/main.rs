@@ -124,16 +124,24 @@ enum Commands {
 
     /// Compute a hash digest of the binary data
     Hash {
-        /// Hash algorithm: md5, sha256, blake3, crc32
+        /// Hash algorithm: md5, sha1, sha256, blake3, crc32, xxhash64
         algorithm: String,
 
-        /// Output format: hex
-        #[arg(long, default_value = "hex", value_parser = ["hex"])]
+        /// Output format: hex, base64
+        #[arg(long, default_value = "hex", value_parser = ["hex", "base64"])]
         output_format: String,
 
         /// Block size for block-based hashing (0 = whole file)
         #[arg(long, default_value = "0")]
         block_size: usize,
+
+        /// Stream the input instead of memory-mapping (for huge files)
+        #[arg(long)]
+        stream: bool,
+
+        /// Read chunk size when streaming (supports K/M/G suffixes, default 1M)
+        #[arg(long, default_value = "1M")]
+        read_block_size: String,
     },
 
     /// Search for patterns in binary data
@@ -492,6 +500,43 @@ fn main() -> Result<()> {
         }
     }
 
+    // Handle streaming hash before loading binary data.
+    if let Commands::Hash {
+        algorithm,
+        output_format,
+        block_size,
+        stream,
+        read_block_size,
+    } = command
+    {
+        if *stream {
+            if source_is_process_memory {
+                return Err(BinfiddleError::InvalidInput(
+                    "--stream hashing cannot be used with --process-self or --pid".to_string(),
+                ));
+            }
+
+            let algorithm = algorithm.parse::<binfiddle::HashAlgorithm>()?;
+            let output_format = output_format.parse::<binfiddle::HashOutputFormat>()?;
+            let config = binfiddle::HashConfig {
+                algorithm,
+                output_format,
+                block_size: *block_size,
+            };
+            let hash_cmd = binfiddle::HashCommand::new(config);
+
+            let read_chunk_size = parse_byte_size(read_block_size)?;
+            let input: Box<dyn Read> = match cli.input.as_deref() {
+                Some("-") | None => Box::new(io::stdin()),
+                Some(path) => Box::new(std::fs::File::open(path)?),
+            };
+
+            let output = hash_cmd.compute_stream(input, read_chunk_size)?;
+            println!("{}", output);
+            return Ok(());
+        }
+    }
+
     // Check if this command needs binary_data loaded
     let needs_input = matches!(
         command,
@@ -754,6 +799,8 @@ fn main() -> Result<()> {
             algorithm,
             output_format,
             block_size,
+            stream: _,
+            read_block_size: _,
         } => {
             let algorithm = algorithm.parse::<binfiddle::HashAlgorithm>()?;
             let output_format = output_format.parse::<binfiddle::HashOutputFormat>()?;

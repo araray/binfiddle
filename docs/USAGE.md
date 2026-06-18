@@ -554,9 +554,11 @@ The `hash` command computes common digests over binary data.
 | Algorithm | Digest Size | Use Case |
 |-----------|-------------|----------|
 | `md5` | 128-bit | Legacy checksums |
+| `sha1` | 160-bit | Legacy / git-style verification |
 | `sha256` | 256-bit | Cryptographic verification |
 | `blake3` | 256-bit | Fast, modern cryptographic hash |
 | `crc32` | 32-bit | Data integrity / zip-style checksums |
+| `xxhash64` | 64-bit | Fast non-cryptographic checksum |
 
 #### Syntax
 
@@ -568,8 +570,10 @@ binfiddle -i <FILE> hash <ALGORITHM> [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--output-format` | Output encoding (`hex`) | `hex` |
+| `--output-format` | Output encoding (`hex`, `base64`) | `hex` |
 | `--block-size <N>` | Hash non-overlapping blocks of N bytes (`0` = whole file) | `0` |
+| `--stream` | Read the input incrementally instead of memory-mapping | off |
+| `--read-block-size <N>` | Chunk size when `--stream` is used (supports K/M/G suffixes) | `1M` |
 
 #### Examples
 
@@ -585,6 +589,15 @@ binfiddle -i disk.img hash crc32 --block-size 4096
 
 # BLAKE3 of a file
 binfiddle -i data.bin hash blake3
+
+# SHA-1 in base64
+binfiddle -i file.bin hash sha1 --output-format base64
+
+# xxhash64 (very fast)
+binfiddle -i large.bin hash xxhash64
+
+# Stream-hash a file that does not fit in memory
+binfiddle -i huge.bin hash sha256 --stream --read-block-size 64M
 ```
 
 #### Block-Based Output
