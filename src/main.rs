@@ -556,6 +556,57 @@ enum NnCommand {
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
         report_format: String,
     },
+
+    /// Numerically inspect one catalog tensor
+    Analyze {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Exact original tensor name
+        #[arg(long, conflicts_with = "analyze_id")]
+        tensor: Option<String>,
+
+        /// Tensor identifier (full or unique digest prefix)
+        #[arg(long = "id", id = "analyze_id", conflicts_with = "tensor")]
+        target_id: Option<String>,
+
+        /// Scope for --tensor: unique source id prefix or exact path
+        #[arg(long, requires = "tensor")]
+        source: Option<String>,
+
+        /// Access mode: metadata (no payload reads), sample, full
+        #[arg(long, default_value = "full", value_parser = ["metadata", "sample", "full"])]
+        mode: String,
+
+        /// Seed for deterministic sampling
+        #[arg(long, default_value = "17")]
+        seed: u64,
+
+        /// Sample size in elements (sample mode)
+        #[arg(long, default_value = "10000")]
+        sample_size: u64,
+
+        /// Number of histogram bins (0 = no histogram)
+        #[arg(long, default_value = "0")]
+        histogram_bins: usize,
+
+        /// Number of leading quantization blocks to display (0 = none)
+        #[arg(long, default_value = "0")]
+        blocks: u64,
+
+        /// Reference values file for error metrics (raw little-endian f32/f64)
+        #[arg(long)]
+        reference: Option<String>,
+
+        /// Reference element width: 4 (f32) or 8 (f64)
+        #[arg(long, default_value = "4", value_parser = ["4", "8"])]
+        reference_width: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
 }
 
 /// Run one NN workbench command. `input` is the root `--input` value, when
@@ -937,6 +988,89 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 envelope.write_json(&mut out)?;
             } else {
                 out.write_all(assemble_text(&envelope)?.as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Analyze {
+            catalog,
+            tensor,
+            target_id,
+            source,
+            mode,
+            seed,
+            sample_size,
+            histogram_bins,
+            blocks,
+            reference,
+            reference_width,
+            report_format,
+        } => {
+            use binfiddle::nn::analyze::{self, ScanMode};
+            use binfiddle::nn::show::{self, ShowTarget};
+            let catalog_path = nn_path_arg(catalog.as_deref(), "analyze")?;
+            let input_path = nn_path_arg(input, "analyze")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                input_path,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let target = match (tensor, target_id) {
+                (Some(name), None) => ShowTarget::Name {
+                    name,
+                    source: source.as_deref(),
+                },
+                (None, Some(id)) => ShowTarget::Id { id },
+                _ => {
+                    return Err(NnError::InvalidRequest {
+                        message: "nn analyze requires exactly one of --tensor or --id".to_string(),
+                    })
+                }
+            };
+            let tensor = show::resolve_show_target(&loaded, &target)?;
+            let mode = match mode.as_str() {
+                "metadata" => ScanMode::Metadata,
+                "sample" => ScanMode::Sample,
+                _ => ScanMode::Full,
+            };
+            // Metadata mode refuses to read payloads for metrics it cannot
+            // honestly compute from descriptors alone.
+            if mode == ScanMode::Metadata
+                && (*histogram_bins > 0 || reference.is_some() || *blocks > 0)
+            {
+                return Err(NnError::InvalidRequest {
+                    message: "metadata mode reads no payload; histograms, reference metrics, and block views need sample or full mode"
+                        .to_string(),
+                });
+            }
+            let reference_path = match reference.as_deref() {
+                Some(path) => Some(nn_path_arg(Some(path), "analyze")?.ok_or_else(|| {
+                    NnError::InvalidRequest {
+                        message: "invalid reference path".to_string(),
+                    }
+                })?),
+                None => None,
+            };
+            let width: u32 = reference_width.parse().unwrap_or(4);
+            let result = analyze::analyze_tensor(
+                &loaded,
+                tensor,
+                mode,
+                *seed,
+                *sample_size,
+                *histogram_bins,
+                *blocks,
+                reference_path,
+                width,
+                &budget,
+            )?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                analyze::analysis_envelope(&loaded, &result)?.write_json(&mut out)?;
+            } else {
+                out.write_all(analyze::analysis_text(&result).as_bytes())?;
             }
             out.flush()?;
         }

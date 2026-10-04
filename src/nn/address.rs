@@ -318,7 +318,7 @@ fn reverse_detail(layout: TensorLayout, shape: &[u64], rel: u64, length: u64) ->
 
 /// Invert the row-major linear index into a coordinate, when shape knowledge
 /// permits it (non-zero extents).
-fn coordinate_from_linear(shape: &[u64], linear: u64) -> Option<Vec<u64>> {
+pub fn coordinate_from_linear(shape: &[u64], linear: u64) -> Option<Vec<u64>> {
     let mut index = Vec::with_capacity(shape.len());
     let mut remaining = linear;
     for &d in shape {

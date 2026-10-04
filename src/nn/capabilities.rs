@@ -109,9 +109,12 @@ pub fn capabilities() -> Vec<Capability> {
             "nn.assemble",
             "tensor-content reconstruction from materialized bundles with digest verification (original-byte and executable claims are explicitly not made)",
         ),
+        Capability::implemented(
+            "nn.analyze",
+            "bounded numerical inspection: metadata/sample/full scans with coverage records, Welford statistics, non-finite categories, overflow-safe L2 norms, declared-edge histograms, reference-error metrics with zero-denominator policies, and Q4_0 block views",
+        ),
         Capability::unavailable("nn.impact", "impact analysis is not implemented yet"),
         Capability::unavailable("nn.split", "decomposition is not implemented yet"),
-        Capability::unavailable("nn.analyze", "numerical inspection is not implemented yet"),
         Capability::unavailable("nn.quant", "quantization inspection is not implemented yet"),
         Capability::unavailable("nn.edit", "transactional editing is not implemented yet"),
         Capability::unavailable("nn.diff", "model comparison is not implemented yet"),

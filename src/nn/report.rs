@@ -59,7 +59,7 @@ pub enum DiagnosticLevel {
 }
 
 impl DiagnosticLevel {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             DiagnosticLevel::Info => "info",
             DiagnosticLevel::Warning => "warning",

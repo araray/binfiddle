@@ -557,6 +557,26 @@ binfiddle nn slice --catalog model.nn.json --selection q.selection.json \
 binfiddle nn assemble --bundle slices/head --out-dir rebuilt/head/
 ```
 
+`nn analyze` inspects one tensor numerically with honest coverage: metadata mode reads no payload bytes, sample mode examines a seeded deterministic selection, full mode scans everything within its budget. Results include Welford mean/variance (population and sample named separately), min/max with coordinates and tie counts, non-finite category counts, an overflow-safe L2 norm, optional declared-edge histograms, optional reference-error metrics (MAE/RMSE/maxAE with explicit zero-denominator policies), and quantization-block views.
+
+```bash
+# Full scan of one tensor
+binfiddle nn analyze --catalog model.nn.json --tensor model.layers.0.weight
+
+# Seeded 4k-element sample with a 32-bin histogram
+binfiddle nn analyze --catalog model.nn.json --tensor w --mode sample \
+    --seed 17 --sample-size 4096 --histogram-bins 32
+
+# Descriptor-only inspection (no payload reads)
+binfiddle nn analyze --catalog model.nn.json --tensor w --mode metadata
+
+# Compare a tensor against raw f32 reference values
+binfiddle nn analyze --catalog model.nn.json --tensor w --reference ref.f32 --reference-width 4
+
+# Show the first quantization blocks of a Q4_0 tensor
+binfiddle nn analyze --catalog model.nn.json --tensor w --blocks 4
+```
+
 #### Process memory — Linux experimental
 
 Read memory from the current process or any same-user process via `/proc/<pid>/mem`, list mapped memory regions, and write back to the current process with an explicit opt-in.

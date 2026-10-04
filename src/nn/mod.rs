@@ -3,6 +3,7 @@
 //! dependencies; the legacy binary toolkit remains fully independent.
 
 pub mod address;
+pub mod analyze;
 pub mod budget;
 pub mod cancel;
 pub mod capabilities;
