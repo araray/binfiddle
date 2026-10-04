@@ -79,11 +79,20 @@ pub fn capabilities() -> Vec<Capability> {
         ),
         Capability::implemented(
             "nn.discover",
-            "descriptor-only inventory of SafeTensors and GGUF files and directories (no payload reads)",
+            "descriptor-only inventory of SafeTensors and GGUF files and directories; optional --out-catalog persistence",
         ),
-        Capability::unavailable("nn.ls", "catalog browsing is not implemented yet"),
-        Capability::unavailable("nn.show", "component inspection is not implemented yet"),
-        Capability::unavailable("nn.select", "selection resolution is not implemented yet"),
+        Capability::implemented(
+            "nn.ls",
+            "tensor and source listing with encoding/source/name filters, name/byte ordering, and bounded pagination",
+        ),
+        Capability::implemented(
+            "nn.show",
+            "one tensor's full record (exact name, scoped name, or unique id prefix) with optional --explain evidence",
+        ),
+        Capability::implemented(
+            "nn.select",
+            "tensor selection by exact name, scoped name, or id; saved selections bind their catalog and never silently rematch",
+        ),
         Capability::unavailable("nn.where", "address mapping is not implemented yet"),
         Capability::unavailable("nn.locate", "reverse address lookup is not implemented yet"),
         Capability::unavailable("nn.impact", "impact analysis is not implemented yet"),

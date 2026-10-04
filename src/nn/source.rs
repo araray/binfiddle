@@ -192,6 +192,12 @@ impl SourceRevision {
     }
 
     /// Semantic record (wire subset; integers as decimal strings).
+    ///
+    /// Identity strength tracks verification: a content-verified revision is
+    /// identified by its digest alone (path-independent), while an
+    /// observation-level revision — which asserts nothing about content — also
+    /// records which package member was observed so two distinct files of
+    /// equal length never collapse into one identity.
     pub fn semantic(&self) -> Result<Json, NnError> {
         let digest = match &self.content_digest {
             Some(value) => Json::object(vec![
@@ -200,15 +206,21 @@ impl SourceRevision {
             ])?,
             None => Json::Null,
         };
+        let mut observation = vec![("method", Json::Str("open_metadata".to_string()))];
+        if self.consistency == SourceConsistency::Observation {
+            let member = self
+                .relative_path
+                .to_str()
+                .unwrap_or_default()
+                .replace('\\', "/");
+            observation.push(("member", Json::Str(member)));
+        }
         Json::object(vec![
             ("schema", Json::Str("binfiddle.nn.source/v1".to_string())),
             ("kind", Json::Str("file".to_string())),
             ("length", Json::Str(self.length.to_string())),
             ("content_digest", digest),
-            (
-                "observation",
-                Json::object(vec![("method", Json::Str("open_metadata".to_string()))])?,
-            ),
+            ("observation", Json::object(observation)?),
             (
                 "consistency",
                 Json::Str(self.consistency.as_str().to_string()),
@@ -348,19 +360,30 @@ mod tests {
 
     #[test]
     fn revision_id_is_deterministic_and_digest_sensitive() {
+        // Observation-level identity records which member was observed, so two
+        // distinct files of equal length never collapse into one identity.
         let a = SourceRevision::observed(PathBuf::from("a.bin"), 18);
         let b = SourceRevision::observed(PathBuf::from("different-name.bin"), 18);
-        // Same bytes and policy: identity is path-independent.
-        assert_eq!(a.id().unwrap(), b.id().unwrap());
+        assert_ne!(a.id().unwrap(), b.id().unwrap());
+        let a2 = SourceRevision::observed(PathBuf::from("a.bin"), 18);
+        assert_eq!(a.id().unwrap(), a2.id().unwrap());
         let c = SourceRevision::observed(PathBuf::from("a.bin"), 19);
         assert_ne!(a.id().unwrap(), c.id().unwrap());
-        let d = SourceRevision::content_verified(
+        // Content-verified identity is carried by the digest and is
+        // path-independent.
+        let d1 = SourceRevision::content_verified(
             PathBuf::from("a.bin"),
             18,
             // sha256("abc"), verified against sha256sum.
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_string(),
         );
-        assert_ne!(a.id().unwrap(), d.id().unwrap());
+        let d2 = SourceRevision::content_verified(
+            PathBuf::from("elsewhere.bin"),
+            18,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_string(),
+        );
+        assert_ne!(a.id().unwrap(), d1.id().unwrap());
+        assert_eq!(d1.id().unwrap(), d2.id().unwrap());
         assert!(a.id().unwrap().starts_with("src:"));
         assert_eq!(a.id().unwrap().len(), "src:".len() + 64);
     }

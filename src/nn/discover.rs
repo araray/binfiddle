@@ -45,7 +45,7 @@ pub enum SourceOutcome {
 }
 
 impl SourceOutcome {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             SourceOutcome::Parsed => "parsed",
             SourceOutcome::Invalid => "invalid",

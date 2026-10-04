@@ -499,6 +499,25 @@ binfiddle -i model.gguf nn discover --verify-content
 
 # Fail (exit 8) when coverage is incomplete
 binfiddle -i model-dir/ nn discover --require-complete
+
+# Save the resulting catalog for later commands
+binfiddle -i model-dir/ nn discover --out-catalog model.nn.json
+```
+
+`nn ls`, `nn show`, and `nn select` operate on a saved catalog (or discover on the fly through the root `-i`). Tensor identities are stable content-addressed records; a saved selection is bound to the exact catalog it was created from and never silently rematches against different bytes.
+
+```bash
+# List tensors (filters, ordering, bounded pagination)
+binfiddle -i model-dir/ nn ls --encoding safetensors.F32 --sort bytes --limit 50
+binfiddle nn ls --catalog model.nn.json --view sources
+
+# Show one tensor with its evidence
+binfiddle nn show --catalog model.nn.json --tensor model.layers.0.weight --explain
+binfiddle nn show --catalog model.nn.json --id tensor:1c79818b
+
+# Resolve and save a selection (exact name, optional source scope, or id)
+binfiddle nn select --catalog model.nn.json \
+    --tensor model.layers.0.weight --out-selection head.selection.json
 ```
 
 #### Process memory — Linux experimental

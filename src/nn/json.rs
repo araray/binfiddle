@@ -63,6 +63,22 @@ impl Json {
         }
     }
 
+    /// String value of a `Str`, or `None` for other variants.
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Json::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Items of an `Array`, or `None` for other variants.
+    pub fn as_array(&self) -> Option<&[Json]> {
+        match self {
+            Json::Array(items) => Some(items),
+            _ => None,
+        }
+    }
+
     /// Parse a complete document from a UTF-8 string with the given limits.
     /// Trailing non-whitespace content after the top-level value is an error.
     /// Bare numbers are rejected (NN wire subset).

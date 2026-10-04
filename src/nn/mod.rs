@@ -5,18 +5,24 @@
 pub mod budget;
 pub mod cancel;
 pub mod capabilities;
+pub mod catalog;
 pub mod discover;
 pub mod error;
 pub mod format;
 pub mod id;
 pub mod json;
+pub mod queries;
 pub mod report;
+pub mod selection;
+pub mod selector;
+pub mod show;
 pub mod source;
 pub mod wire;
 
 pub use budget::{Budget, BudgetCaps, BudgetConsumed};
 pub use cancel::{CancellationToken, SignalGuard};
 pub use capabilities::{capabilities, capabilities_envelope, capabilities_text};
+pub use catalog::{Catalog, CatalogCoverage, CatalogSource, CatalogTensor};
 pub use discover::{discover, DiscoverOptions, DiscoverReport, SourceOutcome};
 pub use error::{ErrorCode, NnError};
 pub use id::{compute_id, validate_id, IdKind};
@@ -24,3 +30,5 @@ pub use json::{Json, ParseLimits};
 pub use report::{
     CompletionStatus, Diagnostic, DiagnosticLevel, PublicationStatus, ResultEnvelope,
 };
+pub use selection::{EmptyPolicy, Selection, SelectionRequest};
+pub use selector::{IndexSpec, Segment, Selector};

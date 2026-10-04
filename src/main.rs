@@ -342,6 +342,111 @@ enum NnCommand {
         /// Fail (exit 8) when coverage is incomplete
         #[arg(long)]
         require_complete: bool,
+
+        /// Save the resulting catalog to this file
+        #[arg(long)]
+        out_catalog: Option<String>,
+    },
+
+    /// List tensors or sources from a catalog (or discover one on the fly)
+    Ls {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// View: tensors, sources
+        #[arg(long, default_value = "tensors", value_parser = ["tensors", "sources"])]
+        view: String,
+
+        /// Exact encoding filter (e.g. safetensors.F32, ggml.q4_0)
+        #[arg(long)]
+        encoding: Option<String>,
+
+        /// Source scope: unique source id prefix or exact path
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Bounded regular expression filter over tensor names
+        #[arg(long)]
+        name_regex: Option<String>,
+
+        /// Sort order: name, bytes
+        #[arg(long, default_value = "name", value_parser = ["name", "bytes"])]
+        sort: String,
+
+        /// Maximum entries per page (1-10000)
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Entries to skip before the page
+        #[arg(long, default_value = "0")]
+        offset: usize,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Show one tensor's full record, with optional evidence explanation
+    Show {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Exact original tensor name
+        #[arg(long, conflicts_with = "id")]
+        tensor: Option<String>,
+
+        /// Tensor identifier (full or unique digest prefix)
+        #[arg(long, conflicts_with = "tensor")]
+        id: Option<String>,
+
+        /// Scope for --tensor: unique source id prefix or exact path
+        #[arg(long, requires = "tensor")]
+        source: Option<String>,
+
+        /// Include the evidence explanation
+        #[arg(long)]
+        explain: bool,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Resolve a tensor selection and optionally save it
+    Select {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Exact original tensor name
+        #[arg(long, conflicts_with_all = ["id", "select"])]
+        tensor: Option<String>,
+
+        /// Tensor identifier (full or unique digest prefix)
+        #[arg(long, conflicts_with_all = ["tensor", "select"])]
+        id: Option<String>,
+
+        /// Component selector expression (requires a model pack to resolve)
+        #[arg(long = "select", conflicts_with_all = ["tensor", "id"])]
+        select_expr: Option<String>,
+
+        /// Scope for --tensor: unique source id prefix or exact path
+        #[arg(long, requires = "tensor")]
+        source: Option<String>,
+
+        /// Allow an empty selection instead of rejecting it
+        #[arg(long)]
+        allow_empty: bool,
+
+        /// Save the resolved selection to this file
+        #[arg(long)]
+        out_selection: Option<String>,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
     },
 }
 
@@ -376,6 +481,7 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             report_format,
             verify_content,
             require_complete,
+            out_catalog,
         } => {
             let path = input.ok_or_else(|| NnError::InvalidRequest {
                 message: "nn discover requires --input <file-or-directory>".to_string(),
@@ -391,6 +497,9 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 verify_content: *verify_content,
             };
             let report = binfiddle::nn::discover(Path::new(path), &options, &budget)?;
+            if let Some(catalog_path) = out_catalog {
+                binfiddle::nn::Catalog::from_discovery(&report)?.save(Path::new(catalog_path))?;
+            }
             guard.propagate(&cancel);
             let stdout = io::stdout();
             let mut out = stdout.lock();
@@ -411,12 +520,173 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 });
             }
         }
+        NnCommand::Ls {
+            catalog,
+            view,
+            encoding,
+            source,
+            name_regex,
+            sort,
+            limit,
+            offset,
+            report_format,
+        } => {
+            use binfiddle::nn::queries::{self, clamp_pagination, ListFilters, SortField};
+            let catalog_path = nn_path_arg(catalog.as_deref(), "ls")?;
+            let input_path = nn_path_arg(input, "ls")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                input_path,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if view == "sources" {
+                let envelope = queries::sources_envelope(&loaded)?;
+                if report_format == "json" {
+                    envelope.write_json(&mut out)?;
+                } else {
+                    out.write_all(queries::sources_text(&loaded).as_bytes())?;
+                }
+            } else {
+                let (limit, offset) = clamp_pagination(*limit, *offset)?;
+                let sort_field = if sort == "bytes" {
+                    SortField::Bytes
+                } else {
+                    SortField::Name
+                };
+                let filters = ListFilters {
+                    encoding: encoding.clone(),
+                    source: source.clone(),
+                    name_regex: name_regex.clone(),
+                };
+                let page = queries::list_tensors(&loaded, &filters, sort_field, limit, offset)?;
+                if report_format == "json" {
+                    queries::tensors_envelope(&loaded, &page, &filters, sort_field)?
+                        .write_json(&mut out)?;
+                } else {
+                    out.write_all(queries::tensors_text(&loaded, &page).as_bytes())?;
+                }
+            }
+            out.flush()?;
+        }
+        NnCommand::Show {
+            catalog,
+            tensor,
+            id,
+            source,
+            explain,
+            report_format,
+        } => {
+            use binfiddle::nn::show::{self, ShowTarget};
+            let catalog_path = nn_path_arg(catalog.as_deref(), "show")?;
+            let input_path = nn_path_arg(input, "show")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                input_path,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let target = match (tensor, id) {
+                (Some(name), None) => ShowTarget::Name {
+                    name,
+                    source: source.as_deref(),
+                },
+                (None, Some(id)) => ShowTarget::Id { id },
+                _ => {
+                    return Err(NnError::InvalidRequest {
+                        message: "nn show requires exactly one of --tensor or --id".to_string(),
+                    })
+                }
+            };
+            let tensor = show::resolve_show_target(&loaded, &target)?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                show::show_envelope(&loaded, tensor, *explain)?.write_json(&mut out)?;
+            } else {
+                out.write_all(show::show_text(&loaded, tensor, *explain).as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Select {
+            catalog,
+            tensor,
+            id,
+            select_expr,
+            source,
+            allow_empty,
+            out_selection,
+            report_format,
+        } => {
+            use binfiddle::nn::selection::{EmptyPolicy, Selection, SelectionRequest};
+            let catalog_path = nn_path_arg(catalog.as_deref(), "select")?;
+            let input_path = nn_path_arg(input, "select")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                input_path,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let request = match (tensor, id, select_expr) {
+                (Some(name), None, None) => SelectionRequest::TensorName {
+                    name: name.clone(),
+                    source: source.clone(),
+                },
+                (None, Some(id), None) => SelectionRequest::TensorId { id: id.clone() },
+                (None, None, Some(expression)) => SelectionRequest::ComponentExpression {
+                    expression: expression.clone(),
+                },
+                _ => {
+                    return Err(NnError::InvalidRequest {
+                        message: "nn select requires exactly one of --tensor, --id, or --select"
+                            .to_string(),
+                    })
+                }
+            };
+            let policy = if *allow_empty {
+                EmptyPolicy::Allow
+            } else {
+                EmptyPolicy::Reject
+            };
+            let selection = Selection::resolve(&loaded, request, policy)?;
+            if let Some(path) = out_selection {
+                selection.save(Path::new(path))?;
+            }
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                selection.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(selection.text().as_bytes())?;
+            }
+            out.flush()?;
+        }
     }
 
     // One final checkpoint so cancellation during output is still reported.
     guard.propagate(&cancel);
     budget.checkpoint()?;
     Ok(())
+}
+
+/// Convert an NN command path argument, rejecting stdin (NN commands need
+/// seekable files or directories).
+fn nn_path_arg<'a>(
+    value: Option<&'a str>,
+    command: &str,
+) -> std::result::Result<Option<&'a std::path::Path>, NnError> {
+    match value {
+        None => Ok(None),
+        Some("-") => Err(NnError::InvalidRequest {
+            message: format!("nn {command} requires seekable inputs; stdin is not supported"),
+        }),
+        Some(path) => Ok(Some(std::path::Path::new(path))),
+    }
 }
 
 fn main() -> Result<()> {

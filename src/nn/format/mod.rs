@@ -159,6 +159,22 @@ pub(crate) fn read_u_le(
     Ok(u64::from_le_bytes(pad_le(buf)))
 }
 
+/// Whether a qualified numeric decoder is registered for an encoding id
+/// (e.g. `safetensors.F32`, `ggml.q4_0`). Kept in one place so catalogs and
+/// readers cannot drift apart.
+pub fn encoding_decode_supported(encoding_id: &str) -> bool {
+    if let Some(dtype) = encoding_id.strip_prefix("safetensors.") {
+        return matches!(
+            dtype,
+            "F64" | "F32" | "F16" | "BF16" | "I64" | "I32" | "I16" | "I8" | "U8" | "BOOL"
+        );
+    }
+    if let Some(name) = encoding_id.strip_prefix("ggml.") {
+        return matches!(name, "f32" | "f16");
+    }
+    false
+}
+
 fn pad_le(bytes: Vec<u8>) -> [u8; 8] {
     let mut out = [0u8; 8];
     out[..bytes.len()].copy_from_slice(&bytes);
