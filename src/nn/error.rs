@@ -31,6 +31,8 @@ pub enum ErrorCode {
     BudgetExceeded,
     /// A required output or operation check failed.
     ValidationFailed,
+    /// The result was incomplete while `--require-complete` was requested.
+    IncompleteRejected,
     /// Publication or receipt completion has an unresolved outcome.
     PublicationIncomplete,
     /// A required source revision or precondition no longer holds.
@@ -58,6 +60,7 @@ impl ErrorCode {
             ErrorCode::WriteConflict => "WRITE_CONFLICT",
             ErrorCode::BudgetExceeded => "BUDGET_EXCEEDED",
             ErrorCode::ValidationFailed => "VALIDATION_FAILED",
+            ErrorCode::IncompleteRejected => "INCOMPLETE_REJECTED",
             ErrorCode::PublicationIncomplete => "PUBLICATION_INCOMPLETE",
             ErrorCode::SourceChanged => "SOURCE_CHANGED",
             ErrorCode::SourceMissing => "SOURCE_MISSING",
@@ -101,6 +104,8 @@ pub enum NnError {
     },
     /// A required validation failed before publication.
     ValidationFailed { detail: String },
+    /// The result was incomplete while `--require-complete` was requested.
+    IncompleteRejected { detail: String },
     /// Publication or receipt completion is unresolved.
     PublicationIncomplete { detail: String },
     /// The source revision or a recorded precondition no longer holds.
@@ -134,6 +139,7 @@ impl NnError {
             NnError::WriteConflict { .. } => ErrorCode::WriteConflict,
             NnError::BudgetExceeded { .. } => ErrorCode::BudgetExceeded,
             NnError::ValidationFailed { .. } => ErrorCode::ValidationFailed,
+            NnError::IncompleteRejected { .. } => ErrorCode::IncompleteRejected,
             NnError::PublicationIncomplete { .. } => ErrorCode::PublicationIncomplete,
             NnError::SourceChanged { .. } => ErrorCode::SourceChanged,
             NnError::SourceMissing { .. } => ErrorCode::SourceMissing,
@@ -160,6 +166,7 @@ impl NnError {
             | NnError::BudgetExceeded { .. }
             | NnError::PublicationIncomplete { .. } => 6,
             NnError::ValidationFailed { .. } => 7,
+            NnError::IncompleteRejected { .. } => 8,
             NnError::Cancelled => 130,
         }
     }
@@ -198,6 +205,9 @@ impl fmt::Display for NnError {
                 "budget exceeded for {resource}: requested {requested}, available {limit}"
             ),
             NnError::ValidationFailed { detail } => write!(f, "validation failed: {detail}"),
+            NnError::IncompleteRejected { detail } => {
+                write!(f, "incomplete result rejected: {detail}")
+            }
             NnError::PublicationIncomplete { detail } => {
                 write!(f, "publication incomplete: {detail}")
             }
@@ -263,19 +273,20 @@ mod tests {
                 requested: 2,
             },
             NnError::ValidationFailed { detail: "x".into() },
+            NnError::IncompleteRejected { detail: "x".into() },
             NnError::PublicationIncomplete { detail: "x".into() },
             NnError::SourceChanged { detail: "x".into() },
             NnError::SourceMissing { detail: "x".into() },
             NnError::Cancelled,
             NnError::Io(std::io::Error::other("x")),
         ];
-        let expected = [2, 3, 3, 4, 4, 3, 3, 3, 5, 6, 7, 6, 5, 5, 130, 6];
+        let expected = [2, 3, 3, 4, 4, 3, 3, 3, 5, 6, 7, 8, 6, 5, 5, 130, 6];
         for (err, code) in samples.iter().zip(expected) {
             assert_eq!(err.exit_code(), code, "wrong exit for {:?}", err.code());
         }
         // Every variant must be covered: exhaustiveness is enforced by construction
         // here because samples lists one error per variant.
-        assert_eq!(samples.len(), 16);
+        assert_eq!(samples.len(), 17);
     }
 
     #[test]

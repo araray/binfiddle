@@ -2,20 +2,29 @@
 //!
 //! The NN wire subset is number-free: integers travel as canonical decimal
 //! strings and non-finite or precision-sensitive values travel as objects with
-//! an explicit encoding. Bare JSON numbers are therefore rejected at parse
-//! time, and the serializer never emits them.
+//! an explicit encoding. Bare JSON numbers are therefore rejected by
+//! [`Json::parse_strict`], and the canonical serializer never emits them.
 //!
-//! The parser additionally rejects duplicate object keys (they must be caught
-//! before schema validation) and enforces explicit depth and node-count limits.
+//! Foreign artifacts (container headers) do use JSON integers. Those are read
+//! with [`Json::parse_foreign`], which produces [`Json::Number`] values for
+//! non-negative integers only (fractional and exponent forms are rejected as
+//! unsupported for the artifact formats being read). `Number` is a read-only
+//! convenience for foreign data: canonical serialization refuses it, so a
+//! number can never leak into a wire record.
+//!
+//! Both parsers reject duplicate object keys (they must be caught before
+//! schema validation) and enforce explicit depth and node-count limits.
 
 use super::error::NnError;
 
-/// A parsed JSON value restricted to the NN wire subset.
+/// A parsed JSON value. `Number` appears only through `parse_foreign`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Json {
     Null,
     Bool(bool),
     Str(String),
+    /// Non-negative integer in canonical decimal form, from foreign JSON.
+    Number(String),
     Array(Vec<Json>),
     /// Object members in first-appearance order; duplicates are rejected by the
     /// parser and by the canonical serializer.
@@ -56,13 +65,31 @@ impl Json {
 
     /// Parse a complete document from a UTF-8 string with the given limits.
     /// Trailing non-whitespace content after the top-level value is an error.
+    /// Bare numbers are rejected (NN wire subset).
     pub fn parse_strict(input: &str, limits: ParseLimits) -> Result<Json, NnError> {
+        Self::parse_with_mode(input, limits, false)
+    }
+
+    /// Parse a foreign JSON document (container headers). Non-negative
+    /// integers are accepted and represented as [`Json::Number`]; fractional
+    /// and exponent forms are rejected because no supported artifact format
+    /// uses them, and negative numbers likewise.
+    pub fn parse_foreign(input: &str, limits: ParseLimits) -> Result<Json, NnError> {
+        Self::parse_with_mode(input, limits, true)
+    }
+
+    fn parse_with_mode(
+        input: &str,
+        limits: ParseLimits,
+        allow_numbers: bool,
+    ) -> Result<Json, NnError> {
         let mut parser = Parser {
             bytes: input.as_bytes(),
             pos: 0,
             limits,
             depth: 0,
             nodes: 0,
+            allow_numbers,
         };
         parser.skip_ws();
         let value = parser.parse_value()?;
@@ -73,9 +100,19 @@ impl Json {
         Ok(value)
     }
 
+    /// For a [`Json::Number`], return its value as `u64`. Returns `None` for
+    /// other variants or out-of-range digits.
+    pub fn as_number_u64(&self) -> Option<u64> {
+        match self {
+            Json::Number(digits) => digits.parse::<u64>().ok(),
+            _ => None,
+        }
+    }
+
     /// Serialize to the canonical (RFC 8785 subset) form: object keys sorted by
     /// UTF-16 code units, JCS string escaping, no insignificant whitespace.
-    /// Duplicate keys anywhere in the value are an error.
+    /// Duplicate keys anywhere in the value are an error. `Number` values
+    /// cannot be canonicalized (the wire subset is number-free).
     pub fn to_canonical(&self) -> Result<String, NnError> {
         let mut out = String::new();
         write_canonical(self, &mut out)?;
@@ -139,6 +176,7 @@ struct Parser<'a> {
     limits: ParseLimits,
     depth: usize,
     nodes: usize,
+    allow_numbers: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -199,11 +237,40 @@ impl<'a> Parser<'a> {
             Some(b't') => self.parse_literal("true", Json::Bool(true)),
             Some(b'f') => self.parse_literal("false", Json::Bool(false)),
             Some(b'n') => self.parse_literal("null", Json::Null),
+            Some(b'0'..=b'9') if self.allow_numbers => self.parse_foreign_number(),
             Some(b'-') | Some(b'0'..=b'9') => Err(self.error(
                 "JSON numbers are not part of the NN wire subset; encode integers as decimal strings",
             )),
             Some(_) => Err(self.error("unexpected character")),
             None => Err(self.error("unexpected end of input")),
+        }
+    }
+
+    /// Parse a JSON integer literal in foreign mode: non-negative, canonical
+    /// digits (JSON forbids leading zeros), no fraction or exponent. Those
+    /// restrictions cover every supported artifact header format.
+    fn parse_foreign_number(&mut self) -> Result<Json, NnError> {
+        let start = self.pos;
+        if self.peek() == Some(b'0') {
+            self.pos += 1;
+            if let Some(b'0'..=b'9') = self.peek() {
+                return Err(self.error("leading zeros are not valid JSON numbers"));
+            }
+        } else {
+            while let Some(b'0'..=b'9') = self.peek() {
+                self.pos += 1;
+            }
+        }
+        match self.peek() {
+            Some(b'.') | Some(b'e') | Some(b'E') => {
+                Err(self
+                    .error("fractional or exponent numbers are unsupported in artifact headers"))
+            }
+            _ => Ok(Json::Number(
+                std::str::from_utf8(&self.bytes[start..self.pos])
+                    .map_err(|_| self.error("invalid UTF-8 in number"))?
+                    .to_string(),
+            )),
         }
     }
 
@@ -384,6 +451,13 @@ fn write_canonical(value: &Json, out: &mut String) -> Result<(), NnError> {
         Json::Bool(true) => out.push_str("true"),
         Json::Bool(false) => out.push_str("false"),
         Json::Str(s) => write_canonical_string(s, out),
+        Json::Number(digits) => {
+            return Err(NnError::WireSyntax {
+                detail: format!(
+                    "foreign number {digits} cannot be canonicalized; convert it to a decimal string first"
+                ),
+            });
+        }
         Json::Array(items) => {
             out.push('[');
             for (i, item) in items.iter().enumerate() {
@@ -612,6 +686,42 @@ mod tests {
         assert!(d1
             .chars()
             .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn foreign_mode_accepts_non_negative_integers_only() {
+        let value = Json::parse_foreign(
+            r#"{"shape":[2,3],"off":[0,48],"name":"t"}"#,
+            ParseLimits::default(),
+        )
+        .unwrap();
+        let shape = value.get("shape").unwrap();
+        assert_eq!(shape.at(0).unwrap().as_number_u64(), Some(2));
+        assert_eq!(shape.at(1).unwrap().as_number_u64(), Some(3));
+        assert_eq!(shape.at(0), Some(&Json::Number("2".to_string())));
+
+        assert!(Json::parse_foreign("-1", ParseLimits::default()).is_err());
+        assert!(Json::parse_foreign("1.5", ParseLimits::default()).is_err());
+        assert!(Json::parse_foreign("1e3", ParseLimits::default()).is_err());
+        assert!(Json::parse_foreign("01", ParseLimits::default()).is_err());
+        // Strict mode still rejects integers.
+        assert!(Json::parse_strict("2", ParseLimits::default()).is_err());
+        assert!(Json::parse_strict(r#"{"a":2}"#, ParseLimits::default()).is_err());
+    }
+
+    #[test]
+    fn foreign_numbers_cannot_be_canonicalized() {
+        let value = Json::parse_foreign("12", ParseLimits::default()).unwrap();
+        assert!(value.to_canonical().is_err());
+        // Converted to a decimal string, it serializes fine.
+        let converted = Json::Str(value.as_number_u64().unwrap().to_string());
+        assert_eq!(converted.to_canonical().unwrap(), "\"12\"");
+    }
+
+    #[test]
+    fn as_number_u64_rejects_other_variants() {
+        assert_eq!(Json::Str("12".into()).as_number_u64(), None);
+        assert_eq!(Json::Null.as_number_u64(), None);
     }
 
     #[test]

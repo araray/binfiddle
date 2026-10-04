@@ -328,13 +328,30 @@ enum NnCommand {
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
         report_format: String,
     },
+
+    /// Inventory supported model artifacts (descriptor-only, no payload reads)
+    Discover {
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+
+        /// Hash full file contents, upgrading source identity strength
+        #[arg(long)]
+        verify_content: bool,
+
+        /// Fail (exit 8) when coverage is incomplete
+        #[arg(long)]
+        require_complete: bool,
+    },
 }
 
-/// Run one NN workbench command. Stdout carries the primary report; errors map
-/// to the NN exit-code categories.
-fn run_nn(command: &NnCommand) -> std::result::Result<(), NnError> {
-    use binfiddle::nn::{Budget, CancellationToken, SignalGuard};
+/// Run one NN workbench command. `input` is the root `--input` value, when
+/// given. Stdout carries the primary report; errors map to the NN exit-code
+/// categories.
+fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), NnError> {
+    use binfiddle::nn::{Budget, CancellationToken, DiscoverOptions, SignalGuard};
     use std::io::Write;
+    use std::path::Path;
 
     let cancel = CancellationToken::new();
     let guard = SignalGuard::install()?;
@@ -354,6 +371,45 @@ fn run_nn(command: &NnCommand) -> std::result::Result<(), NnError> {
                 out.write_all(b"\n")?;
             }
             out.flush()?;
+        }
+        NnCommand::Discover {
+            report_format,
+            verify_content,
+            require_complete,
+        } => {
+            let path = input.ok_or_else(|| NnError::InvalidRequest {
+                message: "nn discover requires --input <file-or-directory>".to_string(),
+            })?;
+            if path == "-" {
+                return Err(NnError::InvalidRequest {
+                    message:
+                        "nn discover requires a seekable file or directory; stdin is not supported"
+                            .to_string(),
+                });
+            }
+            let options = DiscoverOptions {
+                verify_content: *verify_content,
+            };
+            let report = binfiddle::nn::discover(Path::new(path), &options, &budget)?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                report.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(report.text().as_bytes())?;
+            }
+            out.flush()?;
+            if *require_complete && !report.complete() {
+                let (considered, parsed, _) = report.coverage();
+                return Err(NnError::IncompleteRejected {
+                    detail: format!(
+                        "discovery coverage incomplete: {} of {} sources fully inventoried",
+                        parsed.min(considered),
+                        considered
+                    ),
+                });
+            }
         }
     }
 
@@ -392,7 +448,7 @@ fn main() -> Result<()> {
             eprintln!("error: invalid request: --process-self/--pid cannot be used with nn");
             std::process::exit(2);
         }
-        if let Err(err) = run_nn(command) {
+        if let Err(err) = run_nn(command, cli.input.as_deref()) {
             eprintln!("error: {err}");
             std::process::exit(err.exit_code());
         }

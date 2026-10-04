@@ -473,16 +473,32 @@ binfiddle --silent -i data.bin -o out.bin chain \
 |--------|-------------|
 | `--step <COMMAND>` | One step to execute (repeatable, required). Quoting follows shell rules. |
 
-#### `nn capabilities` — NN workbench capability report (early access)
+#### `nn` — Neural-network artifact workbench (early access)
 
 Reports which neural-network artifact workbench capabilities this build actually implements. All other `nn` operations are listed as unavailable; the report never advertises unimplemented behavior as supported.
 
 ```bash
-# Human-readable report
+# Human-readable capability report
 binfiddle nn capabilities
 
 # Machine-readable JSON result envelope
 binfiddle nn capabilities --report-format json
+```
+
+`nn discover` inventories supported model artifacts without reading payload bytes and without executing model code. It recognizes SafeTensors and GGUF (v2/v3) files, scans package directories (symlinks are never followed), keeps unknown or malformed files visible as reported evidence, and emits a JSON result envelope with per-tensor descriptors and exact file-qualified payload spans.
+
+```bash
+# Inventory one model file (text report)
+binfiddle -i model.safetensors nn discover
+
+# Inventory a package directory as a JSON envelope
+binfiddle -i model-dir/ nn discover --report-format json
+
+# Hash full contents, strengthening source identity to content_verified
+binfiddle -i model.gguf nn discover --verify-content
+
+# Fail (exit 8) when coverage is incomplete
+binfiddle -i model-dir/ nn discover --require-complete
 ```
 
 #### Process memory — Linux experimental

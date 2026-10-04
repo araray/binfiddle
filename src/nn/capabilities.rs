@@ -77,7 +77,10 @@ pub fn capabilities() -> Vec<Capability> {
             "nn.budgets",
             "hierarchical resource budgets with cancellation checkpoints",
         ),
-        Capability::unavailable("nn.discover", "artifact inventory is not implemented yet"),
+        Capability::implemented(
+            "nn.discover",
+            "descriptor-only inventory of SafeTensors and GGUF files and directories (no payload reads)",
+        ),
         Capability::unavailable("nn.ls", "catalog browsing is not implemented yet"),
         Capability::unavailable("nn.show", "component inspection is not implemented yet"),
         Capability::unavailable("nn.select", "selection resolution is not implemented yet"),
