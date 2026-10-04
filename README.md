@@ -520,6 +520,20 @@ binfiddle nn select --catalog model.nn.json \
     --tensor model.layers.0.weight --out-selection head.selection.json
 ```
 
+`nn where` maps a tensor or one element coordinate to its exact file location — with a precision classification, the byte span, and (for packed encodings like Q4_0) the bit mask, bit numbering, and shared decode dependencies such as the block scale. `nn locate` answers the reverse question: which tensor owns a given file offset.
+
+```bash
+# Where does element [123,456] of a tensor live?
+binfiddle nn where --catalog model.nn.json \
+    --tensor model.layers.0.weight --index 123,456
+
+# Whole-tensor span
+binfiddle nn where --catalog model.nn.json --tensor model.layers.0.weight
+
+# Which tensor owns file offset 0x010F6390?
+binfiddle nn locate --catalog model.nn.json --offset 0x010F6390
+```
+
 #### Process memory — Linux experimental
 
 Read memory from the current process or any same-user process via `/proc/<pid>/mem`, list mapped memory regions, and write back to the current process with an explicit opt-in.

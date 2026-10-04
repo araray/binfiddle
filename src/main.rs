@@ -448,6 +448,52 @@ enum NnCommand {
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
         report_format: String,
     },
+
+    /// Map a tensor (or one element) to its file-qualified byte/bit location
+    Where {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Exact original tensor name
+        #[arg(long, conflicts_with = "id")]
+        tensor: Option<String>,
+
+        /// Tensor identifier (full or unique digest prefix)
+        #[arg(long, conflicts_with = "tensor")]
+        id: Option<String>,
+
+        /// Scope for --tensor: unique source id prefix or exact path
+        #[arg(long, requires = "tensor")]
+        source: Option<String>,
+
+        /// Element coordinate (comma-separated decimal, e.g. 123,456)
+        #[arg(long)]
+        index: Option<String>,
+
+        /// Address space (only file addresses are supported)
+        #[arg(long, default_value = "file", value_parser = ["file"])]
+        space: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Reverse lookup: which tensors own a file offset
+    Locate {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// File offset (decimal or 0x-prefixed hex)
+        #[arg(long)]
+        offset: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
 }
 
 /// Run one NN workbench command. `input` is the root `--input` value, when
@@ -666,12 +712,99 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             }
             out.flush()?;
         }
+        NnCommand::Where {
+            catalog,
+            tensor,
+            id,
+            source,
+            index,
+            space: _,
+            report_format,
+        } => {
+            use binfiddle::nn::show::{self, ShowTarget};
+            use binfiddle::nn::where_cmd;
+            let catalog_path = nn_path_arg(catalog.as_deref(), "where")?;
+            let input_path = nn_path_arg(input, "where")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                input_path,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let target = match (tensor, id) {
+                (Some(name), None) => ShowTarget::Name {
+                    name,
+                    source: source.as_deref(),
+                },
+                (None, Some(id)) => ShowTarget::Id { id },
+                _ => {
+                    return Err(NnError::InvalidRequest {
+                        message: "nn where requires exactly one of --tensor or --id".to_string(),
+                    })
+                }
+            };
+            let tensor = show::resolve_show_target(&loaded, &target)?;
+            let coordinate = match index {
+                Some(text) => Some(where_cmd::parse_coordinate(text)?),
+                None => None,
+            };
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                where_cmd::where_envelope(&loaded, tensor, coordinate.as_deref())?
+                    .write_json(&mut out)?;
+            } else {
+                out.write_all(where_cmd::where_text(tensor, coordinate.as_deref())?.as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Locate {
+            catalog,
+            offset,
+            report_format,
+        } => {
+            use binfiddle::nn::where_cmd;
+            let catalog_path = nn_path_arg(catalog.as_deref(), "locate")?;
+            let input_path = nn_path_arg(input, "locate")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                input_path,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let offset_value = parse_nn_offset(offset)?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                where_cmd::locate_envelope(&loaded, offset_value)?.write_json(&mut out)?;
+            } else {
+                out.write_all(where_cmd::locate_text(&loaded, offset_value)?.as_bytes())?;
+            }
+            out.flush()?;
+        }
     }
 
     // One final checkpoint so cancellation during output is still reported.
     guard.propagate(&cancel);
     budget.checkpoint()?;
     Ok(())
+}
+
+/// Parse a file offset for `nn locate`: decimal or 0x-prefixed hex.
+fn parse_nn_offset(text: &str) -> std::result::Result<u64, NnError> {
+    let trimmed = text.trim();
+    let (radix, digits) = match trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        Some(hex) => (16, hex),
+        None => (10, trimmed),
+    };
+    u64::from_str_radix(digits, radix).map_err(|_| NnError::InvalidRequest {
+        message: format!("invalid offset {} (use decimal or 0x hex)", text),
+    })
 }
 
 /// Convert an NN command path argument, rejecting stdin (NN commands need

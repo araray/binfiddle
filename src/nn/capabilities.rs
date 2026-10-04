@@ -93,8 +93,14 @@ pub fn capabilities() -> Vec<Capability> {
             "nn.select",
             "tensor selection by exact name, scoped name, or id; saved selections bind their catalog and never silently rematch",
         ),
-        Capability::unavailable("nn.where", "address mapping is not implemented yet"),
-        Capability::unavailable("nn.locate", "reverse address lookup is not implemented yet"),
+        Capability::implemented(
+            "nn.where",
+            "forward address mapping with precision classifications (exact_contiguous/exact_bits/no_payload/unresolved); scalar codecs and the Q4_0 block layout",
+        ),
+        Capability::implemented(
+            "nn.locate",
+            "reverse lookup: file offset to owning tensors with coordinate families and quantization-block roles",
+        ),
         Capability::unavailable("nn.impact", "impact analysis is not implemented yet"),
         Capability::unavailable("nn.slice", "extraction is not implemented yet"),
         Capability::unavailable("nn.split", "decomposition is not implemented yet"),

@@ -2,10 +2,12 @@
 //! inspection. This module is self-contained and adds no mandatory ML
 //! dependencies; the legacy binary toolkit remains fully independent.
 
+pub mod address;
 pub mod budget;
 pub mod cancel;
 pub mod capabilities;
 pub mod catalog;
+pub mod codec;
 pub mod discover;
 pub mod error;
 pub mod format;
@@ -17,6 +19,7 @@ pub mod selection;
 pub mod selector;
 pub mod show;
 pub mod source;
+pub mod where_cmd;
 pub mod wire;
 
 pub use budget::{Budget, BudgetCaps, BudgetConsumed};
