@@ -473,6 +473,18 @@ binfiddle --silent -i data.bin -o out.bin chain \
 |--------|-------------|
 | `--step <COMMAND>` | One step to execute (repeatable, required). Quoting follows shell rules. |
 
+#### `nn capabilities` — NN workbench capability report (early access)
+
+Reports which neural-network artifact workbench capabilities this build actually implements. All other `nn` operations are listed as unavailable; the report never advertises unimplemented behavior as supported.
+
+```bash
+# Human-readable report
+binfiddle nn capabilities
+
+# Machine-readable JSON result envelope
+binfiddle nn capabilities --report-format json
+```
+
 #### Process memory — Linux experimental
 
 Read memory from the current process or any same-user process via `/proc/<pid>/mem`, list mapped memory regions, and write back to the current process with an explicit opt-in.

@@ -1,6 +1,7 @@
 /// src/lib.rs
 pub mod commands;
 pub mod error;
+pub mod nn;
 pub mod process_memory;
 pub mod utils;
 

@@ -1,4 +1,5 @@
 /// src/main.rs
+use binfiddle::nn::{capabilities_envelope, capabilities_text, NnError};
 use binfiddle::utils::parsing::{parse_search_pattern, validate_search_pattern};
 use binfiddle::utils::progress::{Progress, ProgressReader};
 use binfiddle::{BinaryData, BinarySource, BinfiddleError, Result, SearchConfig};
@@ -311,6 +312,55 @@ enum Commands {
         #[arg(long, required = true)]
         step: Vec<String>,
     },
+
+    /// Neural-network artifact workbench (early access)
+    Nn {
+        #[command(subcommand)]
+        command: NnCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum NnCommand {
+    /// Report implemented and unavailable NN workbench capabilities
+    Capabilities {
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+}
+
+/// Run one NN workbench command. Stdout carries the primary report; errors map
+/// to the NN exit-code categories.
+fn run_nn(command: &NnCommand) -> std::result::Result<(), NnError> {
+    use binfiddle::nn::{Budget, CancellationToken, SignalGuard};
+    use std::io::Write;
+
+    let cancel = CancellationToken::new();
+    let guard = SignalGuard::install()?;
+    let budget = Budget::unrestricted();
+    budget.checkpoint()?;
+    guard.propagate(&cancel);
+
+    match command {
+        NnCommand::Capabilities { report_format } => {
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                let envelope = capabilities_envelope()?;
+                envelope.write_json(&mut out)?;
+            } else {
+                out.write_all(capabilities_text().as_bytes())?;
+                out.write_all(b"\n")?;
+            }
+            out.flush()?;
+        }
+    }
+
+    // One final checkpoint so cancellation during output is still reported.
+    guard.propagate(&cancel);
+    budget.checkpoint()?;
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -333,6 +383,20 @@ fn main() -> Result<()> {
             cli.output.as_deref(),
             cli.silent,
         );
+    }
+
+    // Handle nn commands early: they own their own input handling and do not
+    // use the binary-data loading path below.
+    if let Some(Commands::Nn { command }) = &cli.command {
+        if source_is_process_memory {
+            eprintln!("error: invalid request: --process-self/--pid cannot be used with nn");
+            std::process::exit(2);
+        }
+        if let Err(err) = run_nn(command) {
+            eprintln!("error: {err}");
+            std::process::exit(err.exit_code());
+        }
+        return Ok(());
     }
 
     // Handle --list-regions before loading binary data.
@@ -1219,6 +1283,10 @@ fn main() -> Result<()> {
         }
         Commands::Chain { .. } => {
             // Chain is handled before this match.
+            unreachable!()
+        }
+        Commands::Nn { .. } => {
+            // NN commands are handled before binary-data loading.
             unreachable!()
         }
     };
