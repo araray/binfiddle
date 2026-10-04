@@ -494,6 +494,68 @@ enum NnCommand {
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
         report_format: String,
     },
+
+    /// Extract selected tensors into a bundle (weights kind)
+    Slice {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Saved selection file (plan generation mode)
+        #[arg(long, conflicts_with_all = ["plan"])]
+        selection: Option<String>,
+
+        /// Saved plan file (apply mode)
+        #[arg(long, conflicts_with_all = ["selection", "storage", "quant", "save_plan", "dry_run"])]
+        plan: Option<String>,
+
+        /// Slice kind (weights; component/executable need model packs)
+        #[arg(long, default_value = "weights", value_parser = ["weights"])]
+        kind: String,
+
+        /// Storage policy: reference, materialized
+        #[arg(long, default_value = "materialized", value_parser = ["reference", "materialized"])]
+        storage: String,
+
+        /// Quantization policy: preserve_encoding, cover_blocks, decode
+        #[arg(
+            long,
+            default_value = "preserve_encoding",
+            value_parser = ["preserve_encoding", "cover_blocks", "decode"]
+        )]
+        quant: String,
+
+        /// Resolve and print the plan without writing a bundle
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Save the resolved plan to this file
+        #[arg(long)]
+        save_plan: Option<String>,
+
+        /// Bundle output directory (apply)
+        #[arg(long)]
+        out_dir: Option<String>,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Reconstruct tensor content from a materialized slice bundle
+    Assemble {
+        /// Materialized bundle directory (contains slice.json)
+        #[arg(long)]
+        bundle: String,
+
+        /// Output directory for reconstructed payloads
+        #[arg(long)]
+        out_dir: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
 }
 
 /// Run one NN workbench command. `input` is the root `--input` value, when
@@ -781,6 +843,100 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 where_cmd::locate_envelope(&loaded, offset_value)?.write_json(&mut out)?;
             } else {
                 out.write_all(where_cmd::locate_text(&loaded, offset_value)?.as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Slice {
+            catalog,
+            selection,
+            plan,
+            kind: _,
+            storage,
+            quant,
+            dry_run,
+            save_plan,
+            out_dir,
+            report_format,
+        } => {
+            use binfiddle::nn::selection::Selection;
+            use binfiddle::nn::slice::{
+                apply_plan, receipt_envelope, receipt_text, QuantPolicy, SlicePlan, StoragePolicy,
+            };
+            let catalog_path = nn_path_arg(catalog.as_deref(), "slice")?;
+            let input_path = nn_path_arg(input, "slice")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                input_path,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+
+            let resolved_plan = match (plan.as_deref(), selection.as_deref()) {
+                (Some(plan_path), None) => SlicePlan::load(Path::new(plan_path))?,
+                (None, Some(selection_path)) => {
+                    let selection = Selection::load(Path::new(selection_path))?;
+                    let storage = StoragePolicy::parse(storage)?;
+                    let quant = QuantPolicy::parse(quant)?;
+                    let built = SlicePlan::build(&loaded, &selection, storage, quant)?;
+                    if let Some(save_path) = save_plan.as_deref() {
+                        built.save(Path::new(save_path))?;
+                    }
+                    built
+                }
+                _ => {
+                    return Err(NnError::InvalidRequest {
+                        message: "nn slice requires exactly one of --selection or --plan"
+                            .to_string(),
+                    })
+                }
+            };
+
+            // Plan mode without --out-dir previews the plan (any --save-plan
+            // file was already written); apply mode requires --out-dir.
+            let apply_now = out_dir.is_some();
+            if plan.is_some() && !apply_now {
+                return Err(NnError::InvalidRequest {
+                    message: "nn slice with --plan requires --out-dir to apply".to_string(),
+                });
+            }
+            if *dry_run || !apply_now {
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    resolved_plan.envelope()?.write_json(&mut out)?;
+                } else {
+                    out.write_all(resolved_plan.text().as_bytes())?;
+                }
+                out.flush()?;
+            } else {
+                let out_dir = out_dir.as_deref().expect("checked above");
+                let receipt = apply_plan(&resolved_plan, &loaded, Path::new(out_dir), &budget)?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    receipt_envelope(&receipt)?.write_json(&mut out)?;
+                } else {
+                    out.write_all(receipt_text(&receipt).as_bytes())?;
+                }
+                out.flush()?;
+            }
+        }
+        NnCommand::Assemble {
+            bundle,
+            out_dir,
+            report_format,
+        } => {
+            use binfiddle::nn::slice::{assemble_bundle, assemble_text};
+            let envelope = assemble_bundle(Path::new(bundle), Path::new(out_dir), &budget)?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                envelope.write_json(&mut out)?;
+            } else {
+                out.write_all(assemble_text(&envelope)?.as_bytes())?;
             }
             out.flush()?;
         }

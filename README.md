@@ -534,6 +534,29 @@ binfiddle nn where --catalog model.nn.json --tensor model.layers.0.weight
 binfiddle nn locate --catalog model.nn.json --offset 0x010F6390
 ```
 
+`nn slice` extracts selected tensors into a bundle, and `nn assemble` reconstructs tensor content from a materialized bundle. Plans are id-verified files; applying a plan re-verifies the catalog and full source digests — anything that changed since planning aborts with an error instead of extracting silently stale bytes. Reference bundles keep payloads in their content-verified sources; materialized bundles copy exact spans and hash every member. The `decode` policy materializes a numeric representation and records the loss of original encoding identity.
+
+```bash
+# Preview a slice of the saved selection
+binfiddle nn slice --catalog model.nn.json \
+    --selection head.selection.json --dry-run
+
+# Save a plan, then apply it to a fresh output directory
+binfiddle nn slice --catalog model.nn.json \
+    --selection head.selection.json --save-plan head.plan.json
+binfiddle nn slice --catalog model.nn.json \
+    --plan head.plan.json --out-dir slices/head/
+
+# Quantization-aware and decoding policies
+binfiddle nn slice --catalog model.nn.json --selection q.selection.json \
+    --storage reference --quant preserve_encoding --out-dir slices/ref/
+binfiddle nn slice --catalog model.nn.json --selection q.selection.json \
+    --quant decode --out-dir slices/decoded/
+
+# Reconstruct tensor content from a materialized bundle (digests verified)
+binfiddle nn assemble --bundle slices/head --out-dir rebuilt/head/
+```
+
 #### Process memory — Linux experimental
 
 Read memory from the current process or any same-user process via `/proc/<pid>/mem`, list mapped memory regions, and write back to the current process with an explicit opt-in.

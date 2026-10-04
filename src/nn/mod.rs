@@ -18,6 +18,7 @@ pub mod report;
 pub mod selection;
 pub mod selector;
 pub mod show;
+pub mod slice;
 pub mod source;
 pub mod where_cmd;
 pub mod wire;

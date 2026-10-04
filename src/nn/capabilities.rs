@@ -101,10 +101,16 @@ pub fn capabilities() -> Vec<Capability> {
             "nn.locate",
             "reverse lookup: file offset to owning tensors with coordinate families and quantization-block roles",
         ),
+        Capability::implemented(
+            "nn.slice",
+            "weight extraction over saved selections: dry-run plans, id-verified plan files, reference and materialized bundles with per-member digests, preserve_encoding/cover_blocks/decode policies",
+        ),
+        Capability::implemented(
+            "nn.assemble",
+            "tensor-content reconstruction from materialized bundles with digest verification (original-byte and executable claims are explicitly not made)",
+        ),
         Capability::unavailable("nn.impact", "impact analysis is not implemented yet"),
-        Capability::unavailable("nn.slice", "extraction is not implemented yet"),
         Capability::unavailable("nn.split", "decomposition is not implemented yet"),
-        Capability::unavailable("nn.assemble", "reassembly is not implemented yet"),
         Capability::unavailable("nn.analyze", "numerical inspection is not implemented yet"),
         Capability::unavailable("nn.quant", "quantization inspection is not implemented yet"),
         Capability::unavailable("nn.edit", "transactional editing is not implemented yet"),
