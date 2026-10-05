@@ -31,6 +31,7 @@ pub mod selector;
 pub mod show;
 pub mod slice;
 pub mod source;
+pub mod split_cmd;
 pub mod tokenizer;
 pub mod where_cmd;
 pub mod wire;

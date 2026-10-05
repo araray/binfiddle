@@ -663,6 +663,33 @@ enum NnCommand {
         report_format: String,
     },
 
+    /// Decompose a model by layer into child selections (and optional bundles)
+    Split {
+        /// Saved catalog file
+        #[arg(long)]
+        catalog: String,
+
+        /// Model pack with layered components
+        #[arg(long)]
+        pack: String,
+
+        /// Decomposition axis (layer)
+        #[arg(long, default_value = "layer", value_parser = ["layer"])]
+        by: String,
+
+        /// Storage: reference (plans only) or materialized (per-layer bundles)
+        #[arg(long, default_value = "reference", value_parser = ["reference", "materialized"])]
+        storage: String,
+
+        /// Fresh output directory for the split tree
+        #[arg(long)]
+        out_dir: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
     /// Exact content fingerprints for every tensor in a catalog
     Fingerprint {
         /// Catalog file
@@ -1744,6 +1771,47 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 &right_catalog,
                 *decoded,
                 policy,
+                &budget,
+            )?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                report.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(report.text().as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Split {
+            catalog,
+            pack,
+            by: _,
+            storage,
+            out_dir,
+            report_format,
+        } => {
+            use binfiddle::nn::split_cmd;
+            let catalog_path = nn_path_arg(Some(catalog.as_str()), "split")?.ok_or_else(|| {
+                NnError::InvalidRequest {
+                    message: "invalid catalog".to_string(),
+                }
+            })?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                Some(catalog_path),
+                None,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let loaded_pack = binfiddle::nn::packs::Pack::load(Path::new(pack))?;
+            let recognition = binfiddle::nn::packs::Recognition::recognize(&loaded_pack, &loaded)?;
+            let materialize = storage == "materialized";
+            let report = split_cmd::SplitReport::split_by_layer(
+                &loaded,
+                &loaded_pack,
+                &recognition,
+                materialize,
+                Path::new(out_dir),
                 &budget,
             )?;
             guard.propagate(&cancel);

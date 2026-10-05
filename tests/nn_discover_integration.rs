@@ -194,12 +194,7 @@ fn discover_stdin_spools_the_stream() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn");
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(&model)
-        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(&model).unwrap();
     let output = child.wait_with_output().expect("wait");
     assert_eq!(output.status.code(), Some(0));
     let out = String::from_utf8_lossy(&output.stdout);

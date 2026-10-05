@@ -690,6 +690,11 @@ binfiddle nn edit apply --catalog m.nn.json --plan w.plan.json --out-model m2.on
 
 # Test two models for row-permutation relationships (experimental)
 binfiddle nn research align --left v1.nn.json --right v2.nn.json
+
+# Decompose a model by layer: child selections + plans (or materialized
+# bundles) + a root manifest with coverage and byte accounting
+binfiddle nn split --catalog model.nn.json --pack qwen3-next/pack.yaml \
+    --by layer --storage materialized --out-dir split/
 ```
 
 #### Process memory — Linux experimental

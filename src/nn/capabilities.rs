@@ -114,7 +114,10 @@ pub fn capabilities() -> Vec<Capability> {
             "bounded numerical inspection: metadata/sample/full scans with coverage records, Welford statistics, non-finite categories, overflow-safe L2 norms, declared-edge histograms, reference-error metrics with zero-denominator policies, and Q4_0 block views",
         ),
         Capability::unavailable("nn.impact", "impact analysis is not implemented yet"),
-        Capability::unavailable("nn.split", "decomposition is not implemented yet"),
+        Capability::implemented(
+            "nn.split",
+            "one-command layer decomposition: per-layer child selections (synthesized, rebindable selector expressions), reference plans or materialized per-layer bundles, and a root split.json manifest with the coverage partition (assigned/shared/unresolved) and member-vs-unique byte accounting — payloads never duplicated by navigation overlap",
+        ),
         Capability::unavailable("nn.quant", "quantization inspection is not implemented yet"),
         Capability::implemented(
             "nn.select",
