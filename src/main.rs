@@ -433,19 +433,23 @@ enum NnCommand {
         catalog: Option<String>,
 
         /// Exact original tensor name
-        #[arg(long, conflicts_with_all = ["id", "select"])]
+        #[arg(long, conflicts_with_all = ["id", "select", "rebind_selection"])]
         tensor: Option<String>,
 
         /// Tensor identifier (full or unique digest prefix)
-        #[arg(long, conflicts_with_all = ["tensor", "select"])]
+        #[arg(long, conflicts_with_all = ["tensor", "select", "rebind_selection"])]
         id: Option<String>,
 
         /// Component selector expression (requires a model pack to resolve)
-        #[arg(long = "select", conflicts_with_all = ["tensor", "id"])]
+        #[arg(long = "select", conflicts_with_all = ["tensor", "id", "rebind_selection"])]
         select_expr: Option<String>,
 
-        /// Model pack for component resolution of --select
-        #[arg(long, requires = "select")]
+        /// Saved selection to rebind against the catalog given by --catalog
+        #[arg(long = "rebind", id = "rebind_selection", conflicts_with_all = ["tensor", "id", "select"])]
+        rebind_selection: Option<String>,
+
+        /// Model pack for component resolution of --select and component rebinds
+        #[arg(long)]
         pack: Option<String>,
 
         /// Scope for --tensor: unique source id prefix or exact path
@@ -709,6 +713,12 @@ enum NnCommand {
         report_format: String,
     },
 
+    /// Research: row-permutation alignment between two catalogs (experimental)
+    Research {
+        #[command(subcommand)]
+        command: ResearchCommand,
+    },
+
     /// Adapter checkpoint operations
     Adapter {
         #[command(subcommand)]
@@ -719,6 +729,24 @@ enum NnCommand {
     Tokenizer {
         #[command(subcommand)]
         command: TokenizerCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ResearchCommand {
+    /// Test same-shape dense weights for row-permutation relationships
+    Align {
+        /// Left catalog file
+        #[arg(long)]
+        left: String,
+
+        /// Right catalog file
+        #[arg(long)]
+        right: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
     },
 }
 
@@ -937,19 +965,19 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             out_catalog,
         } => {
             let path = input.ok_or_else(|| NnError::InvalidRequest {
-                message: "nn discover requires --input <file-or-directory>".to_string(),
+                message: "nn discover requires --input <file-or-directory> (or '-' for stdin)"
+                    .to_string(),
             })?;
-            if path == "-" {
-                return Err(NnError::InvalidRequest {
-                    message:
-                        "nn discover requires a seekable file or directory; stdin is not supported"
-                            .to_string(),
-                });
-            }
             let options = DiscoverOptions {
                 verify_content: *verify_content,
             };
-            let report = binfiddle::nn::discover(Path::new(path), &options, &budget)?;
+            // Stdin discovery spools the stream to a bounded private
+            // temporary file with its own content-verified identity.
+            let report = if path == "-" {
+                binfiddle::nn::discover::discover_stdin(&options, &budget)?
+            } else {
+                binfiddle::nn::discover(Path::new(path), &options, &budget)?
+            };
             if let Some(catalog_path) = out_catalog {
                 binfiddle::nn::Catalog::from_discovery(&report)?.save(Path::new(catalog_path))?;
             }
@@ -1108,6 +1136,7 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             tensor,
             id,
             select_expr,
+            rebind_selection,
             pack,
             source,
             allow_empty,
@@ -1123,6 +1152,43 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 &DiscoverOptions::default(),
                 &budget,
             )?;
+            let policy = if *allow_empty {
+                EmptyPolicy::Allow
+            } else {
+                EmptyPolicy::Reject
+            };
+            // Rebind mode: re-evaluate a saved selection's REQUEST against
+            // this catalog and report additions/removals.
+            if let Some(rebind_path) = rebind_selection.as_deref() {
+                let old = Selection::load(Path::new(rebind_path))?;
+                let pack_pair = match pack.as_deref() {
+                    Some(pack_path) => {
+                        let loaded_pack = binfiddle::nn::packs::Pack::load(Path::new(pack_path))?;
+                        let recognition =
+                            binfiddle::nn::packs::Recognition::recognize(&loaded_pack, &loaded)?;
+                        Some((loaded_pack, recognition))
+                    }
+                    None => None,
+                };
+                let pack_ref = pack_pair.as_ref().map(|(p, r)| (p, r));
+                let (fresh, additions, removals) =
+                    old.request.rebind(&old, &loaded, pack_ref, policy)?;
+                if let Some(path) = out_selection {
+                    fresh.save(Path::new(path))?;
+                }
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    fresh.envelope()?.write_json(&mut out)?;
+                } else {
+                    out.write_all(fresh.text().as_bytes())?;
+                    out.write_all(format!("  additions: {}\n", additions.len()).as_bytes())?;
+                    out.write_all(format!("  removals: {}\n", removals.len()).as_bytes())?;
+                }
+                out.flush()?;
+                return Ok(());
+            }
             let request = match (tensor, id, select_expr) {
                 (Some(name), None, None) => SelectionRequest::TensorName {
                     name: name.clone(),
@@ -1132,17 +1198,11 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 (None, None, Some(expression)) => SelectionRequest::ComponentExpression {
                     expression: expression.clone(),
                 },
-                _ => {
-                    return Err(NnError::InvalidRequest {
-                        message: "nn select requires exactly one of --tensor, --id, or --select"
+                _ => return Err(NnError::InvalidRequest {
+                    message:
+                        "nn select requires exactly one of --tensor, --id, --select, or --rebind"
                             .to_string(),
-                    })
-                }
-            };
-            let policy = if *allow_empty {
-                EmptyPolicy::Allow
-            } else {
-                EmptyPolicy::Reject
+                }),
             };
             // Component expressions resolve through a pack when --pack is
             // given; without one they parse and explain (M2 behavior).
@@ -1809,6 +1869,48 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 out.write_all(carve::carve_text(target_path, &findings).as_bytes())?;
             }
             out.flush()?;
+        }
+        NnCommand::Research { command } => {
+            match command {
+                ResearchCommand::Align {
+                    left,
+                    right,
+                    report_format,
+                } => {
+                    use binfiddle::nn::research;
+                    let left_path = nn_path_arg(Some(left.as_str()), "research align")?
+                        .ok_or_else(|| NnError::InvalidRequest {
+                            message: "invalid left catalog".to_string(),
+                        })?;
+                    let right_path = nn_path_arg(Some(right.as_str()), "research align")?
+                        .ok_or_else(|| NnError::InvalidRequest {
+                            message: "invalid right catalog".to_string(),
+                        })?;
+                    let left_catalog = binfiddle::nn::Catalog::from_route(
+                        Some(left_path),
+                        None,
+                        &DiscoverOptions::default(),
+                        &budget,
+                    )?;
+                    let right_catalog = binfiddle::nn::Catalog::from_route(
+                        Some(right_path),
+                        None,
+                        &DiscoverOptions::default(),
+                        &budget,
+                    )?;
+                    let report =
+                        research::AlignmentReport::align(&left_catalog, &right_catalog, &budget)?;
+                    guard.propagate(&cancel);
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    if report_format == "json" {
+                        report.envelope()?.write_json(&mut out)?;
+                    } else {
+                        out.write_all(report.text().as_bytes())?;
+                    }
+                    out.flush()?;
+                }
+            }
         }
         NnCommand::Adapter { command } => match command {
             AdapterCommand::Inspect {

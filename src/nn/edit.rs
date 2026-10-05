@@ -966,6 +966,17 @@ pub fn apply_edit_plan(
                 .tensors
                 .iter()
                 .any(|t| t.original_name == plan.tensor_name)
+    } else if format.starts_with("onnx") {
+        // ONNX writer tier: fixed-size edits over raw_data spans; the model
+        // must reparse with the same tensor count and an exact span for the
+        // edited initializer.
+        let inventory = super::format::onnx::inventory(&out_reader, budget)?;
+        inventory.inventory.validity == super::format::Validity::Valid
+            && inventory
+                .inventory
+                .tensors
+                .iter()
+                .any(|t| t.original_name == plan.tensor_name && t.payload_length.is_some())
     } else {
         false
     };

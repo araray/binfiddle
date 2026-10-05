@@ -443,6 +443,108 @@ fn has_gguf_magic(file: &BoundedFile, budget: &Budget) -> bool {
     &magic == b"GGUF"
 }
 
+/// Parse a `<base>-<index>-of-<total>` GGUF split-shard stem. Returns
+/// `(base, index (1-based), total)`.
+fn parse_shard_name(name: &str) -> Option<(String, u64, u64)> {
+    // The last three dash-separated segments must be [index, "of", total].
+    let stem = name.strip_suffix(".gguf")?;
+    let parts: Vec<&str> = stem.split('-').collect();
+    if parts.len() < 4 {
+        return None;
+    }
+    let n = parts.len();
+    let (index, of, total) = (parts[n - 3], parts[n - 2], parts[n - 1]);
+    if of != "of" {
+        return None;
+    }
+    let index: u64 = index.parse().ok()?;
+    let total: u64 = total.parse().ok()?;
+    if total == 0 || index == 0 || index > total {
+        return None;
+    }
+    Some((parts[..n - 3].join("-"), index, total))
+}
+
+/// Tag a source with its split-group identity when the name matches the
+/// convention (a discovery hint; content checks follow in the group pass).
+fn annotate_shard_group(report: &mut SourceReport, name: &str) {
+    if let Some((base, index, total)) = parse_shard_name(name) {
+        report.notes.push(format!(
+            "split shard {index} of {total} in group '{base}' (naming convention; membership is verified by content checks)"
+        ));
+    }
+}
+
+/// Verify split-GGUF groups: every declared shard present, and no tensor
+/// name duplicated across shards of one group.
+fn check_shard_groups(sources: &mut [SourceReport]) {
+    use std::collections::BTreeMap;
+    // (base, total) -> {index -> source position}
+    let mut groups: BTreeMap<(String, u64), BTreeMap<u64, usize>> = BTreeMap::new();
+    for (position, report) in sources.iter().enumerate() {
+        let file_name = report
+            .path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&report.path)
+            .to_string();
+        if let Some((base, index, total)) = parse_shard_name(&file_name) {
+            groups
+                .entry((base, total))
+                .or_default()
+                .insert(index, position);
+        }
+    }
+    for ((base, total), members) in groups {
+        let mut findings: Vec<(String, String)> = Vec::new();
+        // Completeness.
+        let present: Vec<u64> = members.keys().copied().collect();
+        if present.len() != total as usize || (1..=total).any(|i| !members.contains_key(&i)) {
+            let missing: Vec<String> = (1..=total)
+                .filter(|i| !members.contains_key(i))
+                .map(|i| i.to_string())
+                .collect();
+            findings.push((
+                "GGUF_SHARD_GROUP_INCOMPLETE".to_string(),
+                format!(
+                    "group '{base}' declares {total} shards; missing indices {}",
+                    missing.join(",")
+                ),
+            ));
+        }
+        // Cross-shard tensor-name uniqueness (checked over parsed
+        // inventories only — unreadable shards keep their own findings).
+        let mut seen: BTreeMap<&str, u64> = BTreeMap::new();
+        let mut duplicates: Vec<String> = Vec::new();
+        for (index, position) in &members {
+            let Some(inventory) = sources[*position].inventory.as_ref() else {
+                continue;
+            };
+            for tensor in &inventory.tensors {
+                let name = tensor.original_name.as_str();
+                if let Some(first) = seen.insert(name, *index) {
+                    duplicates.push(format!("{name} (shards {first} and {index})"));
+                }
+            }
+        }
+        if !duplicates.is_empty() {
+            findings.push((
+                "GGUF_SHARD_DUPLICATE_TENSOR".to_string(),
+                format!(
+                    "group '{base}' repeats tensor names across shards: {}",
+                    duplicates.join(", ")
+                ),
+            ));
+        }
+        for (_, position) in members {
+            let report = &mut sources[position];
+            for (code, message) in &findings {
+                report.notes.push(format!("[{code}] {message}"));
+            }
+        }
+    }
+}
+
 fn classify_asset(name: &str) -> &'static str {
     let lower = name.to_ascii_lowercase();
     if lower.ends_with(".safetensors.index.json") {
@@ -494,6 +596,69 @@ fn walk_directory(
     Ok(())
 }
 
+/// Default spool cap for stdin discovery (bytes). Streams larger than this
+/// are rejected honestly rather than filling the disk.
+pub const STDIN_SPOOL_CAP: u64 = 1024 * 1024 * 1024;
+
+/// Discover from stdin: spool the stream into a private bounded temporary
+/// file, hash it (the spool becomes a content-verified source identity for
+/// the captured bytes), discover on the spool, annotate that the source is a
+/// retained spool, and delete the spool afterwards.
+pub fn discover_stdin(
+    _options: &DiscoverOptions,
+    budget: &Budget,
+) -> Result<DiscoverReport, NnError> {
+    use sha2::Digest;
+    use std::io::{Read, Write};
+    budget.checkpoint()?;
+    let mut spool = tempfile::NamedTempFile::new().map_err(NnError::Io)?;
+    let mut hasher = sha2::Sha256::new();
+    let mut written: u64 = 0;
+    let mut stdin = std::io::stdin().lock();
+    let mut chunk = vec![0u8; 1024 * 1024];
+    loop {
+        let take = stdin.read(&mut chunk).map_err(NnError::Io)?;
+        if take == 0 {
+            break;
+        }
+        written += take as u64;
+        if written > STDIN_SPOOL_CAP {
+            return Err(NnError::BudgetExceeded {
+                resource: "stdin_spool",
+                limit: STDIN_SPOOL_CAP,
+                requested: written,
+            });
+        }
+        budget.consume_source_read(take as u64)?;
+        spool.write_all(&chunk[..take]).map_err(NnError::Io)?;
+        hasher.update(&chunk[..take]);
+        budget.checkpoint()?;
+    }
+    spool.flush().map_err(NnError::Io)?;
+    let digest = hex::encode(hasher.finalize());
+
+    // Discover on the spooled copy with a content-verified revision.
+    let spool_options = DiscoverOptions {
+        verify_content: true,
+    };
+    let mut report = discover(spool.path(), &spool_options, budget)?;
+    for source in &mut report.sources {
+        if source.revision.is_none() {
+            source.revision = Some(super::source::SourceRevision::content_verified(
+                spool.path().to_path_buf(),
+                written,
+                digest.clone(),
+            ));
+        }
+        source.notes.push(format!(
+            "source is a captured stdin stream spooled to a private temporary file ({} bytes, sha256 {}..); reference slices from this report are ephemeral unless the bytes are re-provided",
+            written,
+            &digest[..12.min(digest.len())]
+        ));
+    }
+    Ok(report)
+}
+
 /// Discover one file or a package directory.
 pub fn discover(
     root: &Path,
@@ -537,7 +702,9 @@ pub fn discover(
             .unwrap_or_default();
         let lower = name.to_ascii_lowercase();
         if lower.ends_with(".safetensors") || lower.ends_with(".gguf") {
-            sources.push(inventory_file(path, options, budget));
+            let mut report = inventory_file(path, options, budget);
+            annotate_shard_group(&mut report, &name);
+            sources.push(report);
             budget.checkpoint()?;
         } else {
             assets.push(AssetReport {
@@ -546,6 +713,12 @@ pub fn discover(
             });
         }
     }
+
+    // Split-GGUF completeness: group shards by the `name-NNNNN-of-MMMMM.gguf`
+    // convention, then verify each group has all declared members and no
+    // duplicate tensor names across shards. Naming is a hint; the checks are
+    // performed on what the shards actually contain.
+    check_shard_groups(&mut sources);
 
     Ok(DiscoverReport {
         root_kind: "directory",

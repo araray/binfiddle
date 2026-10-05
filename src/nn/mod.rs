@@ -25,6 +25,7 @@ pub mod partition;
 pub mod queries;
 pub mod recipes;
 pub mod report;
+pub mod research;
 pub mod selection;
 pub mod selector;
 pub mod show;

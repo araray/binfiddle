@@ -177,11 +177,34 @@ fn discover_missing_input_is_usage_error() {
 }
 
 #[test]
-fn discover_stdin_is_rejected() {
+fn discover_stdin_spools_the_stream() {
+    // Stdin discovery is now supported via a bounded private spool; a model
+    // piped in parses and reports the spool provenance note. (The deep
+    // assertions live in nn_backlog_integration.)
     let dir = tempfile::tempdir().unwrap();
-    let (code, _, err) = run_in(dir.path(), &["-i", "-", "nn", "discover"]);
-    assert_eq!(code, 2);
-    assert!(err.contains("stdin"), "stderr: {err}");
+    write_safetensors(dir.path(), "m.safetensors", &[("w", "U8", &[1], &[7])]);
+    let model = std::fs::read(dir.path().join("m.safetensors")).unwrap();
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = binfiddle()
+        .args(["-i", "-", "nn", "discover"])
+        .current_dir(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(&model)
+        .unwrap();
+    let output = child.wait_with_output().expect("wait");
+    assert_eq!(output.status.code(), Some(0));
+    let out = String::from_utf8_lossy(&output.stdout);
+    assert!(out.contains("parsed"), "out: {out}");
+    assert!(out.contains("captured stdin stream"), "out: {out}");
 }
 
 #[test]

@@ -94,6 +94,48 @@ impl SelectionRequest {
             }
         }
     }
+
+    /// Re-evaluate this request against a different catalog. Component
+    /// expressions need the pack that recognized the new catalog; other
+    /// request kinds rebind directly. Returns the new selection plus the
+    /// additions/removals against the old selection's resolved targets.
+    pub fn rebind(
+        &self,
+        old: &Selection,
+        catalog: &Catalog,
+        pack: Option<(&crate::nn::packs::Pack, &crate::nn::packs::Recognition)>,
+        empty_policy: EmptyPolicy,
+    ) -> Result<(Selection, Vec<String>, Vec<String>), NnError> {
+        if catalog.id()? == old.catalog_id {
+            return Err(NnError::InvalidRequest {
+                message: "rebind targets the catalog the selection is already bound to; loading it needs no rebind".to_string(),
+            });
+        }
+        let fresh = match self {
+            SelectionRequest::ComponentExpression { expression } => {
+                let Some((pack, recognition)) = pack else {
+                    return Err(NnError::InvalidRequest {
+                        message: "this selection was built from a component expression; rebinding needs --pack and a fresh recognition of the new catalog".to_string(),
+                    });
+                };
+                Selection::resolve_components(catalog, pack, recognition, expression, empty_policy)?
+            }
+            other => Selection::resolve(catalog, other.clone(), empty_policy)?,
+        };
+        let old_ids: std::collections::BTreeSet<&str> =
+            old.target_ids.iter().map(String::as_str).collect();
+        let new_ids: std::collections::BTreeSet<&str> =
+            fresh.target_ids.iter().map(String::as_str).collect();
+        let additions = new_ids
+            .difference(&old_ids)
+            .map(|id| id.to_string())
+            .collect();
+        let removals = old_ids
+            .difference(&new_ids)
+            .map(|id| id.to_string())
+            .collect();
+        Ok((fresh, additions, removals))
+    }
 }
 
 /// A resolved, saved-able selection.

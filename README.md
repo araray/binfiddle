@@ -673,6 +673,25 @@ binfiddle nn tokenizer inspect --package model-dir/
 binfiddle nn tokenizer diff --left v1/tokenizer.json --right v2/tokenizer.json
 ```
 
+`nn select --rebind` re-evaluates a saved selection's request against a different catalog and reports which resolved tensor identities were added or removed — the old selection stays untouched. Directory discovery understands GGUF split-shard naming (`name-00001-of-00002.gguf`), verifies each group's declared completeness and cross-shard tensor-name uniqueness, and honors `-i -` by spooling stdin into a bounded private temporary file with its own content-verified identity. Typed scalar edits apply to ONNX `raw_data` spans with full container revalidation. `nn research align` (experimental) decides exactly whether one same-shape dense weight is a row permutation of another via per-row digest multisets, recovering the mapping and counting duplicate-row ambiguity — computational equivalence is never claimed.
+
+```bash
+# Rebind a saved selection to a new model revision
+binfiddle nn select --catalog v2.nn.json --rebind head.sel.json \
+    --out-selection head-v2.sel.json
+
+# Discover a model streamed over stdin
+cat model.gguf | binfiddle -i - nn discover
+
+# Edit an ONNX initializer's value in place of a fresh output
+binfiddle nn edit set --catalog m.nn.json --tensor w --index 0 --value 1.5 \
+    --save-plan w.plan.json
+binfiddle nn edit apply --catalog m.nn.json --plan w.plan.json --out-model m2.onnx
+
+# Test two models for row-permutation relationships (experimental)
+binfiddle nn research align --left v1.nn.json --right v2.nn.json
+```
+
 #### Process memory — Linux experimental
 
 Read memory from the current process or any same-user process via `/proc/<pid>/mem`, list mapped memory regions, and write back to the current process with an explicit opt-in.

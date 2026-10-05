@@ -79,7 +79,7 @@ pub fn capabilities() -> Vec<Capability> {
         ),
         Capability::implemented(
             "nn.discover",
-            "descriptor-only inventory of SafeTensors, GGUF, and ONNX files and directories; optional --out-catalog persistence",
+            "descriptor-only inventory of SafeTensors, GGUF, and ONNX files and directories; GGUF split-shard group completeness and cross-shard uniqueness checks; stdin discovery via a bounded private spool; optional --out-catalog persistence",
         ),
         Capability::implemented(
             "nn.ls",
@@ -107,7 +107,7 @@ pub fn capabilities() -> Vec<Capability> {
         ),
         Capability::implemented(
             "nn.edit",
-            "transactional fixed-size edits: preimage-recording plans, typed scalar writes through codecs (exact/nearest policies), masked sub-byte writes for Q4_0 nibbles, verification ladder (catalog + source digest + preimage), fresh-output application with preservation proof and container reparse, undo bundles bound to the exact edited revision, and an MLP channel-prune structural recipe (gate/up rows + down columns with shape updates)",
+            "transactional fixed-size edits: preimage-recording plans, typed scalar writes through codecs (exact/nearest policies), masked sub-byte writes for Q4_0 nibbles, verification ladder (catalog + source digest + preimage), fresh-output application with preservation proof and container reparse (SafeTensors, GGUF, and ONNX raw_data spans), undo bundles bound to the exact edited revision, and an MLP channel-prune structural recipe (gate/up rows + down columns with shape updates)",
         ),
         Capability::implemented(
             "nn.analyze",
@@ -135,6 +135,10 @@ pub fn capabilities() -> Vec<Capability> {
         Capability::implemented(
             "nn.tokenizer",
             "tokenizer asset classification and tokenizer.json structure inspection (model type, vocab size, merges, added tokens) plus vocabulary-level two-file diffs; tokenization behavior and template rendering are not evaluated",
+        ),
+        Capability::implemented(
+            "nn.research",
+            "experimental row-permutation alignment: exact per-row digest multisets decide whether one same-shape dense weight is a row permutation of another, recovering the mapping with duplicate-row ambiguity counts; computational equivalence is explicitly not claimed; qualified on a deterministic synthetic corpus (detection 1.0, false-match 0.0)",
         ),
         Capability::implemented(
             "nn.partition",
