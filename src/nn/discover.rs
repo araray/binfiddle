@@ -482,11 +482,12 @@ fn check_shard_groups(sources: &mut [SourceReport]) {
     // (base, total) -> {index -> source position}
     let mut groups: BTreeMap<(String, u64), BTreeMap<u64, usize>> = BTreeMap::new();
     for (position, report) in sources.iter().enumerate() {
-        let file_name = report
-            .path
-            .rsplit('/')
-            .next()
-            .unwrap_or(&report.path)
+        // Path::file_name handles both separators; a manual '/' split would
+        // keep a ".\" prefix in shard-group bases on Windows.
+        let file_name = std::path::Path::new(&report.path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(report.path.as_str())
             .to_string();
         if let Some((base, index, total)) = parse_shard_name(&file_name) {
             groups
