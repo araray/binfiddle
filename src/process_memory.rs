@@ -6,8 +6,11 @@
 //! same-user process inspection.
 
 use crate::{BinfiddleError, Result};
+#[cfg(target_os = "linux")]
 use std::fs::File;
+#[cfg(target_os = "linux")]
 use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
 
 /// Describes a single memory region parsed from `/proc/<pid>/maps`.
@@ -51,7 +54,18 @@ pub enum FillMode {
     Skip,
 }
 
+/// Error returned by the process-memory entry points on platforms without
+/// `/proc` and ptrace support (any non-Linux target).
+#[cfg(not(target_os = "linux"))]
+fn unsupported_platform(what: &str) -> BinfiddleError {
+    BinfiddleError::ProcessMemoryError(format!(
+        "{} requires Linux /proc and ptrace support; this platform does not provide them",
+        what
+    ))
+}
+
 /// Returns the path to a process's `/proc/<pid>/maps` file.
+#[cfg(target_os = "linux")]
 fn proc_maps_path(pid: u32) -> PathBuf {
     if pid == 0 || pid == std::process::id() {
         PathBuf::from("/proc/self/maps")
@@ -82,7 +96,24 @@ pub fn read_process_memory_sparse(
     if size == 0 {
         return Ok(Vec::new());
     }
+    #[cfg(target_os = "linux")]
+    {
+        read_process_memory_sparse_linux(pid, address, size, fill_mode)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (pid, address, fill_mode);
+        Err(unsupported_platform("reading process memory"))
+    }
+}
 
+#[cfg(target_os = "linux")]
+fn read_process_memory_sparse_linux(
+    pid: u32,
+    address: u64,
+    size: u64,
+    fill_mode: FillMode,
+) -> Result<Vec<u8>> {
     let end = address + size;
     let regions = parse_maps(pid)?;
     let mut result = Vec::with_capacity(size as usize);
@@ -125,6 +156,7 @@ pub fn read_process_memory_sparse(
     Ok(result)
 }
 
+#[cfg(target_os = "linux")]
 fn handle_inaccessible_gap(
     address: u64,
     gap: u64,
@@ -147,6 +179,7 @@ fn handle_inaccessible_gap(
     }
 }
 
+#[cfg(target_os = "linux")]
 fn read_process_memory_chunk(pid: u32, address: u64, size: u64) -> Result<Vec<u8>> {
     if pid == 0 || pid == std::process::id() {
         read_self_memory(address, size)
@@ -155,6 +188,7 @@ fn read_process_memory_chunk(pid: u32, address: u64, size: u64) -> Result<Vec<u8
     }
 }
 
+#[cfg(target_os = "linux")]
 fn read_self_memory(address: u64, size: u64) -> Result<Vec<u8>> {
     let size = size as usize;
 
@@ -197,6 +231,7 @@ fn read_self_memory(address: u64, size: u64) -> Result<Vec<u8>> {
     Ok(buffer)
 }
 
+#[cfg(target_os = "linux")]
 fn read_cross_process_memory(pid: u32, address: u64, size: u64) -> Result<Vec<u8>> {
     let size = size as usize;
     let mut buffer = vec![0u8; size];
@@ -250,6 +285,24 @@ pub fn write_process_memory(
     data: &[u8],
     force_writable: bool,
 ) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        write_process_memory_linux(pid, address, data, force_writable)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (pid, address, data, force_writable);
+        Err(unsupported_platform("writing process memory"))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn write_process_memory_linux(
+    pid: u32,
+    address: u64,
+    data: &[u8],
+    force_writable: bool,
+) -> Result<()> {
     if pid == 0 || pid == std::process::id() {
         if force_writable {
             force_write_self_memory(address, data)
@@ -261,6 +314,7 @@ pub fn write_process_memory(
     }
 }
 
+#[cfg(target_os = "linux")]
 fn write_self_memory(address: u64, data: &[u8]) -> Result<()> {
     let mut file = File::options()
         .read(true)
@@ -290,6 +344,7 @@ fn write_self_memory(address: u64, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn write_self_memory_checked(address: u64, data: &[u8]) -> Result<()> {
     let regions = parse_maps(0)?;
     let region = find_region(&regions, address).ok_or_else(|| {
@@ -310,6 +365,7 @@ fn write_self_memory_checked(address: u64, data: &[u8]) -> Result<()> {
     write_self_memory(address, data)
 }
 
+#[cfg(target_os = "linux")]
 fn force_write_self_memory(address: u64, data: &[u8]) -> Result<()> {
     let regions = parse_maps(0)?;
     let region = find_region(&regions, address).ok_or_else(|| {
@@ -339,6 +395,7 @@ fn force_write_self_memory(address: u64, data: &[u8]) -> Result<()> {
     result
 }
 
+#[cfg(target_os = "linux")]
 fn write_cross_process_memory(
     pid: u32,
     address: u64,
@@ -371,6 +428,7 @@ fn write_cross_process_memory(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn process_vm_writev_data(pid: u32, address: u64, data: &[u8]) -> Result<()> {
     let local_iov = libc::iovec {
         iov_base: data.as_ptr() as *mut libc::c_void,
@@ -482,10 +540,10 @@ fn force_write_cross_process_memory(
     result
 }
 
-#[cfg(not(all(
+#[cfg(all(
     target_os = "linux",
-    any(target_arch = "x86_64", target_arch = "aarch64")
-)))]
+    not(any(target_arch = "x86_64", target_arch = "aarch64"))
+))]
 fn force_write_cross_process_memory(
     _pid: u32,
     _address: u64,
@@ -888,11 +946,13 @@ fn ptrace_inject_mprotect_aarch64(
     inject_result
 }
 
+#[cfg(target_os = "linux")]
 fn page_size() -> u64 {
     // Safe: sysconf is always successful for _SC_PAGE_SIZE on Linux.
     unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) as u64 }
 }
 
+#[cfg(target_os = "linux")]
 fn prot_from_perms(perms: &str) -> libc::c_int {
     let mut prot = libc::PROT_NONE;
     if perms.contains('r') {
@@ -908,6 +968,7 @@ fn prot_from_perms(perms: &str) -> libc::c_int {
 }
 
 /// Verifies that `[address, address + len)` fits inside `region`.
+#[cfg(target_os = "linux")]
 fn check_region_bounds(region: &MemoryRegion, address: u64, len: usize) -> Result<()> {
     let end = address.checked_add(len as u64).ok_or_else(|| {
         BinfiddleError::ProcessMemoryError(format!(
@@ -991,6 +1052,19 @@ impl Drop for MprotectGuard {
 
 /// Parses `/proc/<pid>/maps` into a list of memory regions.
 pub fn parse_maps(pid: u32) -> Result<Vec<MemoryRegion>> {
+    #[cfg(target_os = "linux")]
+    {
+        parse_maps_linux(pid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        Err(unsupported_platform("parsing process maps"))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn parse_maps_linux(pid: u32) -> Result<Vec<MemoryRegion>> {
     let content = std::fs::read_to_string(proc_maps_path(pid)).map_err(|e| {
         BinfiddleError::ProcessMemoryError(format!(
             "Failed to read /proc/{}/maps: {}",
@@ -1090,6 +1164,7 @@ pub fn format_regions(regions: &[MemoryRegion]) -> String {
     output
 }
 
+#[cfg(target_os = "linux")]
 fn parse_range(range: &str) -> Result<(u64, u64)> {
     let (start, end) = range
         .split_once('-')
@@ -1103,6 +1178,7 @@ fn parse_range(range: &str) -> Result<(u64, u64)> {
     Ok((start, end))
 }
 
+#[cfg(target_os = "linux")]
 fn pid_label(pid: u32) -> String {
     if pid == 0 || pid == std::process::id() {
         "self".to_string()
@@ -1111,7 +1187,7 @@ fn pid_label(pid: u32) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 

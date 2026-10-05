@@ -1,4 +1,7 @@
 //! Integration tests for process memory access (`--process-self` and `--pid`).
+//! Process-memory operations are Linux-only (/proc + ptrace); the whole suite
+//! compiles out elsewhere.
+#![cfg(target_os = "linux")]
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};

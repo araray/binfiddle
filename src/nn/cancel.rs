@@ -115,9 +115,14 @@ fn terminal_signals() -> Vec<i32> {
     vec![SIGINT, SIGTERM]
 }
 
+/// The CRT's SIGBREAK (Ctrl+Break proxy on Windows). The `libc` crate does
+/// not export it for Windows targets; it is a stable CRT constant (21).
+#[cfg(windows)]
+pub(crate) const SIGBREAK: i32 = 21;
+
 #[cfg(windows)]
 fn terminal_signals() -> Vec<i32> {
-    use libc::{SIGBREAK, SIGINT};
+    use libc::SIGINT;
     vec![SIGINT, SIGBREAK]
 }
 
@@ -150,8 +155,9 @@ fn restore_handler(signal: i32, previous: libc::sigaction) -> Result<(), NnError
 
 #[cfg(windows)]
 fn set_handler(signal: i32) -> Result<usize, NnError> {
-    let previous = unsafe { libc::signal(signal, on_terminal_signal as usize) };
-    if previous == libc::SIG_ERR {
+    let handler = on_terminal_signal as *const () as usize;
+    let previous = unsafe { libc::signal(signal, handler) };
+    if previous == libc::SIG_ERR as usize {
         return Err(signal_error(signal, "signal registration failed"));
     }
     Ok(previous)
@@ -160,7 +166,7 @@ fn set_handler(signal: i32) -> Result<usize, NnError> {
 #[cfg(windows)]
 fn restore_handler(signal: i32, previous: usize) -> Result<(), NnError> {
     let result = unsafe { libc::signal(signal, previous) };
-    if result == libc::SIG_ERR {
+    if result == libc::SIG_ERR as usize {
         return Err(signal_error(signal, "signal restore failed"));
     }
     Ok(())

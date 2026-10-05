@@ -18,10 +18,22 @@ fn terminal_signals_set_guard_flag_and_cancel_token() {
         assert_eq!(token.check().unwrap_err().code().as_str(), "CANCELLED");
     }
 
-    // SIGTERM: flag. install() resets the flag first.
+    // Second terminal signal: flag. install() resets the flag first.
+    // Unix guards SIGINT+SIGTERM; Windows guards SIGINT+SIGBREAK (the CRT
+    // proxy for Ctrl+Break), and raise(SIGTERM) would terminate the process
+    // under the default disposition on Windows.
+    #[cfg(unix)]
     {
         let guard = SignalGuard::install().expect("install signal guard");
         unsafe { libc::raise(libc::SIGTERM) };
+        assert!(guard.signalled());
+    }
+    #[cfg(windows)]
+    {
+        let guard = SignalGuard::install().expect("install signal guard");
+        // The libc crate does not export SIGBREAK on Windows; the CRT
+        // constant is 21 (Ctrl+Break proxy).
+        unsafe { libc::raise(21) };
         assert!(guard.signalled());
     }
 

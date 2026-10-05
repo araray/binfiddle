@@ -34,6 +34,42 @@ fn write_model(dir: &Path) {
     fs::write(dir.join("m.safetensors"), data).unwrap();
 }
 
+/// Create a guard path whose interior cannot receive new files, so any
+/// destination under it fails at the OS on creation.
+///
+/// Unix: a 0o555 directory (permission failure). Windows: the readonly
+/// attribute on directories does not block file creation, so the guard is a
+/// regular file — a child path then fails because a path component is not a
+/// directory.
+fn make_unwritable_dir(parent: &Path, name: &str) -> std::path::PathBuf {
+    let guard = parent.join(name);
+    #[cfg(unix)]
+    {
+        fs::create_dir_all(&guard).unwrap();
+        let mut perms = fs::metadata(&guard).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o555);
+        fs::set_permissions(&guard, perms).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        fs::write(&guard, b"not a directory").unwrap();
+    }
+    guard
+}
+
+/// Root bypasses Unix mode bits, so the permission guard is not exercised
+/// when privileged. The Windows guard fails regardless of privileges.
+#[cfg(unix)]
+fn running_as_root() -> bool {
+    let euid = unsafe { libc::geteuid() };
+    euid == 0
+}
+
+#[cfg(windows)]
+fn running_as_root() -> bool {
+    false
+}
+
 #[test]
 fn edit_apply_to_unwritable_destination_fails_cleanly() {
     let dir = tempfile::tempdir().unwrap();
@@ -69,12 +105,8 @@ fn edit_apply_to_unwritable_destination_fails_cleanly() {
         ],
     );
 
-    // A read-only subdirectory: file creation inside it fails at the OS.
-    let ro = dir.path().join("ro");
-    fs::create_dir_all(&ro).unwrap();
-    let mut perms = fs::metadata(&ro).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o555);
-    fs::set_permissions(&ro, perms).unwrap();
+    // A destination root that cannot receive files: creation fails at the OS.
+    let ro = make_unwritable_dir(dir.path(), "ro");
 
     let (code, out, err) = run_in(
         dir.path(),
@@ -90,14 +122,14 @@ fn edit_apply_to_unwritable_destination_fails_cleanly() {
             "ro/out.safetensors",
         ],
     );
-    // Root can bypass mode bits; accept either the clean IO failure (6) or,
-    // when privileged, skip strictness (documented below).
-    if unsafe { libc::geteuid() } != 0 {
+    // Root can bypass Unix mode bits; otherwise the failure must be clean.
+    if !running_as_root() {
         assert_eq!(code, 6, "out: {out} stderr: {err}");
         assert!(
             err.contains("I/O error")
                 || err.contains("Permission denied")
-                || err.contains("denied"),
+                || err.contains("denied")
+                || err.contains("invalid"),
             "stderr: {err}"
         );
         // No partial artifact left behind under the final name.
@@ -181,11 +213,7 @@ bindings:
         ],
     );
 
-    let ro = dir.path().join("ro");
-    fs::create_dir_all(&ro).unwrap();
-    let mut perms = fs::metadata(&ro).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o555);
-    fs::set_permissions(&ro, perms).unwrap();
+    let ro = make_unwritable_dir(dir.path(), "ro");
 
     let (code, _, err) = run_in(
         dir.path(),
@@ -203,7 +231,7 @@ bindings:
             "ro/pruned.safetensors",
         ],
     );
-    if unsafe { libc::geteuid() } != 0 {
+    if !running_as_root() {
         assert_eq!(code, 6, "stderr: {err}");
         assert!(!ro.join("pruned.safetensors").exists());
     }
