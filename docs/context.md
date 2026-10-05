@@ -115,7 +115,16 @@ flowchart TD
 
 Binfiddle’s consistent, scriptable outputs enable it to be easily incorporated into automated ML pipelines, where it can serve as a preprocessing step to extract binary features for further analysis. This is especially valuable in fields like malware analysis, digital forensics, and firmware security.
 
+### 🧠 Neural-Network Model Artifacts
+
+- **Traditional Tools:** Python notebooks with `safetensors`/`gguf` libraries (require a full ML environment and load payloads into memory), GUI model viewers such as Netron (interactive, not scriptable), ad-hoc hex editing for model patching.
+- **Binfiddle’s Role:** The `nn` workbench brings the same pipeline-friendly, bounded-memory discipline binfiddle applies to raw binaries to model artifact files: descriptor-only discovery, bit-exact addressing (down to Q4_0 nibbles and shared block scales), id-verified extraction plans, transactional editing with verified undo, layered diffs that distinguish repacks from content changes, and honest fingerprints/evidence graphs — all offline, with deterministic JSON envelopes and no model execution.
+- **Example:** Auditing a model package without a Python runtime: `binfiddle -i model-dir/ nn discover --verify-content` inventories every file; `nn diff` compares two checkpoints layer by layer; `nn carve` recovers embedded model containers from a firmware dump — each step composable in shell scripts like every other binfiddle command.
+- **Trade-off:** binfiddle never executes or evaluates models — runtime replay, inference, and behavior verification remain the domain of real ML runtimes. The workbench reports structure, content, and relationships; it deliberately does not predict behavior.
+
 ---
+
+>  Binfiddle doesn’t aim to replace established command-line utilities like xxd, hexedit, or radare2. Instead, it enhances the toolkit available to reverse engineers, pentesters, malware analysts, CTF participants, firmware analysts, digital forensic investigators, memory dump analysts, microcontroller developers, and even AI/ML practitioners. By providing a modular, scriptable interface for binary manipulation and differential analysis, binfiddle fills an essential niche in the modern toolchain. Its ability to integrate seamlessly with other tools—and to serve as a bridge between raw binary data and advanced analysis techniques—underscores its value in a wide array of technical fields.
 
 >  Binfiddle doesn’t aim to replace established command-line utilities like xxd, hexedit, or radare2. Instead, it enhances the toolkit available to reverse engineers, pentesters, malware analysts, CTF participants, firmware analysts, digital forensic investigators, memory dump analysts, microcontroller developers, and even AI/ML practitioners. By providing a modular, scriptable interface for binary manipulation and differential analysis, binfiddle fills an essential niche in the modern toolchain. Its ability to integrate seamlessly with other tools—and to serve as a bridge between raw binary data and advanced analysis techniques—underscores its value in a wide array of technical fields.
 
