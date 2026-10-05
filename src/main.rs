@@ -2217,7 +2217,12 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                     message: "nn validate requires --catalog <file> or --input <file-or-dir>"
                         .to_string(),
                 })?;
-            let report = validate::ValidationReport::validate(root, &budget)?;
+            let report = match catalog_path {
+                Some(catalog_file) => {
+                    validate::ValidationReport::validate_catalog(catalog_file, &budget)?
+                }
+                None => validate::ValidationReport::validate(root, &budget)?,
+            };
             let invalid = !report.all_valid;
             guard.propagate(&cancel);
             let stdout = io::stdout();

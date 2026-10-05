@@ -13,7 +13,7 @@
 use super::budget::Budget;
 use super::error::NnError;
 use super::format::{self, FormatInventory};
-use super::json::Json;
+use super::json::{Json, ParseLimits};
 use super::report::{CompletionStatus, Diagnostic, DiagnosticLevel, ResultEnvelope};
 use super::source::{BoundedFile, SourceRevision};
 use std::collections::BTreeMap;
@@ -80,6 +80,10 @@ pub struct DiscoverReport {
     pub sources: Vec<SourceReport>,
     pub assets: Vec<AssetReport>,
     pub skipped_symlinks: Vec<String>,
+    /// Shards referenced by a `model.safetensors.index.json` in the scanned
+    /// root but absent from it. A partial sharded package is incomplete
+    /// coverage, exactly like an unreadable source.
+    pub missing_shards: Vec<String>,
 }
 
 impl DiscoverReport {
@@ -101,6 +105,7 @@ impl DiscoverReport {
                 .iter()
                 .all(|s| s.outcome == SourceOutcome::Parsed)
             && self.skipped_symlinks.is_empty()
+            && self.missing_shards.is_empty()
     }
 
     /// Build the result envelope (semantic payload in canonical-ready form).
@@ -134,6 +139,10 @@ impl DiscoverReport {
                         "symlinks_skipped",
                         Json::Str(self.skipped_symlinks.len().to_string()),
                     ),
+                    (
+                        "index_shards_missing",
+                        Json::Str(self.missing_shards.len().to_string()),
+                    ),
                 ])?,
             ),
         ])?;
@@ -146,16 +155,20 @@ impl DiscoverReport {
             ));
         }
         if !self.complete() {
+            let mut notes = vec![format!(
+                "{} of {} sources could not be fully inventoried",
+                problematic.min(considered),
+                considered
+            )];
+            if !self.missing_shards.is_empty() {
+                notes.push(format!(
+                    "model.safetensors.index.json declares {} shards absent from this directory",
+                    self.missing_shards.len()
+                ));
+            }
             envelope = envelope
                 .with_status(CompletionStatus::Partial)
-                .with_coverage(
-                    false,
-                    vec![format!(
-                        "{} of {} sources could not be fully inventoried",
-                        problematic.min(considered),
-                        considered
-                    )],
-                );
+                .with_coverage(false, notes);
         }
         Ok(envelope)
     }
@@ -218,6 +231,12 @@ impl DiscoverReport {
             problematic,
             self.skipped_symlinks.len()
         ));
+        if !self.missing_shards.is_empty() {
+            out.push_str(&format!(
+                "sharded-package note: model.safetensors.index.json declares shards absent here ({} of them); coverage is incomplete\n",
+                self.missing_shards.len()
+            ));
+        }
         out
     }
 }
@@ -546,6 +565,63 @@ fn check_shard_groups(sources: &mut [SourceReport]) {
     }
 }
 
+/// Sharded-SafeTensors index awareness. A `model.safetensors.index.json`
+/// beside the shards declares every shard of the package; this mirrors the
+/// split-GGUF discipline so partial downloads are visible instead of
+/// silently reduced. Returns the absent shard names (sorted).
+fn check_safetensors_index(root: &Path, sources: &mut [SourceReport]) -> Vec<String> {
+    let index_path = root.join("model.safetensors.index.json");
+    let Ok(text) = std::fs::read_to_string(&index_path) else {
+        return Vec::new();
+    };
+    // The index is a foreign JSON asset; parse it bounded. A malformed index
+    // stays merely an asset (its own classification) rather than failing
+    // discovery of the shards that are present.
+    let Ok(parsed) = Json::parse_foreign(&text, ParseLimits::for_input_len(text.len())) else {
+        return Vec::new();
+    };
+    let Some(Json::Object(members)) = parsed.get("weight_map") else {
+        return Vec::new();
+    };
+    let referenced: std::collections::BTreeSet<String> = members
+        .iter()
+        .filter_map(|(_, shard)| shard.as_str().map(str::to_string))
+        .collect();
+    if referenced.is_empty() {
+        return Vec::new();
+    }
+    let file_name = |path: &str| {
+        std::path::Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let present: std::collections::BTreeSet<String> =
+        sources.iter().map(|s| file_name(&s.path)).collect();
+    let missing: Vec<String> = referenced.difference(&present).cloned().collect();
+    if !missing.is_empty() {
+        let mut sample: Vec<String> = missing.iter().take(3).cloned().collect();
+        if missing.len() > 3 {
+            sample.push(format!("and {} more", missing.len() - 3));
+        }
+        let finding = (
+            "SAFETENSORS_SHARD_INDEX_INCOMPLETE".to_string(),
+            format!(
+                "model.safetensors.index.json declares {} shards; {} absent from this directory ({})",
+                referenced.len(),
+                missing.len(),
+                sample.join(", ")
+            ),
+        );
+        for report in sources.iter_mut() {
+            if referenced.contains(&file_name(&report.path)) {
+                report.notes.push(format!("[{}] {}", finding.0, finding.1));
+            }
+        }
+    }
+    missing
+}
+
 fn classify_asset(name: &str) -> &'static str {
     let lower = name.to_ascii_lowercase();
     if lower.ends_with(".safetensors.index.json") {
@@ -678,6 +754,7 @@ pub fn discover(
             sources: vec![report],
             assets: Vec::new(),
             skipped_symlinks: Vec::new(),
+            missing_shards: Vec::new(),
         });
     }
 
@@ -721,11 +798,16 @@ pub fn discover(
     // performed on what the shards actually contain.
     check_shard_groups(&mut sources);
 
+    // Sharded-SafeTensors index: a model.safetensors.index.json declares
+    // the full shard set; absent shards make coverage incomplete.
+    let missing_shards = check_safetensors_index(root, &mut sources);
+
     Ok(DiscoverReport {
         root_kind: "directory",
         sources,
         assets,
         skipped_symlinks: skipped,
+        missing_shards,
     })
 }
 
@@ -785,6 +867,66 @@ mod tests {
         let text = envelope.to_json_string().unwrap();
         assert!(text.contains("\"outcome\":\"unrecognized\""));
         assert!(text.contains("\"complete\":false"));
+    }
+
+    /// A model.safetensors.index.json declares the full shard set; absent
+    /// shards are visible findings and make coverage incomplete (so
+    /// --require-complete rejects partial downloads), exactly like the
+    /// split-GGUF discipline.
+    #[test]
+    fn safetensors_index_makes_missing_shards_visible() {
+        let dir = tempfile::tempdir().unwrap();
+        write_safetensors(dir.path(), "model-00001-of-00002.safetensors");
+        std::fs::write(
+            dir.path().join("model.safetensors.index.json"),
+            r#"{"metadata":{"total_size":"4"},"weight_map":{"a":"model-00001-of-00002.safetensors","b":"model-00002-of-00002.safetensors"}}"#,
+        )
+        .unwrap();
+        let report = discover(dir.path(), &DiscoverOptions::default(), &budget()).unwrap();
+        assert_eq!(
+            report.missing_shards,
+            vec!["model-00002-of-00002.safetensors"]
+        );
+        assert!(
+            !report.complete(),
+            "partial shard set is incomplete coverage"
+        );
+        assert!(report.sources[0]
+            .notes
+            .iter()
+            .any(|n| n.contains("SAFETENSORS_SHARD_INDEX_INCOMPLETE")));
+        let text = report.text();
+        assert!(text.contains("sharded-package note"));
+        let envelope = report.envelope().unwrap().to_json_string().unwrap();
+        assert!(envelope.contains("\"index_shards_missing\":\"1\""));
+
+        // Complete shard set: no findings, coverage complete.
+        write_safetensors(dir.path(), "model-00002-of-00002.safetensors");
+        let report = discover(dir.path(), &DiscoverOptions::default(), &budget()).unwrap();
+        assert!(report.missing_shards.is_empty());
+        assert!(report.complete());
+        assert!(report.sources.iter().all(|s| {
+            !s.notes
+                .iter()
+                .any(|n| n.contains("SAFETENSORS_SHARD_INDEX_INCOMPLETE"))
+        }));
+    }
+
+    /// No index, or an index without a weight map, changes nothing.
+    #[test]
+    fn safetensors_index_absent_or_foreign_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        write_safetensors(dir.path(), "m.safetensors");
+        let report = discover(dir.path(), &DiscoverOptions::default(), &budget()).unwrap();
+        assert!(report.missing_shards.is_empty() && report.complete());
+
+        std::fs::write(
+            dir.path().join("model.safetensors.index.json"),
+            r#"{"not":"a shard index"}"#,
+        )
+        .unwrap();
+        let report = discover(dir.path(), &DiscoverOptions::default(), &budget()).unwrap();
+        assert!(report.missing_shards.is_empty() && report.complete());
     }
 
     #[test]

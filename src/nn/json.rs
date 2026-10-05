@@ -17,7 +17,8 @@
 
 use super::error::NnError;
 
-/// A parsed JSON value. `Number` appears only through `parse_foreign`.
+/// A parsed JSON value. `Number` and `Float` appear only through
+/// `parse_foreign`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Json {
     Null,
@@ -25,6 +26,11 @@ pub enum Json {
     Str(String),
     /// Non-negative integer in canonical decimal form, from foreign JSON.
     Number(String),
+    /// Fractional, exponent-form, or negative number from foreign JSON
+    /// (real artifacts carry them — e.g. a shard index `total_size` of
+    /// `359999963128.0`). Never part of the wire subset: canonicalization
+    /// rejects it exactly like `Number`.
+    Float(f64),
     Array(Vec<Json>),
     /// Object members in first-appearance order; duplicates are rejected by the
     /// parser and by the canonical serializer.
@@ -270,7 +276,7 @@ impl<'a> Parser<'a> {
             Some(b't') => self.parse_literal("true", Json::Bool(true)),
             Some(b'f') => self.parse_literal("false", Json::Bool(false)),
             Some(b'n') => self.parse_literal("null", Json::Null),
-            Some(b'0'..=b'9') if self.allow_numbers => self.parse_foreign_number(),
+            Some(b'-') | Some(b'0'..=b'9') if self.allow_numbers => self.parse_foreign_number(),
             Some(b'-') | Some(b'0'..=b'9') => Err(self.error(
                 "JSON numbers are not part of the NN wire subset; encode integers as decimal strings",
             )),
@@ -279,11 +285,19 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse a JSON integer literal in foreign mode: non-negative, canonical
-    /// digits (JSON forbids leading zeros), no fraction or exponent. Those
-    /// restrictions cover every supported artifact header format.
+    /// Parse a JSON number literal in foreign mode. Plain non-negative
+    /// integers become canonical-decimal `Number`s; fractional, exponent,
+    /// and negative forms become `Float` — real foreign artifacts carry
+    /// them (a shard index `total_size` of `359999963128.0`, tokenizer
+    /// configuration scores), and refusing them made honest documents
+    /// unreadable. The wire subset stays number-free: canonicalization
+    /// rejects both variants.
     fn parse_foreign_number(&mut self) -> Result<Json, NnError> {
         let start = self.pos;
+        let negative = self.peek() == Some(b'-');
+        if negative {
+            self.pos += 1;
+        }
         if self.peek() == Some(b'0') {
             self.pos += 1;
             if let Some(b'0'..=b'9') = self.peek() {
@@ -294,17 +308,44 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
             }
         }
-        match self.peek() {
-            Some(b'.') | Some(b'e') | Some(b'E') => {
-                Err(self
-                    .error("fractional or exponent numbers are unsupported in artifact headers"))
+        let fractional = matches!(self.peek(), Some(b'.') | Some(b'e') | Some(b'E'));
+        if fractional {
+            if self.peek() == Some(b'.') {
+                self.pos += 1;
+                let digits_start = self.pos;
+                while let Some(b'0'..=b'9') = self.peek() {
+                    self.pos += 1;
+                }
+                if self.pos == digits_start {
+                    return Err(self.error("fraction part needs at least one digit"));
+                }
             }
-            _ => Ok(Json::Number(
-                std::str::from_utf8(&self.bytes[start..self.pos])
-                    .map_err(|_| self.error("invalid UTF-8 in number"))?
-                    .to_string(),
-            )),
+            if matches!(self.peek(), Some(b'e') | Some(b'E')) {
+                self.pos += 1;
+                if matches!(self.peek(), Some(b'+') | Some(b'-')) {
+                    self.pos += 1;
+                }
+                let digits_start = self.pos;
+                while let Some(b'0'..=b'9') = self.peek() {
+                    self.pos += 1;
+                }
+                if self.pos == digits_start {
+                    return Err(self.error("exponent needs at least one digit"));
+                }
+            }
         }
+        let text = std::str::from_utf8(&self.bytes[start..self.pos])
+            .map_err(|_| self.error("invalid UTF-8 in number"))?;
+        if fractional || negative {
+            let value: f64 = text
+                .parse()
+                .map_err(|_| self.error("number literal out of range"))?;
+            if !value.is_finite() {
+                return Err(self.error("number literal out of range"));
+            }
+            return Ok(Json::Float(value));
+        }
+        Ok(Json::Number(text.to_string()))
     }
 
     fn parse_literal(&mut self, text: &str, value: Json) -> Result<Json, NnError> {
@@ -488,6 +529,13 @@ fn write_canonical(value: &Json, out: &mut String) -> Result<(), NnError> {
             return Err(NnError::WireSyntax {
                 detail: format!(
                     "foreign number {digits} cannot be canonicalized; convert it to a decimal string first"
+                ),
+            });
+        }
+        Json::Float(value) => {
+            return Err(NnError::WireSyntax {
+                detail: format!(
+                    "foreign number {value} cannot be canonicalized; the wire subset is number-free"
                 ),
             });
         }
@@ -746,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    fn foreign_mode_accepts_non_negative_integers_only() {
+    fn foreign_mode_parses_integer_and_floating_numbers() {
         let value = Json::parse_foreign(
             r#"{"shape":[2,3],"off":[0,48],"name":"t"}"#,
             ParseLimits::default(),
@@ -757,12 +805,31 @@ mod tests {
         assert_eq!(shape.at(1).unwrap().as_number_u64(), Some(3));
         assert_eq!(shape.at(0), Some(&Json::Number("2".to_string())));
 
-        assert!(Json::parse_foreign("-1", ParseLimits::default()).is_err());
-        assert!(Json::parse_foreign("1.5", ParseLimits::default()).is_err());
-        assert!(Json::parse_foreign("1e3", ParseLimits::default()).is_err());
+        // Real foreign artifacts carry fractional, exponent, and negative
+        // numbers (e.g. a shard index total_size of `359999963128.0`);
+        // they parse as Float and never enter the wire subset.
+        assert_eq!(
+            Json::parse_foreign("-1", ParseLimits::default()).unwrap(),
+            Json::Float(-1.0)
+        );
+        assert_eq!(
+            Json::parse_foreign("1.5", ParseLimits::default()).unwrap(),
+            Json::Float(1.5)
+        );
+        assert_eq!(
+            Json::parse_foreign("1e3", ParseLimits::default()).unwrap(),
+            Json::Float(1000.0)
+        );
+        assert_eq!(
+            Json::parse_foreign("359999963128.0", ParseLimits::default()).unwrap(),
+            Json::Float(359999963128.0)
+        );
         assert!(Json::parse_foreign("01", ParseLimits::default()).is_err());
-        // Strict mode still rejects integers.
+        assert!(Json::parse_foreign("1.", ParseLimits::default()).is_err());
+        assert!(Json::parse_foreign("1e", ParseLimits::default()).is_err());
+        // Strict mode still rejects every numeric form.
         assert!(Json::parse_strict("2", ParseLimits::default()).is_err());
+        assert!(Json::parse_strict("1.5", ParseLimits::default()).is_err());
         assert!(Json::parse_strict(r#"{"a":2}"#, ParseLimits::default()).is_err());
     }
 
@@ -773,6 +840,11 @@ mod tests {
         // Converted to a decimal string, it serializes fine.
         let converted = Json::Str(value.as_number_u64().unwrap().to_string());
         assert_eq!(converted.to_canonical().unwrap(), "\"12\"");
+
+        // Floats are refused the same way: the wire subset is number-free.
+        let float = Json::parse_foreign("1.5", ParseLimits::default()).unwrap();
+        assert!(float.to_canonical().is_err());
+        assert!(float.canonical_digest().is_err());
     }
 
     #[test]

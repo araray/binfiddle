@@ -345,6 +345,7 @@ fn kind_name(value: &Json) -> &'static str {
         Json::Bool(_) => "a boolean",
         Json::Str(_) => "a string",
         Json::Number(_) => "a number",
+        Json::Float(_) => "a number",
         Json::Array(_) => "an array",
         Json::Object(_) => "an object",
     }

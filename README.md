@@ -490,9 +490,11 @@ with a `claims:` line stating exactly what it proves — and what it does not.
 Full guides: [docs/NN_USAGE.md](docs/NN_USAGE.md) (every command and option),
 [docs/NN_QUICK_REFERENCE.md](docs/NN_QUICK_REFERENCE.md) (one-page card),
 and real-model walkthroughs: [docs/NN_DEEPDIVE_KOKORO.md](docs/NN_DEEPDIVE_KOKORO.md)
-(Kokoro-82M — pickle boundary, ONNX tier, precision family) and
+(Kokoro-82M — pickle boundary, ONNX tier, precision family),
 [docs/NN_DEEPDIVE_GEMMA.md](docs/NN_DEEPDIVE_GEMMA.md) (Gemma-4 E4B — 16 GB
-SafeTensors, model packs, transactional editing at scale).
+SafeTensors, model packs, transactional editing at scale), and
+[docs/NN_DEEPDIVE_QWEN.md](docs/NN_DEEPDIVE_QWEN.md) (Qwen3.8-Flash-Next —
+131-shard package, hybrid attention, fused head views).
 
 ```bash
 # Honest self-description of this build's capabilities
