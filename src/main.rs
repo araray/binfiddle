@@ -1,4 +1,5 @@
 /// src/main.rs
+use binfiddle::nn::{capabilities_envelope, capabilities_text, NnError};
 use binfiddle::utils::parsing::{parse_search_pattern, validate_search_pattern};
 use binfiddle::utils::progress::{Progress, ProgressReader};
 use binfiddle::{BinaryData, BinarySource, BinfiddleError, Result, SearchConfig};
@@ -311,6 +312,1991 @@ enum Commands {
         #[arg(long, required = true)]
         step: Vec<String>,
     },
+
+    /// Neural-network artifact workbench (early access)
+    Nn {
+        #[command(subcommand)]
+        command: NnCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum NnCommand {
+    /// Report implemented and unavailable NN workbench capabilities
+    Capabilities {
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Inventory supported model artifacts (descriptor-only, no payload reads)
+    Discover {
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+
+        /// Hash full file contents, upgrading source identity strength
+        #[arg(long)]
+        verify_content: bool,
+
+        /// Fail (exit 8) when coverage is incomplete
+        #[arg(long)]
+        require_complete: bool,
+
+        /// Save the resulting catalog to this file
+        #[arg(long)]
+        out_catalog: Option<String>,
+    },
+
+    /// List tensors or sources from a catalog (or discover one on the fly)
+    Ls {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// View: tensors, sources, architecture (needs --pack)
+        #[arg(long, default_value = "tensors", value_parser = ["tensors", "sources", "architecture"])]
+        view: String,
+
+        /// Model pack file or directory (pack.yaml)
+        #[arg(long)]
+        pack: Option<String>,
+
+        /// Exact encoding filter (e.g. safetensors.F32, ggml.q4_0)
+        #[arg(long)]
+        encoding: Option<String>,
+
+        /// Source scope: unique source id prefix or exact path
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Bounded regular expression filter over tensor names
+        #[arg(long)]
+        name_regex: Option<String>,
+
+        /// Sort order: name, bytes
+        #[arg(long, default_value = "name", value_parser = ["name", "bytes"])]
+        sort: String,
+
+        /// Maximum entries per page (1-10000)
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Entries to skip before the page
+        #[arg(long, default_value = "0")]
+        offset: usize,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Show one tensor's full record, with optional evidence explanation
+    Show {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Model pack file or directory (enables --component)
+        #[arg(long)]
+        pack: Option<String>,
+
+        /// Component path from a pack (e.g. decoder.layers[3].attention)
+        #[arg(long, requires = "pack")]
+        component: Option<String>,
+
+        /// Exact original tensor name
+        #[arg(long, conflicts_with = "id")]
+        tensor: Option<String>,
+
+        /// Tensor identifier (full or unique digest prefix)
+        #[arg(long, conflicts_with = "tensor")]
+        id: Option<String>,
+
+        /// Scope for --tensor: unique source id prefix or exact path
+        #[arg(long, requires = "tensor")]
+        source: Option<String>,
+
+        /// Include the evidence explanation
+        #[arg(long)]
+        explain: bool,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Resolve a tensor selection and optionally save it
+    Select {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Exact original tensor name
+        #[arg(long, conflicts_with_all = ["id", "select", "rebind_selection"])]
+        tensor: Option<String>,
+
+        /// Tensor identifier (full or unique digest prefix)
+        #[arg(long, conflicts_with_all = ["tensor", "select", "rebind_selection"])]
+        id: Option<String>,
+
+        /// Component selector expression (requires a model pack to resolve)
+        #[arg(long = "select", conflicts_with_all = ["tensor", "id", "rebind_selection"])]
+        select_expr: Option<String>,
+
+        /// Saved selection to rebind against the catalog given by --catalog
+        #[arg(long = "rebind", id = "rebind_selection", conflicts_with_all = ["tensor", "id", "select"])]
+        rebind_selection: Option<String>,
+
+        /// Model pack for component resolution of --select and component rebinds
+        #[arg(long)]
+        pack: Option<String>,
+
+        /// Scope for --tensor: unique source id prefix or exact path
+        #[arg(long, requires = "tensor")]
+        source: Option<String>,
+
+        /// Allow an empty selection instead of rejecting it
+        #[arg(long)]
+        allow_empty: bool,
+
+        /// Save the resolved selection to this file
+        #[arg(long)]
+        out_selection: Option<String>,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Map a tensor (or one element) to its file-qualified byte/bit location
+    Where {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Exact original tensor name
+        #[arg(long, conflicts_with = "id")]
+        tensor: Option<String>,
+
+        /// Tensor identifier (full or unique digest prefix)
+        #[arg(long, conflicts_with = "tensor")]
+        id: Option<String>,
+
+        /// Scope for --tensor: unique source id prefix or exact path
+        #[arg(long, requires = "tensor")]
+        source: Option<String>,
+
+        /// Element coordinate (comma-separated decimal, e.g. 123,456)
+        #[arg(long)]
+        index: Option<String>,
+
+        /// Address space (only file addresses are supported)
+        #[arg(long, default_value = "file", value_parser = ["file"])]
+        space: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Reverse lookup: which tensors own a file offset
+    Locate {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// File offset (decimal or 0x-prefixed hex)
+        #[arg(long)]
+        offset: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Extract selected tensors into a bundle (weights kind)
+    Slice {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Saved selection file (plan generation mode)
+        #[arg(long, conflicts_with_all = ["plan"])]
+        selection: Option<String>,
+
+        /// Saved plan file (apply mode)
+        #[arg(long, conflicts_with_all = ["selection", "storage", "quant", "save_plan", "dry_run"])]
+        plan: Option<String>,
+
+        /// Slice kind (weights; component/executable need model packs)
+        #[arg(long, default_value = "weights", value_parser = ["weights"])]
+        kind: String,
+
+        /// Storage policy: reference, materialized
+        #[arg(long, default_value = "materialized", value_parser = ["reference", "materialized"])]
+        storage: String,
+
+        /// Quantization policy: preserve_encoding, cover_blocks, decode
+        #[arg(
+            long,
+            default_value = "preserve_encoding",
+            value_parser = ["preserve_encoding", "cover_blocks", "decode"]
+        )]
+        quant: String,
+
+        /// Resolve and print the plan without writing a bundle
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Save the resolved plan to this file
+        #[arg(long)]
+        save_plan: Option<String>,
+
+        /// Bundle output directory (apply)
+        #[arg(long)]
+        out_dir: Option<String>,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Reconstruct tensor content from a materialized slice bundle
+    Assemble {
+        /// Materialized bundle directory (contains slice.json)
+        #[arg(long)]
+        bundle: String,
+
+        /// Output directory for reconstructed payloads
+        #[arg(long)]
+        out_dir: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Numerically inspect one catalog tensor
+    Analyze {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Exact original tensor name
+        #[arg(long, conflicts_with = "analyze_id")]
+        tensor: Option<String>,
+
+        /// Tensor identifier (full or unique digest prefix)
+        #[arg(long = "id", id = "analyze_id", conflicts_with = "tensor")]
+        target_id: Option<String>,
+
+        /// Scope for --tensor: unique source id prefix or exact path
+        #[arg(long, requires = "tensor")]
+        source: Option<String>,
+
+        /// Access mode: metadata (no payload reads), sample, full
+        #[arg(long, default_value = "full", value_parser = ["metadata", "sample", "full"])]
+        mode: String,
+
+        /// Seed for deterministic sampling
+        #[arg(long, default_value = "17")]
+        seed: u64,
+
+        /// Sample size in elements (sample mode)
+        #[arg(long, default_value = "10000")]
+        sample_size: u64,
+
+        /// Number of histogram bins (0 = no histogram)
+        #[arg(long, default_value = "0")]
+        histogram_bins: usize,
+
+        /// Number of leading quantization blocks to display (0 = none)
+        #[arg(long, default_value = "0")]
+        blocks: u64,
+
+        /// Reference values file for error metrics (raw little-endian f32/f64)
+        #[arg(long)]
+        reference: Option<String>,
+
+        /// Reference element width: 4 (f32) or 8 (f64)
+        #[arg(long, default_value = "4", value_parser = ["4", "8"])]
+        reference_width: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Model pack operations
+    Pack {
+        #[command(subcommand)]
+        command: PackCommand,
+    },
+
+    /// Transactional fixed-size edits over catalog tensors
+    Edit {
+        #[command(subcommand)]
+        command: EditCommand,
+    },
+
+    /// Compare two catalogs layer by layer (exact, no lineage claims)
+    Diff {
+        /// Left catalog file
+        #[arg(long)]
+        left: String,
+
+        /// Right catalog file
+        #[arg(long)]
+        right: String,
+
+        /// Also compare decoded values of content-changed scalar tensors
+        #[arg(long)]
+        decoded: bool,
+
+        /// Decoded comparison policy: exact_bits, lenient
+        #[arg(long, default_value = "exact_bits", value_parser = ["exact_bits", "lenient"])]
+        policy: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Decompose a model by layer into child selections (and optional bundles)
+    Split {
+        /// Saved catalog file
+        #[arg(long)]
+        catalog: String,
+
+        /// Model pack with layered components
+        #[arg(long)]
+        pack: String,
+
+        /// Decomposition axis (layer)
+        #[arg(long, default_value = "layer", value_parser = ["layer"])]
+        by: String,
+
+        /// Storage: reference (plans only) or materialized (per-layer bundles)
+        #[arg(long, default_value = "reference", value_parser = ["reference", "materialized"])]
+        storage: String,
+
+        /// Fresh output directory for the split tree
+        #[arg(long)]
+        out_dir: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Exact content fingerprints for every tensor in a catalog
+    Fingerprint {
+        /// Catalog file
+        #[arg(long)]
+        catalog: String,
+
+        /// Second catalog: build an experimental evidence graph (exact,
+        /// structural, and sampled-block similarity edges)
+        #[arg(long)]
+        compare: Option<String>,
+
+        /// Similarity threshold for similar_under_mapping edges (0.0-1.0)
+        #[arg(long, default_value = "0.75")]
+        threshold: f64,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Plan contiguous layer groups per stage (static byte estimates only)
+    Partition {
+        /// Saved catalog file
+        #[arg(long)]
+        catalog: String,
+
+        /// Model pack with layered components
+        #[arg(long)]
+        pack: String,
+
+        /// Number of stages
+        #[arg(long, default_value = "2")]
+        stages: usize,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Scan a raw file for embedded model containers
+    Carve {
+        /// Raw file to scan
+        #[arg(long)]
+        target: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Research: row-permutation alignment between two catalogs (experimental)
+    Research {
+        #[command(subcommand)]
+        command: ResearchCommand,
+    },
+
+    /// Report what a byte span or edit plan touches (dependencies, influence)
+    Impact {
+        /// Saved catalog file
+        #[arg(long)]
+        catalog: String,
+
+        /// File span START..END (decimal or 0x hex)
+        #[arg(long, conflicts_with = "impact_offset", conflicts_with = "impact_plan")]
+        span: Option<String>,
+
+        /// Single file offset (decimal or 0x hex)
+        #[arg(long, id = "impact_offset", conflicts_with_all = ["span", "impact_plan"])]
+        offset: Option<String>,
+
+        /// Saved edit plan file
+        #[arg(long, id = "impact_plan", conflicts_with_all = ["span", "impact_offset"])]
+        plan: Option<String>,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Structural artifact validation with precise per-source verdicts
+    Validate {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Adapter checkpoint operations
+    Adapter {
+        #[command(subcommand)]
+        command: AdapterCommand,
+    },
+
+    /// Tokenizer asset operations
+    Tokenizer {
+        #[command(subcommand)]
+        command: TokenizerCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ResearchCommand {
+    /// Test same-shape dense weights for row-permutation relationships
+    Align {
+        /// Left catalog file
+        #[arg(long)]
+        left: String,
+
+        /// Right catalog file
+        #[arg(long)]
+        right: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdapterCommand {
+    /// Inspect a LoRA-style adapter checkpoint's factor pairs
+    Inspect {
+        /// Saved catalog file of the adapter checkpoint
+        #[arg(long)]
+        catalog: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum TokenizerCommand {
+    /// Inspect tokenizer assets in a package directory
+    Inspect {
+        /// Package directory containing tokenizer assets
+        #[arg(long)]
+        package: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Compare two tokenizer.json files at the vocabulary level
+    Diff {
+        /// Left tokenizer.json
+        #[arg(long)]
+        left: String,
+
+        /// Right tokenizer.json
+        #[arg(long)]
+        right: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PackCommand {
+    /// Verify a declarative model pack
+    Verify {
+        /// Pack file or directory (pack.yaml)
+        #[arg(long)]
+        pack: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Lint a pack statically (no model involved)
+    Lint {
+        /// Pack file or directory (pack.yaml)
+        #[arg(long)]
+        pack: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Scaffold a provisional pack from an observed catalog
+    Scaffold {
+        /// Catalog file to derive patterns from
+        #[arg(long)]
+        catalog: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum EditCommand {
+    /// Plan one typed or raw-bit value change (records the preimage)
+    Set {
+        /// Saved catalog file (content-verified discovery required)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Exact original tensor name
+        #[arg(long, conflicts_with = "edit_id")]
+        tensor: Option<String>,
+
+        /// Tensor identifier (full or unique digest prefix)
+        #[arg(long = "id", id = "edit_id", conflicts_with = "tensor")]
+        target_id: Option<String>,
+
+        /// Scope for --tensor: unique source id prefix or exact path
+        #[arg(long, requires = "tensor")]
+        source: Option<String>,
+
+        /// Element coordinate (comma-separated decimal)
+        #[arg(long)]
+        index: String,
+
+        /// Requested numeric value
+        #[arg(
+            long,
+            conflicts_with = "raw_bits",
+            required = true,
+            group = "edit_value"
+        )]
+        value: Option<String>,
+
+        /// Requested raw bits (hex; nibble for sub-byte units)
+        #[arg(long = "raw-bits", conflicts_with = "value")]
+        raw_bits: Option<String>,
+
+        /// Value policy: exact_only, nearest, fixed_parameters
+        #[arg(
+            long,
+            default_value = "auto",
+            value_parser = ["auto", "exact_only", "nearest", "fixed_parameters"]
+        )]
+        policy: String,
+
+        /// Allow saturating out-of-range quantized codes
+        #[arg(long)]
+        clamp: bool,
+
+        /// Save the plan to this file
+        #[arg(long)]
+        save_plan: Option<String>,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Apply a saved edit plan to a fresh output file
+    Apply {
+        /// Saved catalog file (must match the plan)
+        #[arg(long)]
+        catalog: String,
+
+        /// Saved edit plan file
+        #[arg(long)]
+        plan: String,
+
+        /// Output file (must not exist; the original is never modified)
+        #[arg(long)]
+        out_model: String,
+
+        /// Directory for the undo bundle
+        #[arg(long)]
+        undo_bundle: Option<String>,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Reverse an applied edit against its exact edited revision
+    Undo {
+        /// Undo bundle directory (from edit apply)
+        #[arg(long)]
+        bundle: String,
+
+        /// The edited file to reverse
+        #[arg(long)]
+        target: String,
+
+        /// Output file (must not exist)
+        #[arg(long)]
+        out_model: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Remove intermediate MLP channels structurally (gate/up rows + down columns)
+    Prune {
+        /// Saved catalog file (content-verified discovery required)
+        #[arg(long)]
+        catalog: String,
+
+        /// Model pack with mlp_gate/mlp_up/mlp_down bindings
+        #[arg(long)]
+        pack: String,
+
+        /// Sorted unique channel indices to remove (comma-separated)
+        #[arg(long)]
+        channels: String,
+
+        /// Output file (must not exist; a fresh SafeTensors file)
+        #[arg(long)]
+        out_model: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+}
+
+/// Run one NN workbench command. `input` is the root `--input` value, when
+/// given. Stdout carries the primary report; errors map to the NN exit-code
+/// categories.
+fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), NnError> {
+    use binfiddle::nn::{Budget, CancellationToken, DiscoverOptions, SignalGuard};
+    use std::io::Write;
+    use std::path::Path;
+
+    let cancel = CancellationToken::new();
+    let guard = SignalGuard::install()?;
+    let budget = Budget::unrestricted();
+    budget.checkpoint()?;
+    guard.propagate(&cancel);
+
+    match command {
+        NnCommand::Capabilities { report_format } => {
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                let envelope = capabilities_envelope()?;
+                envelope.write_json(&mut out)?;
+            } else {
+                out.write_all(capabilities_text().as_bytes())?;
+                out.write_all(b"\n")?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Discover {
+            report_format,
+            verify_content,
+            require_complete,
+            out_catalog,
+        } => {
+            let path = input.ok_or_else(|| NnError::InvalidRequest {
+                message: "nn discover requires --input <file-or-directory> (or '-' for stdin)"
+                    .to_string(),
+            })?;
+            let options = DiscoverOptions {
+                verify_content: *verify_content,
+            };
+            // Stdin discovery spools the stream to a bounded private
+            // temporary file with its own content-verified identity.
+            let report = if path == "-" {
+                binfiddle::nn::discover::discover_stdin(&options, &budget)?
+            } else {
+                binfiddle::nn::discover(Path::new(path), &options, &budget)?
+            };
+            if let Some(catalog_path) = out_catalog {
+                binfiddle::nn::Catalog::from_discovery(&report)?.save(Path::new(catalog_path))?;
+            }
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                report.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(report.text().as_bytes())?;
+            }
+            out.flush()?;
+            if *require_complete && !report.complete() {
+                let (considered, parsed, _) = report.coverage();
+                return Err(NnError::IncompleteRejected {
+                    detail: format!(
+                        "discovery coverage incomplete: {} of {} sources fully inventoried",
+                        parsed.min(considered),
+                        considered
+                    ),
+                });
+            }
+        }
+        NnCommand::Ls {
+            catalog,
+            view,
+            pack,
+            encoding,
+            source,
+            name_regex,
+            sort,
+            limit,
+            offset,
+            report_format,
+        } => {
+            use binfiddle::nn::queries::{self, clamp_pagination, ListFilters, SortField};
+            let catalog_path = nn_path_arg(catalog.as_deref(), "ls")?;
+            let input_path = nn_path_arg(input, "ls")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                input_path,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if view == "architecture" {
+                use binfiddle::nn::packs;
+                let pack_path = pack.as_deref().ok_or_else(|| NnError::InvalidRequest {
+                    message: "architecture view requires --pack <file-or-dir>".to_string(),
+                })?;
+                let loaded_pack = packs::Pack::load(Path::new(pack_path))?;
+                let recognition = packs::Recognition::recognize(&loaded_pack, &loaded)?;
+                if report_format == "json" {
+                    packs::architecture_envelope(&recognition, &loaded_pack, &loaded)?
+                        .write_json(&mut out)?;
+                } else {
+                    out.write_all(packs::architecture_text(&recognition, &loaded_pack).as_bytes())?;
+                }
+                out.flush()?;
+                return Ok(());
+            }
+            if view == "sources" {
+                let envelope = queries::sources_envelope(&loaded)?;
+                if report_format == "json" {
+                    envelope.write_json(&mut out)?;
+                } else {
+                    out.write_all(queries::sources_text(&loaded).as_bytes())?;
+                }
+            } else {
+                let (limit, offset) = clamp_pagination(*limit, *offset)?;
+                let sort_field = if sort == "bytes" {
+                    SortField::Bytes
+                } else {
+                    SortField::Name
+                };
+                let filters = ListFilters {
+                    encoding: encoding.clone(),
+                    source: source.clone(),
+                    name_regex: name_regex.clone(),
+                };
+                let page = queries::list_tensors(&loaded, &filters, sort_field, limit, offset)?;
+                if report_format == "json" {
+                    queries::tensors_envelope(&loaded, &page, &filters, sort_field)?
+                        .write_json(&mut out)?;
+                } else {
+                    out.write_all(queries::tensors_text(&loaded, &page).as_bytes())?;
+                }
+            }
+            out.flush()?;
+        }
+        NnCommand::Show {
+            catalog,
+            tensor,
+            id,
+            pack,
+            component,
+            source,
+            explain,
+            report_format,
+        } => {
+            use binfiddle::nn::show::{self, ShowTarget};
+            let catalog_path = nn_path_arg(catalog.as_deref(), "show")?;
+            let input_path = nn_path_arg(input, "show")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                input_path,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            if let Some(component_path) = component.as_deref() {
+                use binfiddle::nn::packs;
+                let pack_path = pack
+                    .as_deref()
+                    .expect("clap requires --pack with --component");
+                let loaded_pack = packs::Pack::load(Path::new(pack_path))?;
+                let recognition = packs::Recognition::recognize(&loaded_pack, &loaded)?;
+                let detail = packs::component_detail(&recognition, &loaded_pack, component_path)?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    packs::component_envelope(&detail, &recognition)?.write_json(&mut out)?;
+                } else {
+                    out.write_all(packs::component_text(&detail).as_bytes())?;
+                }
+                out.flush()?;
+                return Ok(());
+            }
+            let target = match (tensor, id) {
+                (Some(name), None) => ShowTarget::Name {
+                    name,
+                    source: source.as_deref(),
+                },
+                (None, Some(id)) => ShowTarget::Id { id },
+                _ => {
+                    return Err(NnError::InvalidRequest {
+                        message: "nn show requires exactly one of --tensor or --id".to_string(),
+                    })
+                }
+            };
+            let tensor = show::resolve_show_target(&loaded, &target)?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                show::show_envelope(&loaded, tensor, *explain)?.write_json(&mut out)?;
+            } else {
+                out.write_all(show::show_text(&loaded, tensor, *explain).as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Select {
+            catalog,
+            tensor,
+            id,
+            select_expr,
+            rebind_selection,
+            pack,
+            source,
+            allow_empty,
+            out_selection,
+            report_format,
+        } => {
+            use binfiddle::nn::selection::{EmptyPolicy, Selection, SelectionRequest};
+            let catalog_path = nn_path_arg(catalog.as_deref(), "select")?;
+            let input_path = nn_path_arg(input, "select")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                input_path,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let policy = if *allow_empty {
+                EmptyPolicy::Allow
+            } else {
+                EmptyPolicy::Reject
+            };
+            // Rebind mode: re-evaluate a saved selection's REQUEST against
+            // this catalog and report additions/removals.
+            if let Some(rebind_path) = rebind_selection.as_deref() {
+                let old = Selection::load(Path::new(rebind_path))?;
+                let pack_pair = match pack.as_deref() {
+                    Some(pack_path) => {
+                        let loaded_pack = binfiddle::nn::packs::Pack::load(Path::new(pack_path))?;
+                        let recognition =
+                            binfiddle::nn::packs::Recognition::recognize(&loaded_pack, &loaded)?;
+                        Some((loaded_pack, recognition))
+                    }
+                    None => None,
+                };
+                let pack_ref = pack_pair.as_ref().map(|(p, r)| (p, r));
+                let (fresh, additions, removals) =
+                    old.request.rebind(&old, &loaded, pack_ref, policy)?;
+                if let Some(path) = out_selection {
+                    fresh.save(Path::new(path))?;
+                }
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    fresh.envelope()?.write_json(&mut out)?;
+                } else {
+                    out.write_all(fresh.text().as_bytes())?;
+                    out.write_all(format!("  additions: {}\n", additions.len()).as_bytes())?;
+                    out.write_all(format!("  removals: {}\n", removals.len()).as_bytes())?;
+                }
+                out.flush()?;
+                return Ok(());
+            }
+            let request = match (tensor, id, select_expr) {
+                (Some(name), None, None) => SelectionRequest::TensorName {
+                    name: name.clone(),
+                    source: source.clone(),
+                },
+                (None, Some(id), None) => SelectionRequest::TensorId { id: id.clone() },
+                (None, None, Some(expression)) => SelectionRequest::ComponentExpression {
+                    expression: expression.clone(),
+                },
+                _ => return Err(NnError::InvalidRequest {
+                    message:
+                        "nn select requires exactly one of --tensor, --id, --select, or --rebind"
+                            .to_string(),
+                }),
+            };
+            // Component expressions resolve through a pack when --pack is
+            // given; without one they parse and explain (M2 behavior).
+            let selection = match (select_expr.as_deref(), pack.as_deref()) {
+                (Some(expression), Some(pack_path)) => {
+                    let loaded_pack = binfiddle::nn::packs::Pack::load(Path::new(pack_path))?;
+                    let recognition =
+                        binfiddle::nn::packs::Recognition::recognize(&loaded_pack, &loaded)?;
+                    Selection::resolve_components(
+                        &loaded,
+                        &loaded_pack,
+                        &recognition,
+                        expression,
+                        policy,
+                    )?
+                }
+                _ => Selection::resolve(&loaded, request, policy)?,
+            };
+            if let Some(path) = out_selection {
+                selection.save(Path::new(path))?;
+            }
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                selection.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(selection.text().as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Where {
+            catalog,
+            tensor,
+            id,
+            source,
+            index,
+            space: _,
+            report_format,
+        } => {
+            use binfiddle::nn::show::{self, ShowTarget};
+            use binfiddle::nn::where_cmd;
+            let catalog_path = nn_path_arg(catalog.as_deref(), "where")?;
+            let input_path = nn_path_arg(input, "where")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                input_path,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let target = match (tensor, id) {
+                (Some(name), None) => ShowTarget::Name {
+                    name,
+                    source: source.as_deref(),
+                },
+                (None, Some(id)) => ShowTarget::Id { id },
+                _ => {
+                    return Err(NnError::InvalidRequest {
+                        message: "nn where requires exactly one of --tensor or --id".to_string(),
+                    })
+                }
+            };
+            let tensor = show::resolve_show_target(&loaded, &target)?;
+            let coordinate = match index {
+                Some(text) => Some(where_cmd::parse_coordinate(text)?),
+                None => None,
+            };
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                where_cmd::where_envelope(&loaded, tensor, coordinate.as_deref())?
+                    .write_json(&mut out)?;
+            } else {
+                out.write_all(where_cmd::where_text(tensor, coordinate.as_deref())?.as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Locate {
+            catalog,
+            offset,
+            report_format,
+        } => {
+            use binfiddle::nn::where_cmd;
+            let catalog_path = nn_path_arg(catalog.as_deref(), "locate")?;
+            let input_path = nn_path_arg(input, "locate")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                input_path,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let offset_value = parse_nn_offset(offset)?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                where_cmd::locate_envelope(&loaded, offset_value)?.write_json(&mut out)?;
+            } else {
+                out.write_all(where_cmd::locate_text(&loaded, offset_value)?.as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Slice {
+            catalog,
+            selection,
+            plan,
+            kind: _,
+            storage,
+            quant,
+            dry_run,
+            save_plan,
+            out_dir,
+            report_format,
+        } => {
+            use binfiddle::nn::selection::Selection;
+            use binfiddle::nn::slice::{
+                apply_plan, receipt_envelope, receipt_text, QuantPolicy, SlicePlan, StoragePolicy,
+            };
+            let catalog_path = nn_path_arg(catalog.as_deref(), "slice")?;
+            let input_path = nn_path_arg(input, "slice")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                input_path,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+
+            let resolved_plan = match (plan.as_deref(), selection.as_deref()) {
+                (Some(plan_path), None) => SlicePlan::load(Path::new(plan_path))?,
+                (None, Some(selection_path)) => {
+                    let selection = Selection::load(Path::new(selection_path))?;
+                    let storage = StoragePolicy::parse(storage)?;
+                    let quant = QuantPolicy::parse(quant)?;
+                    let built = SlicePlan::build(&loaded, &selection, storage, quant)?;
+                    if let Some(save_path) = save_plan.as_deref() {
+                        built.save(Path::new(save_path))?;
+                    }
+                    built
+                }
+                _ => {
+                    return Err(NnError::InvalidRequest {
+                        message: "nn slice requires exactly one of --selection or --plan"
+                            .to_string(),
+                    })
+                }
+            };
+
+            // Plan mode without --out-dir previews the plan (any --save-plan
+            // file was already written); apply mode requires --out-dir.
+            let apply_now = out_dir.is_some();
+            if plan.is_some() && !apply_now {
+                return Err(NnError::InvalidRequest {
+                    message: "nn slice with --plan requires --out-dir to apply".to_string(),
+                });
+            }
+            if *dry_run || !apply_now {
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    resolved_plan.envelope()?.write_json(&mut out)?;
+                } else {
+                    out.write_all(resolved_plan.text().as_bytes())?;
+                }
+                out.flush()?;
+            } else {
+                let out_dir = out_dir.as_deref().expect("checked above");
+                let receipt = apply_plan(&resolved_plan, &loaded, Path::new(out_dir), &budget)?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    receipt_envelope(&receipt)?.write_json(&mut out)?;
+                } else {
+                    out.write_all(receipt_text(&receipt).as_bytes())?;
+                }
+                out.flush()?;
+            }
+        }
+        NnCommand::Assemble {
+            bundle,
+            out_dir,
+            report_format,
+        } => {
+            use binfiddle::nn::slice::{assemble_bundle, assemble_text};
+            let envelope = assemble_bundle(Path::new(bundle), Path::new(out_dir), &budget)?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                envelope.write_json(&mut out)?;
+            } else {
+                out.write_all(assemble_text(&envelope)?.as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Analyze {
+            catalog,
+            tensor,
+            target_id,
+            source,
+            mode,
+            seed,
+            sample_size,
+            histogram_bins,
+            blocks,
+            reference,
+            reference_width,
+            report_format,
+        } => {
+            use binfiddle::nn::analyze::{self, ScanMode};
+            use binfiddle::nn::show::{self, ShowTarget};
+            let catalog_path = nn_path_arg(catalog.as_deref(), "analyze")?;
+            let input_path = nn_path_arg(input, "analyze")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                input_path,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let target = match (tensor, target_id) {
+                (Some(name), None) => ShowTarget::Name {
+                    name,
+                    source: source.as_deref(),
+                },
+                (None, Some(id)) => ShowTarget::Id { id },
+                _ => {
+                    return Err(NnError::InvalidRequest {
+                        message: "nn analyze requires exactly one of --tensor or --id".to_string(),
+                    })
+                }
+            };
+            let tensor = show::resolve_show_target(&loaded, &target)?;
+            let mode = match mode.as_str() {
+                "metadata" => ScanMode::Metadata,
+                "sample" => ScanMode::Sample,
+                _ => ScanMode::Full,
+            };
+            // Metadata mode refuses to read payloads for metrics it cannot
+            // honestly compute from descriptors alone.
+            if mode == ScanMode::Metadata
+                && (*histogram_bins > 0 || reference.is_some() || *blocks > 0)
+            {
+                return Err(NnError::InvalidRequest {
+                    message: "metadata mode reads no payload; histograms, reference metrics, and block views need sample or full mode"
+                        .to_string(),
+                });
+            }
+            let reference_path = match reference.as_deref() {
+                Some(path) => Some(nn_path_arg(Some(path), "analyze")?.ok_or_else(|| {
+                    NnError::InvalidRequest {
+                        message: "invalid reference path".to_string(),
+                    }
+                })?),
+                None => None,
+            };
+            let width: u32 = reference_width.parse().unwrap_or(4);
+            let result = analyze::analyze_tensor(
+                &loaded,
+                tensor,
+                mode,
+                *seed,
+                *sample_size,
+                *histogram_bins,
+                *blocks,
+                reference_path,
+                width,
+                &budget,
+            )?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                analyze::analysis_envelope(&loaded, &result)?.write_json(&mut out)?;
+            } else {
+                out.write_all(analyze::analysis_text(&result).as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Pack { command } => match command {
+            PackCommand::Verify {
+                pack,
+                report_format,
+            } => {
+                use binfiddle::nn::packs;
+                let loaded_pack = packs::Pack::load(Path::new(pack))?;
+                // Verify: every binding pattern compiles, every expression
+                // evaluates against the config, and the schedule resolves.
+                for binding in &loaded_pack.bindings {
+                    for axis in &binding.shape {
+                        loaded_pack.eval(axis)?;
+                    }
+                }
+                let _ = loaded_pack.full_attention_layers().ok();
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    let semantic = binfiddle::nn::Json::object(vec![
+                        ("pack_id", binfiddle::nn::Json::Str(loaded_pack.pack_id()?)),
+                        ("id", binfiddle::nn::Json::Str(loaded_pack.id_name.clone())),
+                        (
+                            "version",
+                            binfiddle::nn::Json::Str(loaded_pack.version.clone()),
+                        ),
+                        (
+                            "bindings",
+                            binfiddle::nn::Json::Str(loaded_pack.bindings.len().to_string()),
+                        ),
+                    ])?;
+                    binfiddle::nn::ResultEnvelope::new("pack verify")
+                        .with_semantic(semantic)
+                        .write_json(&mut out)?;
+                } else {
+                    out.write_all(
+                        format!(
+                            "pack verified: {} v{} ({} bindings, id {})\n",
+                            loaded_pack.id_name,
+                            loaded_pack.version,
+                            loaded_pack.bindings.len(),
+                            loaded_pack.pack_id()?,
+                        )
+                        .as_bytes(),
+                    )?;
+                }
+                out.flush()?;
+            }
+            PackCommand::Lint {
+                pack,
+                report_format,
+            } => {
+                use binfiddle::nn::profile;
+                let loaded_pack = binfiddle::nn::packs::Pack::load(Path::new(pack))?;
+                let findings = profile::lint_pack(&loaded_pack);
+                let has_errors = findings.iter().any(|f| f.severity == "error");
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    profile::lint_envelope(&loaded_pack, &findings)?.write_json(&mut out)?;
+                } else {
+                    out.write_all(profile::lint_text(&loaded_pack, &findings).as_bytes())?;
+                }
+                out.flush()?;
+                if has_errors {
+                    return Err(NnError::ValidationFailed {
+                        detail: "pack lint found error-severity findings".to_string(),
+                    });
+                }
+            }
+            PackCommand::Scaffold { catalog } => {
+                use binfiddle::nn::profile;
+                let catalog_path = nn_path_arg(Some(catalog.as_str()), "profile scaffold")?
+                    .ok_or_else(|| NnError::InvalidRequest {
+                        message: "invalid catalog".to_string(),
+                    })?;
+                let loaded = binfiddle::nn::Catalog::from_route(
+                    Some(catalog_path),
+                    None,
+                    &DiscoverOptions::default(),
+                    &budget,
+                )?;
+                let scaffold = profile::scaffold_pack(&loaded)?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                out.write_all(scaffold.as_bytes())?;
+                out.flush()?;
+            }
+        },
+        NnCommand::Edit { command } => {
+            use binfiddle::nn::edit;
+            use binfiddle::nn::show::{self, ShowTarget};
+            match command {
+                EditCommand::Set {
+                    catalog,
+                    tensor,
+                    target_id,
+                    source,
+                    index,
+                    value,
+                    raw_bits,
+                    policy,
+                    clamp,
+                    save_plan,
+                    report_format,
+                } => {
+                    let catalog_path = nn_path_arg(catalog.as_deref(), "edit set")?;
+                    let input_path = nn_path_arg(input, "edit set")?;
+                    let loaded = binfiddle::nn::Catalog::from_route(
+                        catalog_path,
+                        input_path,
+                        &DiscoverOptions::default(),
+                        &budget,
+                    )?;
+                    let target = match (tensor, target_id) {
+                        (Some(name), None) => ShowTarget::Name {
+                            name,
+                            source: source.as_deref(),
+                        },
+                        (None, Some(id)) => ShowTarget::Id { id },
+                        _ => {
+                            return Err(NnError::InvalidRequest {
+                                message: "nn edit set requires exactly one of --tensor or --id"
+                                    .to_string(),
+                            })
+                        }
+                    };
+                    let tensor = show::resolve_show_target(&loaded, &target)?;
+                    let coordinate = binfiddle::nn::where_cmd::parse_coordinate(index)?;
+                    let requested = match (value.as_deref(), raw_bits.as_deref()) {
+                        (Some(v), None) => edit::RequestedValue::Typed(v.to_string()),
+                        (None, Some(h)) => edit::RequestedValue::RawBits(h.to_string()),
+                        _ => {
+                            return Err(NnError::InvalidRequest {
+                                message: "exactly one of --value or --raw-bits is required"
+                                    .to_string(),
+                            })
+                        }
+                    };
+                    let layout = binfiddle::nn::codec::layout_for_encoding(&tensor.encoding);
+                    let policy = if policy == "auto" {
+                        edit::EditPolicy::default_for(layout)
+                    } else {
+                        edit::EditPolicy::parse(policy)?
+                    };
+                    let plan = edit::EditPlan::build(
+                        &loaded,
+                        tensor,
+                        &coordinate,
+                        &requested,
+                        policy,
+                        *clamp,
+                        &budget,
+                    )?;
+                    if let Some(path) = save_plan.as_deref() {
+                        plan.save(Path::new(path))?;
+                    }
+                    guard.propagate(&cancel);
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    if report_format == "json" {
+                        plan.envelope()?.write_json(&mut out)?;
+                    } else {
+                        out.write_all(plan.text().as_bytes())?;
+                    }
+                    out.flush()?;
+                }
+                EditCommand::Apply {
+                    catalog,
+                    plan,
+                    out_model,
+                    undo_bundle,
+                    report_format,
+                } => {
+                    let catalog_path = nn_path_arg(Some(catalog.as_str()), "edit apply")?;
+                    let loaded = binfiddle::nn::Catalog::from_route(
+                        catalog_path,
+                        None,
+                        &DiscoverOptions::default(),
+                        &budget,
+                    )?;
+                    let loaded_plan = edit::EditPlan::load(Path::new(plan))?;
+                    let receipt = edit::apply_edit_plan(
+                        &loaded,
+                        &loaded_plan,
+                        Path::new(out_model),
+                        undo_bundle.as_deref().map(Path::new),
+                        &budget,
+                    )?;
+                    guard.propagate(&cancel);
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    if report_format == "json" {
+                        edit::receipt_envelope(&receipt)?.write_json(&mut out)?;
+                    } else {
+                        out.write_all(edit::receipt_text(&receipt).as_bytes())?;
+                    }
+                    out.flush()?;
+                }
+                EditCommand::Undo {
+                    bundle,
+                    target,
+                    out_model,
+                    report_format,
+                } => {
+                    let target_path =
+                        nn_path_arg(Some(target.as_str()), "edit undo")?.ok_or_else(|| {
+                            NnError::InvalidRequest {
+                                message: "invalid target path".to_string(),
+                            }
+                        })?;
+                    let receipt = edit::undo_edit(
+                        Path::new(bundle),
+                        target_path,
+                        Path::new(out_model),
+                        &budget,
+                    )?;
+                    guard.propagate(&cancel);
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    if report_format == "json" {
+                        edit::receipt_envelope(&receipt)?.write_json(&mut out)?;
+                    } else {
+                        out.write_all(edit::receipt_text(&receipt).as_bytes())?;
+                    }
+                    out.flush()?;
+                }
+                EditCommand::Prune {
+                    catalog,
+                    pack,
+                    channels,
+                    out_model,
+                    report_format,
+                } => {
+                    use binfiddle::nn::recipes;
+                    let catalog_path = nn_path_arg(Some(catalog.as_str()), "edit prune")?;
+                    let loaded = binfiddle::nn::Catalog::from_route(
+                        catalog_path,
+                        None,
+                        &DiscoverOptions::default(),
+                        &budget,
+                    )?;
+                    let loaded_pack = binfiddle::nn::packs::Pack::load(Path::new(pack))?;
+                    let recognition =
+                        binfiddle::nn::packs::Recognition::recognize(&loaded_pack, &loaded)?;
+                    let channel_list = binfiddle::nn::where_cmd::parse_coordinate(channels)?;
+                    let receipt = recipes::apply_prune(
+                        &loaded,
+                        &recognition,
+                        &channel_list,
+                        Path::new(out_model),
+                        &budget,
+                    )?;
+                    guard.propagate(&cancel);
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    if report_format == "json" {
+                        receipt.envelope()?.write_json(&mut out)?;
+                    } else {
+                        out.write_all(receipt.text().as_bytes())?;
+                    }
+                    out.flush()?;
+                }
+            }
+        }
+        NnCommand::Diff {
+            left,
+            right,
+            decoded,
+            policy,
+            report_format,
+        } => {
+            use binfiddle::nn::compare::{self, DecodePolicy};
+            let left_path = nn_path_arg(Some(left.as_str()), "diff")?.ok_or_else(|| {
+                NnError::InvalidRequest {
+                    message: "invalid left catalog".to_string(),
+                }
+            })?;
+            let right_path = nn_path_arg(Some(right.as_str()), "diff")?.ok_or_else(|| {
+                NnError::InvalidRequest {
+                    message: "invalid right catalog".to_string(),
+                }
+            })?;
+            let left_catalog = binfiddle::nn::Catalog::from_route(
+                Some(left_path),
+                None,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let right_catalog = binfiddle::nn::Catalog::from_route(
+                Some(right_path),
+                None,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let policy = DecodePolicy::parse(policy)?;
+            let report = compare::DiffReport::compare(
+                &left_catalog,
+                &right_catalog,
+                *decoded,
+                policy,
+                &budget,
+            )?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                report.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(report.text().as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Split {
+            catalog,
+            pack,
+            by: _,
+            storage,
+            out_dir,
+            report_format,
+        } => {
+            use binfiddle::nn::split_cmd;
+            let catalog_path = nn_path_arg(Some(catalog.as_str()), "split")?.ok_or_else(|| {
+                NnError::InvalidRequest {
+                    message: "invalid catalog".to_string(),
+                }
+            })?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                Some(catalog_path),
+                None,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let loaded_pack = binfiddle::nn::packs::Pack::load(Path::new(pack))?;
+            let recognition = binfiddle::nn::packs::Recognition::recognize(&loaded_pack, &loaded)?;
+            let materialize = storage == "materialized";
+            let report = split_cmd::SplitReport::split_by_layer(
+                &loaded,
+                &loaded_pack,
+                &recognition,
+                materialize,
+                Path::new(out_dir),
+                &budget,
+            )?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                report.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(report.text().as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Fingerprint {
+            catalog,
+            compare,
+            threshold,
+            report_format,
+        } => {
+            use binfiddle::nn::compare;
+            let catalog_path =
+                nn_path_arg(Some(catalog.as_str()), "fingerprint")?.ok_or_else(|| {
+                    NnError::InvalidRequest {
+                        message: "invalid catalog".to_string(),
+                    }
+                })?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                Some(catalog_path),
+                None,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            if let Some(right) = compare.as_deref() {
+                // Evidence-graph mode: exact + structural + sampled-block
+                // similarity edges between the two catalogs.
+                let right_path = nn_path_arg(Some(right), "fingerprint")?.ok_or_else(|| {
+                    NnError::InvalidRequest {
+                        message: "invalid comparison catalog".to_string(),
+                    }
+                })?;
+                let right_catalog = binfiddle::nn::Catalog::from_route(
+                    Some(right_path),
+                    None,
+                    &DiscoverOptions::default(),
+                    &budget,
+                )?;
+                let graph = binfiddle::nn::approx::EvidenceGraph::build(
+                    &loaded,
+                    &right_catalog,
+                    *threshold,
+                    &budget,
+                )?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    graph.envelope()?.write_json(&mut out)?;
+                } else {
+                    out.write_all(graph.text().as_bytes())?;
+                }
+                out.flush()?;
+                return Ok(());
+            }
+            let records = compare::fingerprints(&loaded, &budget)?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                compare::fingerprints_envelope(&loaded, &records)?.write_json(&mut out)?;
+            } else {
+                out.write_all(compare::fingerprints_text(&records).as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Partition {
+            catalog,
+            pack,
+            stages,
+            report_format,
+        } => {
+            use binfiddle::nn::partition;
+            let catalog_path =
+                nn_path_arg(Some(catalog.as_str()), "partition")?.ok_or_else(|| {
+                    NnError::InvalidRequest {
+                        message: "invalid catalog".to_string(),
+                    }
+                })?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                Some(catalog_path),
+                None,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let loaded_pack = binfiddle::nn::packs::Pack::load(Path::new(pack))?;
+            let recognition = binfiddle::nn::packs::Recognition::recognize(&loaded_pack, &loaded)?;
+            let plan = partition::PartitionPlan::plan(&loaded, &recognition, *stages)?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                plan.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(plan.text().as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Carve {
+            target,
+            report_format,
+        } => {
+            use binfiddle::nn::carve;
+            let target_path = nn_path_arg(Some(target.as_str()), "carve")?.ok_or_else(|| {
+                NnError::InvalidRequest {
+                    message: "invalid target".to_string(),
+                }
+            })?;
+            let findings = carve::carve(target_path, &budget)?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                carve::carve_envelope(target_path, &findings)?.write_json(&mut out)?;
+            } else {
+                out.write_all(carve::carve_text(target_path, &findings).as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Research { command } => {
+            match command {
+                ResearchCommand::Align {
+                    left,
+                    right,
+                    report_format,
+                } => {
+                    use binfiddle::nn::research;
+                    let left_path = nn_path_arg(Some(left.as_str()), "research align")?
+                        .ok_or_else(|| NnError::InvalidRequest {
+                            message: "invalid left catalog".to_string(),
+                        })?;
+                    let right_path = nn_path_arg(Some(right.as_str()), "research align")?
+                        .ok_or_else(|| NnError::InvalidRequest {
+                            message: "invalid right catalog".to_string(),
+                        })?;
+                    let left_catalog = binfiddle::nn::Catalog::from_route(
+                        Some(left_path),
+                        None,
+                        &DiscoverOptions::default(),
+                        &budget,
+                    )?;
+                    let right_catalog = binfiddle::nn::Catalog::from_route(
+                        Some(right_path),
+                        None,
+                        &DiscoverOptions::default(),
+                        &budget,
+                    )?;
+                    let report =
+                        research::AlignmentReport::align(&left_catalog, &right_catalog, &budget)?;
+                    guard.propagate(&cancel);
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    if report_format == "json" {
+                        report.envelope()?.write_json(&mut out)?;
+                    } else {
+                        out.write_all(report.text().as_bytes())?;
+                    }
+                    out.flush()?;
+                }
+            }
+        }
+        NnCommand::Adapter { command } => match command {
+            AdapterCommand::Inspect {
+                catalog,
+                report_format,
+            } => {
+                use binfiddle::nn::adapter;
+                let catalog_path = nn_path_arg(Some(catalog.as_str()), "adapter inspect")?
+                    .ok_or_else(|| NnError::InvalidRequest {
+                        message: "invalid catalog".to_string(),
+                    })?;
+                let loaded = binfiddle::nn::Catalog::from_route(
+                    Some(catalog_path),
+                    None,
+                    &DiscoverOptions::default(),
+                    &budget,
+                )?;
+                let report = adapter::AdapterReport::inspect(&loaded)?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    report.envelope(&loaded)?.write_json(&mut out)?;
+                } else {
+                    out.write_all(report.text().as_bytes())?;
+                }
+                out.flush()?;
+            }
+        },
+        NnCommand::Tokenizer { command } => {
+            match command {
+                TokenizerCommand::Inspect {
+                    package,
+                    report_format,
+                } => {
+                    use binfiddle::nn::tokenizer;
+                    let package_path = nn_path_arg(Some(package.as_str()), "tokenizer inspect")?
+                        .ok_or_else(|| NnError::InvalidRequest {
+                            message: "invalid package directory".to_string(),
+                        })?;
+                    let assets = tokenizer::classify_assets(package_path)?;
+                    let summary = if package_path.join("tokenizer.json").exists() {
+                        Some(tokenizer::inspect_tokenizer_json(
+                            &package_path.join("tokenizer.json"),
+                        )?)
+                    } else {
+                        None
+                    };
+                    guard.propagate(&cancel);
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    if report_format == "json" {
+                        tokenizer::inspect_envelope(package_path, &assets, summary.as_ref())?
+                            .write_json(&mut out)?;
+                    } else {
+                        out.write_all(
+                            tokenizer::inspect_text(&assets, summary.as_ref()).as_bytes(),
+                        )?;
+                    }
+                    out.flush()?;
+                }
+                TokenizerCommand::Diff {
+                    left,
+                    right,
+                    report_format,
+                } => {
+                    use binfiddle::nn::tokenizer;
+                    let left_path = nn_path_arg(Some(left.as_str()), "tokenizer diff")?
+                        .ok_or_else(|| NnError::InvalidRequest {
+                            message: "invalid left tokenizer".to_string(),
+                        })?;
+                    let right_path = nn_path_arg(Some(right.as_str()), "tokenizer diff")?
+                        .ok_or_else(|| NnError::InvalidRequest {
+                            message: "invalid right tokenizer".to_string(),
+                        })?;
+                    let diff = tokenizer::diff_tokenizer_json(left_path, right_path)?;
+                    guard.propagate(&cancel);
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    if report_format == "json" {
+                        tokenizer::diff_envelope(&diff)?.write_json(&mut out)?;
+                    } else {
+                        out.write_all(tokenizer::diff_text(&diff).as_bytes())?;
+                    }
+                    out.flush()?;
+                }
+            }
+        }
+
+        NnCommand::Impact {
+            catalog,
+            span,
+            offset,
+            plan,
+            report_format,
+        } => {
+            use binfiddle::nn::impact;
+            let catalog_path = nn_path_arg(Some(catalog.as_str()), "impact")?.ok_or_else(|| {
+                NnError::InvalidRequest {
+                    message: "invalid catalog".to_string(),
+                }
+            })?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                Some(catalog_path),
+                None,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let report = if let Some(plan_path) = plan.as_deref() {
+                impact::ImpactReport::for_edit_plan(&loaded, Path::new(plan_path), &budget)?
+            } else if let Some(offset_text) = offset.as_deref() {
+                let at = parse_nn_offset(offset_text)?;
+                impact::ImpactReport::for_span(&loaded, at, at + 1, &budget)?
+            } else if let Some(span_text) = span.as_deref() {
+                let (start, end) = parse_nn_span(span_text)?;
+                impact::ImpactReport::for_span(&loaded, start, end, &budget)?
+            } else {
+                return Err(NnError::InvalidRequest {
+                    message: "nn impact requires one of --span, --offset, or --plan".to_string(),
+                });
+            };
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                report.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(report.text().as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Validate {
+            catalog,
+            report_format,
+        } => {
+            use binfiddle::nn::validate;
+            let catalog_path = nn_path_arg(catalog.as_deref(), "validate")?;
+            let input_path = nn_path_arg(input, "validate")?;
+            let root = catalog_path
+                .or(input_path)
+                .ok_or_else(|| NnError::InvalidRequest {
+                    message: "nn validate requires --catalog <file> or --input <file-or-dir>"
+                        .to_string(),
+                })?;
+            let report = validate::ValidationReport::validate(root, &budget)?;
+            let invalid = !report.all_valid;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                report.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(report.text().as_bytes())?;
+            }
+            out.flush()?;
+            if invalid {
+                return Err(NnError::ValidationFailed {
+                    detail: "one or more sources failed structural validation".to_string(),
+                });
+            }
+        }
+    }
+
+    // One final checkpoint so cancellation during output is still reported.
+    guard.propagate(&cancel);
+    budget.checkpoint()?;
+    Ok(())
+}
+
+/// Parse a file offset for `nn locate`: decimal or 0x-prefixed hex.
+fn parse_nn_offset(text: &str) -> std::result::Result<u64, NnError> {
+    let trimmed = text.trim();
+    let (radix, digits) = match trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        Some(hex) => (16, hex),
+        None => (10, trimmed),
+    };
+    u64::from_str_radix(digits, radix).map_err(|_| NnError::InvalidRequest {
+        message: format!("invalid offset {} (use decimal or 0x hex)", text),
+    })
+}
+
+/// Parse a file span `START..END` (decimal or 0x hex per bound; a bare
+/// bound is a single offset span of one byte).
+fn parse_nn_span(text: &str) -> std::result::Result<(u64, u64), NnError> {
+    let parse_bound = |raw: &str| -> std::result::Result<u64, NnError> {
+        let raw = raw.trim();
+        let (radix, digits) = match raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+            Some(hex) => (16, hex),
+            None => (10, raw),
+        };
+        u64::from_str_radix(digits, radix).map_err(|_| NnError::InvalidRequest {
+            message: format!("invalid span bound {raw:?} (use decimal or 0x hex)"),
+        })
+    };
+    if let Some((start, end)) = text.split_once("..") {
+        let (start, end) = (parse_bound(start)?, parse_bound(end)?);
+        if end <= start {
+            return Err(NnError::InvalidRequest {
+                message: format!("span [{start}, {end}) must have end after start"),
+            });
+        }
+        Ok((start, end))
+    } else {
+        let at = parse_bound(text)?;
+        Ok((at, at + 1))
+    }
+}
+
+/// Convert an NN command path argument, rejecting stdin (NN commands need
+/// seekable files or directories).
+fn nn_path_arg<'a>(
+    value: Option<&'a str>,
+    command: &str,
+) -> std::result::Result<Option<&'a std::path::Path>, NnError> {
+    match value {
+        None => Ok(None),
+        Some("-") => Err(NnError::InvalidRequest {
+            message: format!("nn {command} requires seekable inputs; stdin is not supported"),
+        }),
+        Some(path) => Ok(Some(std::path::Path::new(path))),
+    }
 }
 
 fn main() -> Result<()> {
@@ -333,6 +2319,20 @@ fn main() -> Result<()> {
             cli.output.as_deref(),
             cli.silent,
         );
+    }
+
+    // Handle nn commands early: they own their own input handling and do not
+    // use the binary-data loading path below.
+    if let Some(Commands::Nn { command }) = &cli.command {
+        if source_is_process_memory {
+            eprintln!("error: invalid request: --process-self/--pid cannot be used with nn");
+            std::process::exit(2);
+        }
+        if let Err(err) = run_nn(command, cli.input.as_deref()) {
+            eprintln!("error: {err}");
+            std::process::exit(err.exit_code());
+        }
+        return Ok(());
     }
 
     // Handle --list-regions before loading binary data.
@@ -1219,6 +3219,10 @@ fn main() -> Result<()> {
         }
         Commands::Chain { .. } => {
             // Chain is handled before this match.
+            unreachable!()
+        }
+        Commands::Nn { .. } => {
+            // NN commands are handled before binary-data loading.
             unreachable!()
         }
     };
