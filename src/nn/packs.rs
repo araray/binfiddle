@@ -342,7 +342,7 @@ pub enum PatternToken {
     Capture(String),
 }
 
-fn validate_pattern(pattern: &str) -> Result<Vec<PatternToken>, NnError> {
+pub fn validate_pattern(pattern: &str) -> Result<Vec<PatternToken>, NnError> {
     let tokens = compile_pattern(pattern)?;
     if tokens.is_empty() {
         return Err(NnError::MalformedInput {
@@ -361,7 +361,7 @@ fn validate_pattern(pattern: &str) -> Result<Vec<PatternToken>, NnError> {
     Ok(tokens)
 }
 
-fn compile_pattern(pattern: &str) -> Result<Vec<PatternToken>, NnError> {
+pub fn compile_pattern(pattern: &str) -> Result<Vec<PatternToken>, NnError> {
     let mut tokens = Vec::new();
     let mut literal = String::new();
     let mut chars = pattern.chars().peekable();

@@ -695,6 +695,16 @@ binfiddle nn research align --left v1.nn.json --right v2.nn.json
 # bundles) + a root manifest with coverage and byte accounting
 binfiddle nn split --catalog model.nn.json --pack qwen3-next/pack.yaml \
     --by layer --storage materialized --out-dir split/
+
+# What does this byte span touch? (owners, read deps, influence sets)
+binfiddle nn impact --catalog model.nn.json --offset 0x10F6390
+
+# Structural validation with precise per-source verdicts (exit 7 on defects)
+binfiddle -i model-dir/ nn validate
+
+# Lint a pack statically; scaffold a provisional draft from a catalog
+binfiddle nn pack lint --pack qwen3-next/pack.yaml
+binfiddle nn pack scaffold --catalog model.nn.json
 ```
 
 #### Process memory — Linux experimental

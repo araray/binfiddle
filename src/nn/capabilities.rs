@@ -113,7 +113,10 @@ pub fn capabilities() -> Vec<Capability> {
             "nn.analyze",
             "bounded numerical inspection: metadata/sample/full scans with coverage records, Welford statistics, non-finite categories, overflow-safe L2 norms, declared-edge histograms, reference-error metrics with zero-denominator policies, and Q4_0 block views",
         ),
-        Capability::unavailable("nn.impact", "impact analysis is not implemented yet"),
+        Capability::implemented(
+            "nn.impact",
+            "span/edit-plan impact analysis: owning tensors, decode dependencies, and numerical influence sets (a Q4_0 scale byte influences all 32 elements of its block; a code nibble exactly one); behavioral consequences are NOT predicted",
+        ),
         Capability::implemented(
             "nn.split",
             "one-command layer decomposition: per-layer child selections (synthesized, rebindable selector expressions), reference plans or materialized per-layer bundles, and a root split.json manifest with the coverage partition (assigned/shared/unresolved) and member-vs-unique byte accounting — payloads never duplicated by navigation overlap",
@@ -153,11 +156,14 @@ pub fn capabilities() -> Vec<Capability> {
         ),
         Capability::implemented(
             "nn.pack",
-            "declarative model packs: id-verified YAML manifests, name-pattern bindings with capture groups, shape expressions over configuration parameters, recognition with contradiction retention, and architecture views in ls/show",
+            "declarative model packs: id-verified YAML manifests, name-pattern bindings with capture groups, shape expressions over configuration parameters, recognition with contradiction retention, architecture views in ls/show, static lint (duplicate components, expression evaluation, schedule arity, all-capture patterns; exit 7 on errors) and provisional scaffolding from observed catalogs (every suggestion labeled heuristic)",
         ),
         Capability::unavailable("nn.replay", "runtime replay is not implemented yet"),
         Capability::unavailable("nn.capture", "runtime capture is not implemented yet"),
-        Capability::unavailable("nn.validate", "artifact validation is not implemented yet"),
+        Capability::implemented(
+            "nn.validate",
+            "structural artifact validation with precise per-source verdicts (structurally_valid_for_reader / unsupported_feature / invalid / incomplete), error-severity findings surfaced, behavior_not_evaluated stated; exit 7 when anything fails",
+        ),
     ]
 }
 

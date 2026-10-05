@@ -746,6 +746,40 @@ enum NnCommand {
         command: ResearchCommand,
     },
 
+    /// Report what a byte span or edit plan touches (dependencies, influence)
+    Impact {
+        /// Saved catalog file
+        #[arg(long)]
+        catalog: String,
+
+        /// File span START..END (decimal or 0x hex)
+        #[arg(long, conflicts_with = "impact_offset", conflicts_with = "impact_plan")]
+        span: Option<String>,
+
+        /// Single file offset (decimal or 0x hex)
+        #[arg(long, id = "impact_offset", conflicts_with_all = ["span", "impact_plan"])]
+        offset: Option<String>,
+
+        /// Saved edit plan file
+        #[arg(long, id = "impact_plan", conflicts_with_all = ["span", "impact_offset"])]
+        plan: Option<String>,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Structural artifact validation with precise per-source verdicts
+    Validate {
+        /// Saved catalog file (use the root -i option to discover instead)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
     /// Adapter checkpoint operations
     Adapter {
         #[command(subcommand)]
@@ -831,6 +865,24 @@ enum PackCommand {
         /// Report format: text, json
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
         report_format: String,
+    },
+
+    /// Lint a pack statically (no model involved)
+    Lint {
+        /// Pack file or directory (pack.yaml)
+        #[arg(long)]
+        pack: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Scaffold a provisional pack from an observed catalog
+    Scaffold {
+        /// Catalog file to derive patterns from
+        #[arg(long)]
+        catalog: String,
     },
 }
 
@@ -1558,6 +1610,48 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 }
                 out.flush()?;
             }
+            PackCommand::Lint {
+                pack,
+                report_format,
+            } => {
+                use binfiddle::nn::profile;
+                let loaded_pack = binfiddle::nn::packs::Pack::load(Path::new(pack))?;
+                let findings = profile::lint_pack(&loaded_pack);
+                let has_errors = findings.iter().any(|f| f.severity == "error");
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    profile::lint_envelope(&loaded_pack, &findings)?.write_json(&mut out)?;
+                } else {
+                    out.write_all(profile::lint_text(&loaded_pack, &findings).as_bytes())?;
+                }
+                out.flush()?;
+                if has_errors {
+                    return Err(NnError::ValidationFailed {
+                        detail: "pack lint found error-severity findings".to_string(),
+                    });
+                }
+            }
+            PackCommand::Scaffold { catalog } => {
+                use binfiddle::nn::profile;
+                let catalog_path = nn_path_arg(Some(catalog.as_str()), "profile scaffold")?
+                    .ok_or_else(|| NnError::InvalidRequest {
+                        message: "invalid catalog".to_string(),
+                    })?;
+                let loaded = binfiddle::nn::Catalog::from_route(
+                    Some(catalog_path),
+                    None,
+                    &DiscoverOptions::default(),
+                    &budget,
+                )?;
+                let scaffold = profile::scaffold_pack(&loaded)?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                out.write_all(scaffold.as_bytes())?;
+                out.flush()?;
+            }
         },
         NnCommand::Edit { command } => {
             use binfiddle::nn::edit;
@@ -2067,6 +2161,79 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 }
             }
         }
+
+        NnCommand::Impact {
+            catalog,
+            span,
+            offset,
+            plan,
+            report_format,
+        } => {
+            use binfiddle::nn::impact;
+            let catalog_path = nn_path_arg(Some(catalog.as_str()), "impact")?.ok_or_else(|| {
+                NnError::InvalidRequest {
+                    message: "invalid catalog".to_string(),
+                }
+            })?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                Some(catalog_path),
+                None,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let report = if let Some(plan_path) = plan.as_deref() {
+                impact::ImpactReport::for_edit_plan(&loaded, Path::new(plan_path), &budget)?
+            } else if let Some(offset_text) = offset.as_deref() {
+                let at = parse_nn_offset(offset_text)?;
+                impact::ImpactReport::for_span(&loaded, at, at + 1, &budget)?
+            } else if let Some(span_text) = span.as_deref() {
+                let (start, end) = parse_nn_span(span_text)?;
+                impact::ImpactReport::for_span(&loaded, start, end, &budget)?
+            } else {
+                return Err(NnError::InvalidRequest {
+                    message: "nn impact requires one of --span, --offset, or --plan".to_string(),
+                });
+            };
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                report.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(report.text().as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Validate {
+            catalog,
+            report_format,
+        } => {
+            use binfiddle::nn::validate;
+            let catalog_path = nn_path_arg(catalog.as_deref(), "validate")?;
+            let input_path = nn_path_arg(input, "validate")?;
+            let root = catalog_path
+                .or(input_path)
+                .ok_or_else(|| NnError::InvalidRequest {
+                    message: "nn validate requires --catalog <file> or --input <file-or-dir>"
+                        .to_string(),
+                })?;
+            let report = validate::ValidationReport::validate(root, &budget)?;
+            let invalid = !report.all_valid;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                report.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(report.text().as_bytes())?;
+            }
+            out.flush()?;
+            if invalid {
+                return Err(NnError::ValidationFailed {
+                    detail: "one or more sources failed structural validation".to_string(),
+                });
+            }
+        }
     }
 
     // One final checkpoint so cancellation during output is still reported.
@@ -2088,6 +2255,33 @@ fn parse_nn_offset(text: &str) -> std::result::Result<u64, NnError> {
     u64::from_str_radix(digits, radix).map_err(|_| NnError::InvalidRequest {
         message: format!("invalid offset {} (use decimal or 0x hex)", text),
     })
+}
+
+/// Parse a file span `START..END` (decimal or 0x hex per bound; a bare
+/// bound is a single offset span of one byte).
+fn parse_nn_span(text: &str) -> std::result::Result<(u64, u64), NnError> {
+    let parse_bound = |raw: &str| -> std::result::Result<u64, NnError> {
+        let raw = raw.trim();
+        let (radix, digits) = match raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+            Some(hex) => (16, hex),
+            None => (10, raw),
+        };
+        u64::from_str_radix(digits, radix).map_err(|_| NnError::InvalidRequest {
+            message: format!("invalid span bound {raw:?} (use decimal or 0x hex)"),
+        })
+    };
+    if let Some((start, end)) = text.split_once("..") {
+        let (start, end) = (parse_bound(start)?, parse_bound(end)?);
+        if end <= start {
+            return Err(NnError::InvalidRequest {
+                message: format!("span [{start}, {end}) must have end after start"),
+            });
+        }
+        Ok((start, end))
+    } else {
+        let at = parse_bound(text)?;
+        Ok((at, at + 1))
+    }
 }
 
 /// Convert an NN command path argument, rejecting stdin (NN commands need
