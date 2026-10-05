@@ -5,6 +5,7 @@
 pub mod adapter;
 pub mod address;
 pub mod analyze;
+pub mod approx;
 pub mod budget;
 pub mod cancel;
 pub mod capabilities;

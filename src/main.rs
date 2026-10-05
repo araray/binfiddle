@@ -665,6 +665,15 @@ enum NnCommand {
         #[arg(long)]
         catalog: String,
 
+        /// Second catalog: build an experimental evidence graph (exact,
+        /// structural, and sampled-block similarity edges)
+        #[arg(long)]
+        compare: Option<String>,
+
+        /// Similarity threshold for similar_under_mapping edges (0.0-1.0)
+        #[arg(long, default_value = "0.75")]
+        threshold: f64,
+
         /// Report format: text, json
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
         report_format: String,
@@ -1689,6 +1698,8 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
         }
         NnCommand::Fingerprint {
             catalog,
+            compare,
+            threshold,
             report_format,
         } => {
             use binfiddle::nn::compare;
@@ -1704,6 +1715,37 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 &DiscoverOptions::default(),
                 &budget,
             )?;
+            if let Some(right) = compare.as_deref() {
+                // Evidence-graph mode: exact + structural + sampled-block
+                // similarity edges between the two catalogs.
+                let right_path = nn_path_arg(Some(right), "fingerprint")?.ok_or_else(|| {
+                    NnError::InvalidRequest {
+                        message: "invalid comparison catalog".to_string(),
+                    }
+                })?;
+                let right_catalog = binfiddle::nn::Catalog::from_route(
+                    Some(right_path),
+                    None,
+                    &DiscoverOptions::default(),
+                    &budget,
+                )?;
+                let graph = binfiddle::nn::approx::EvidenceGraph::build(
+                    &loaded,
+                    &right_catalog,
+                    *threshold,
+                    &budget,
+                )?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    graph.envelope()?.write_json(&mut out)?;
+                } else {
+                    out.write_all(graph.text().as_bytes())?;
+                }
+                out.flush()?;
+                return Ok(());
+            }
             let records = compare::fingerprints(&loaded, &budget)?;
             guard.propagate(&cancel);
             let stdout = io::stdout();

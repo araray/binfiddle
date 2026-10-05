@@ -632,7 +632,7 @@ binfiddle nn edit prune --catalog model.nn.json --pack qwen3-next/pack.yaml \
     --channels 1,3 --out-model pruned.safetensors
 ```
 
-`nn diff` compares two content-verified catalogs layer by layer and never confuses the layers: package members (added/removed), descriptor changes (shape/encoding), encoded-content equality by payload digest, and — crucially — the repack distinction (identical bytes at different offsets is a repack, not a content change). Missing tensors stay visible as unmatched; a missing tensor is never a zero tensor. Optional decoded comparison applies declared NaN/signed-zero policies and reports unequal counts. `nn fingerprint` emits exact content-identity records (canonical digest over name+shape+encoding+payload) — evidence, never lineage claims.
+`nn diff` compares two content-verified catalogs layer by layer and never confuses the layers: package members (added/removed), descriptor changes (shape/encoding), encoded-content equality by payload digest, and — crucially — the repack distinction (identical bytes at different offsets is a repack, not a content change). Missing tensors stay visible as unmatched; a missing tensor is never a zero tensor. Optional decoded comparison applies declared NaN/signed-zero policies and reports unequal counts. `nn fingerprint` emits exact content-identity records (canonical digest over name+shape+encoding+payload) — evidence, never lineage claims. With `--compare`, it additionally builds an **experimental evidence graph**: exact-payload, structural, and sampled-block similarity edges, each carrying method/version/threshold/score records. Sampled fingerprints digest a fixed number of evenly spaced 64 KiB blocks — they find candidate relationships cheaply but never certify unsampled bytes, and a false-match analysis on a documented synthetic corpus backs the default threshold.
 
 ```bash
 # Layered diff of two models
@@ -644,6 +644,10 @@ binfiddle nn diff --left v1.nn.json --right v2.nn.json \
 
 # Exact fingerprints (stable across re-discovery of the same bytes)
 binfiddle nn fingerprint --catalog v1.nn.json
+
+# Experimental evidence graph: exact + structural + sampled-block
+# similarity edges between two catalogs, with method, threshold, and score
+binfiddle nn fingerprint --catalog v1.nn.json --compare v2.nn.json --threshold 0.75
 ```
 
 `nn partition` plans contiguous layer groups per stage balanced by encoded weight bytes — a static estimate that states exactly what it includes (layer weight bytes) and excludes (activations, workspace, state, transfers, all runtime behavior). Unlayered tensors (embeddings, norms, heads) are reported, never silently distributed. `nn carve` scans raw files for embedded SafeTensors/GGUF containers, validates candidates structurally, and reports spans with confidence labels.

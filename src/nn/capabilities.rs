@@ -126,7 +126,7 @@ pub fn capabilities() -> Vec<Capability> {
         ),
         Capability::implemented(
             "nn.fingerprint",
-            "exact content fingerprints (canonical digest of name+shape+encoding+payload) with method statements; evidence records, no lineage or chronology claims",
+            "exact content fingerprints (canonical digest of name+shape+encoding+payload) with method statements; with --compare, an experimental evidence graph adds exact_payload_match / same_structure / similar_under_mapping edges from sampled-block fingerprints (deterministic positions, method/version/threshold/score records, false-match analysis on a synthetic corpus, unsampled-bytes limitation stated); no lineage or chronology claims",
         ),
         Capability::implemented(
             "nn.adapter",
