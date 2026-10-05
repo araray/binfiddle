@@ -167,9 +167,9 @@ mod tests {
     ///
     /// Checks, in order:
     /// - The `CARGO_BIN_EXE_binfiddle` environment variable set by Cargo for integration tests.
-    /// - The `target/debug/binfiddle` and `target/release/binfiddle` paths relative to the
+    /// - The `target/{debug,release}/binfiddle[.exe]` paths relative to the
     ///   crate manifest directory (works for both `cargo test` and `cargo test --release`).
-    /// - The `binfiddle` executable on `PATH`.
+    /// - The `binfiddle[.exe]` executable on `PATH`.
     fn find_bin_fiddle_binary() -> Option<std::path::PathBuf> {
         if let Ok(path) = std::env::var("CARGO_BIN_EXE_binfiddle") {
             let p = std::path::PathBuf::from(path);
@@ -178,13 +178,16 @@ mod tests {
             }
         }
 
+        // Windows artifacts carry the .exe suffix.
+        let exe_name = if cfg!(windows) {
+            "binfiddle.exe"
+        } else {
+            "binfiddle"
+        };
         let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let candidates = [
-            manifest_dir.join("target").join("debug").join("binfiddle"),
-            manifest_dir
-                .join("target")
-                .join("release")
-                .join("binfiddle"),
+            manifest_dir.join("target").join("debug").join(exe_name),
+            manifest_dir.join("target").join("release").join(exe_name),
         ];
         for candidate in &candidates {
             if candidate.exists() {
@@ -195,7 +198,7 @@ mod tests {
         // Fall back to PATH.
         std::env::var_os("PATH").and_then(|paths| {
             std::env::split_paths(&paths)
-                .map(|p| p.join("binfiddle"))
+                .map(|p| p.join(exe_name))
                 .find(|p| p.exists())
         })
     }

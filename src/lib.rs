@@ -479,6 +479,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn test_read_process_self() {
         // A static with a known magic value so we can look it up in /proc/self/mem.
         static TEST_DATA: [u8; 8] = *b"BINFIDL!";
@@ -504,6 +505,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn test_read_process_by_pid() {
         static TEST_DATA: [u8; 8] = *b"PIDMEM!!";
         let address = &TEST_DATA as *const _ as u64;
