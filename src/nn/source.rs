@@ -31,6 +31,10 @@ const STREAM_CHUNK: usize = 8 * 1024 * 1024;
 pub struct BoundedFile {
     file: File,
     length: u64,
+    /// Absolute offset of subview position 0 (0 for a whole-file reader).
+    base: u64,
+    /// Total length of the underlying file (for subview bounds).
+    file_length: u64,
 }
 
 impl BoundedFile {
@@ -39,7 +43,45 @@ impl BoundedFile {
     pub fn open(path: &Path) -> Result<BoundedFile, NnError> {
         let file = File::open(path)?;
         let length = file.metadata()?.len();
-        Ok(BoundedFile { file, length })
+        Ok(BoundedFile {
+            file,
+            length,
+            base: 0,
+            file_length: length,
+        })
+    }
+
+    /// A reader over the absolute byte range `[base, base + length)` of the
+    /// same file: position 0 of the subview is `base`, and its `length()`
+    /// is the subview length. Used by carving to validate embedded
+    /// containers at their found offsets with the ordinary readers.
+    pub fn subview(&self, base: u64, length: u64) -> Result<BoundedFile, NnError> {
+        if base
+            .checked_add(length)
+            .ok_or_else(|| NnError::InvalidRequest {
+                message: format!("subview [{base}, +{length}) overflows u64"),
+            })?
+            > self.file_length
+        {
+            return Err(NnError::InvalidRequest {
+                message: format!(
+                    "subview [{base}, {}) exceeds the file length {}",
+                    base + length,
+                    self.file_length
+                ),
+            });
+        }
+        Ok(BoundedFile {
+            file: self.file.try_clone()?,
+            length,
+            base,
+            file_length: self.file_length,
+        })
+    }
+
+    /// The absolute offset of subview position 0.
+    pub fn base(&self) -> u64 {
+        self.base
     }
 
     /// The length observed at open time.
@@ -51,11 +93,11 @@ impl BoundedFile {
     /// A change is reported as `SOURCE_CHANGED`.
     pub fn verify_length(&self, path: &Path) -> Result<(), NnError> {
         let current = std::fs::metadata(path)?.len();
-        if current != self.length {
+        if current != self.file_length {
             return Err(NnError::SourceChanged {
                 detail: format!(
                     "source length changed during operation: observed {}, now {}",
-                    self.length, current
+                    self.file_length, current
                 ),
             });
         }
@@ -84,7 +126,7 @@ impl BoundedFile {
             });
         }
         let mut file = &self.file;
-        file.seek(SeekFrom::Start(offset))?;
+        file.seek(SeekFrom::Start(self.base + offset))?;
         read_exact_short_fail(&mut file, buf).map_err(|_| NnError::SourceChanged {
             detail: format!(
                 "short read at offset {} (expected {} bytes): source changed or truncated",

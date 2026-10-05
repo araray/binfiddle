@@ -646,6 +646,16 @@ binfiddle nn diff --left v1.nn.json --right v2.nn.json \
 binfiddle nn fingerprint --catalog v1.nn.json
 ```
 
+`nn partition` plans contiguous layer groups per stage balanced by encoded weight bytes — a static estimate that states exactly what it includes (layer weight bytes) and excludes (activations, workspace, state, transfers, all runtime behavior). Unlayered tensors (embeddings, norms, heads) are reported, never silently distributed. `nn carve` scans raw files for embedded SafeTensors/GGUF containers, validates candidates structurally, and reports spans with confidence labels.
+
+```bash
+# Plan a 2-stage split of a layered model
+binfiddle nn partition --catalog model.nn.json --pack qwen3-next/pack.yaml --stages 2
+
+# Carve containers out of a disk image or process dump
+binfiddle nn carve --target disk.img
+```
+
 #### Process memory — Linux experimental
 
 Read memory from the current process or any same-user process via `/proc/<pid>/mem`, list mapped memory regions, and write back to the current process with an explicit opt-in.

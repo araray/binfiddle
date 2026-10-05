@@ -669,6 +669,36 @@ enum NnCommand {
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
         report_format: String,
     },
+
+    /// Plan contiguous layer groups per stage (static byte estimates only)
+    Partition {
+        /// Saved catalog file
+        #[arg(long)]
+        catalog: String,
+
+        /// Model pack with layered components
+        #[arg(long)]
+        pack: String,
+
+        /// Number of stages
+        #[arg(long, default_value = "2")]
+        stages: usize,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Scan a raw file for embedded model containers
+    Carve {
+        /// Raw file to scan
+        #[arg(long)]
+        target: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1627,6 +1657,59 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 compare::fingerprints_envelope(&loaded, &records)?.write_json(&mut out)?;
             } else {
                 out.write_all(compare::fingerprints_text(&records).as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Partition {
+            catalog,
+            pack,
+            stages,
+            report_format,
+        } => {
+            use binfiddle::nn::partition;
+            let catalog_path =
+                nn_path_arg(Some(catalog.as_str()), "partition")?.ok_or_else(|| {
+                    NnError::InvalidRequest {
+                        message: "invalid catalog".to_string(),
+                    }
+                })?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                Some(catalog_path),
+                None,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let loaded_pack = binfiddle::nn::packs::Pack::load(Path::new(pack))?;
+            let recognition = binfiddle::nn::packs::Recognition::recognize(&loaded_pack, &loaded)?;
+            let plan = partition::PartitionPlan::plan(&loaded, &recognition, *stages)?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                plan.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(plan.text().as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Carve {
+            target,
+            report_format,
+        } => {
+            use binfiddle::nn::carve;
+            let target_path = nn_path_arg(Some(target.as_str()), "carve")?.ok_or_else(|| {
+                NnError::InvalidRequest {
+                    message: "invalid target".to_string(),
+                }
+            })?;
+            let findings = carve::carve(target_path, &budget)?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                carve::carve_envelope(target_path, &findings)?.write_json(&mut out)?;
+            } else {
+                out.write_all(carve::carve_text(target_path, &findings).as_bytes())?;
             }
             out.flush()?;
         }

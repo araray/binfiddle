@@ -131,6 +131,14 @@ pub fn capabilities() -> Vec<Capability> {
             "exact content fingerprints (canonical digest of name+shape+encoding+payload) with method statements; evidence records, no lineage or chronology claims",
         ),
         Capability::implemented(
+            "nn.partition",
+            "static execution partition planning: contiguous layer groups balanced by encoded weight bytes (optimal max-stage DP), unlayered tensors reported separately, estimates state exactly what they include and exclude — no runtime, transfer, or speedup claims",
+        ),
+        Capability::implemented(
+            "nn.carve",
+            "artifact carving: scan raw files for embedded SafeTensors/GGUF containers, validate candidates structurally on exact subviews, and report spans with verified/candidate confidence labels — no model validity or recoverability claims",
+        ),
+        Capability::implemented(
             "nn.pack",
             "declarative model packs: id-verified YAML manifests, name-pattern bindings with capture groups, shape expressions over configuration parameters, recognition with contradiction retention, and architecture views in ls/show",
         ),
