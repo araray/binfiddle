@@ -79,7 +79,7 @@ pub fn capabilities() -> Vec<Capability> {
         ),
         Capability::implemented(
             "nn.discover",
-            "descriptor-only inventory of SafeTensors and GGUF files and directories; optional --out-catalog persistence",
+            "descriptor-only inventory of SafeTensors, GGUF, and ONNX files and directories; optional --out-catalog persistence",
         ),
         Capability::implemented(
             "nn.ls",

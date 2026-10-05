@@ -188,6 +188,19 @@ pub fn layout_for_encoding(encoding: &str) -> TensorLayout {
         "safetensors.I8" => TensorLayout::Scalar(ScalarCodec::I8),
         "safetensors.U8" => TensorLayout::Scalar(ScalarCodec::U8),
         "safetensors.BOOL" => TensorLayout::Scalar(ScalarCodec::Bool),
+        // ONNX dtypes with exact codec counterparts. Wide unsigned types
+        // (uint16/32/64) and strings have no exact scalar codec and stay
+        // Unknown — descriptor-visible, addressing unsupported.
+        "onnx.float" => TensorLayout::Scalar(ScalarCodec::F32),
+        "onnx.double" => TensorLayout::Scalar(ScalarCodec::F64),
+        "onnx.float16" => TensorLayout::Scalar(ScalarCodec::F16),
+        "onnx.bfloat16" => TensorLayout::Scalar(ScalarCodec::Bf16),
+        "onnx.int64" => TensorLayout::Scalar(ScalarCodec::I64),
+        "onnx.int32" => TensorLayout::Scalar(ScalarCodec::I32),
+        "onnx.int16" => TensorLayout::Scalar(ScalarCodec::I16),
+        "onnx.int8" => TensorLayout::Scalar(ScalarCodec::I8),
+        "onnx.uint8" => TensorLayout::Scalar(ScalarCodec::U8),
+        "onnx.bool" => TensorLayout::Scalar(ScalarCodec::Bool),
         "ggml.q4_0" => TensorLayout::Q4_0,
         _ => TensorLayout::Unknown,
     }

@@ -6,6 +6,7 @@
 //! visible descriptor) instead of erasing readable evidence.
 
 pub mod gguf;
+pub mod onnx;
 pub mod safetensors;
 
 use crate::nn::error::NnError;
@@ -171,6 +172,21 @@ pub fn encoding_decode_supported(encoding_id: &str) -> bool {
     }
     if let Some(name) = encoding_id.strip_prefix("ggml.") {
         return matches!(name, "f32" | "f16");
+    }
+    if let Some(name) = encoding_id.strip_prefix("onnx.") {
+        return matches!(
+            name,
+            "float"
+                | "double"
+                | "float16"
+                | "bfloat16"
+                | "int64"
+                | "int32"
+                | "int16"
+                | "int8"
+                | "uint8"
+                | "bool"
+        );
     }
     false
 }

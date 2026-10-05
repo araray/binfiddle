@@ -485,7 +485,7 @@ binfiddle nn capabilities
 binfiddle nn capabilities --report-format json
 ```
 
-`nn discover` inventories supported model artifacts without reading payload bytes and without executing model code. It recognizes SafeTensors and GGUF (v2/v3) files, scans package directories (symlinks are never followed), keeps unknown or malformed files visible as reported evidence, and emits a JSON result envelope with per-tensor descriptors and exact file-qualified payload spans.
+`nn discover` inventories supported model artifacts without reading payload bytes and without executing model code. It recognizes SafeTensors, GGUF (v2/v3), and ONNX (protobuf, descriptor tier) files, scans package directories (symlinks are never followed), keeps unknown or malformed files visible as reported evidence, and emits a JSON result envelope with per-tensor descriptors and exact file-qualified payload spans. ONNX initializers with `raw_data` get exact spans; external-data tensors stay visible with unresolved extents; packed protobuf fields are reported as non-contiguous storage rather than faked spans.
 
 ```bash
 # Inventory one model file (text report)

@@ -357,13 +357,19 @@ fn inventory_file(path: &Path, options: &DiscoverOptions, parent: &Budget) -> So
         }
     }
 
-    // GGUF identifies by magic; SafeTensors identifies structurally.
+    // GGUF identifies by magic; SafeTensors and ONNX identify structurally
+    // (ONNX is protobuf with a ModelProto/graph; the attempt is cheap and
+    // fails fast on non-protobuf bytes).
     let parse_result = if has_gguf_magic(&file, &budget) {
         format::gguf::inventory(&file, &budget).map(Some)
     } else {
         match format::safetensors::inventory(&file, &budget) {
             Ok(inventory) => Ok(Some(inventory)),
-            Err(NnError::MalformedInput { .. }) => Ok(None),
+            Err(NnError::MalformedInput { .. }) => match format::onnx::inventory(&file, &budget) {
+                Ok(onnx) => Ok(Some(onnx.inventory)),
+                Err(NnError::MalformedInput { .. }) => Ok(None),
+                Err(err) => Err(err),
+            },
             Err(err) => Err(err),
         }
     };
@@ -384,10 +390,10 @@ fn inventory_file(path: &Path, options: &DiscoverOptions, parent: &Budget) -> So
             }
         }
         Ok(None) => {
-            // Not GGUF, and SafeTensors parsing rejected the structure. A
-            // plausible leading header length means this was probably a
-            // malformed or truncated SafeTensors file; otherwise it is simply
-            // unrecognized.
+            // Not GGUF, and neither SafeTensors nor ONNX parsing accepted the
+            // structure. A plausible leading header length means this was
+            // probably a malformed or truncated SafeTensors file; otherwise
+            // it is simply unrecognized.
             let looks_like_st = file.length() >= 8 && {
                 let mut buf = [0u8; 8];
                 file.read_exact_at(0, &mut buf).is_ok()
@@ -405,7 +411,7 @@ fn inventory_file(path: &Path, options: &DiscoverOptions, parent: &Budget) -> So
                 },
                 inventory: None,
                 notes: vec![
-                    "no supported container interpretation (tried gguf magic, then safetensors structure)".to_string(),
+                    "no supported container interpretation (tried gguf magic, safetensors structure, then onnx protobuf)".to_string(),
                 ],
             }
         }
