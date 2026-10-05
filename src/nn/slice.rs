@@ -565,6 +565,16 @@ pub fn apply_plan(
     let mut used_names: BTreeMap<String, ()> = BTreeMap::new();
     let mut manifest_members: Vec<Json> = Vec::new();
 
+    // Materialized bundles emit, per member, at most the encoded span copied
+    // verbatim (preserve/cover) or its decode — and every registered codec
+    // expands by strictly less than 8 bytes of output per input byte. Justify
+    // the output budget with that provable bound plus manifest overhead so
+    // real-model-sized bundles are not rejected by the generic default cap.
+    if plan.storage == StoragePolicy::Materialized {
+        let span_sum: u64 = plan.entries.iter().map(|e| e.span_length).sum();
+        budget.justify_output_bytes(span_sum.saturating_mul(8).saturating_add(1 << 20));
+    }
+
     for entry in &plan.entries {
         let Some(path) = source_files.get(&entry.source_id) else {
             return Err(NnError::SourceMissing {

@@ -488,7 +488,9 @@ without modifying inputs** (all outputs are fresh files). Every report ends
 with a `claims:` line stating exactly what it proves — and what it does not.
 
 Full guides: [docs/NN_USAGE.md](docs/NN_USAGE.md) (every command and option),
-[docs/NN_QUICK_REFERENCE.md](docs/NN_QUICK_REFERENCE.md) (one-page card).
+[docs/NN_QUICK_REFERENCE.md](docs/NN_QUICK_REFERENCE.md) (one-page card),
+and a real-model walkthrough: [docs/NN_DEEPDIVE_KOKORO.md](docs/NN_DEEPDIVE_KOKORO.md)
+(dissecting Kokoro-82M, pickle boundary to transactional edits).
 
 ```bash
 # Honest self-description of this build's capabilities

@@ -307,6 +307,21 @@ pub fn apply_prune(
     };
 
     // Build the new tensor set in catalog order (header order = file order).
+    // The rewritten file cannot exceed the original payloads plus header
+    // growth, so justify the output budget with that provable bound up front
+    // (pruned tensors only ever shrink; untouched ones copy verbatim).
+    let payload_bound: u64 = catalog
+        .tensors
+        .iter()
+        .map(|t| t.payload_length.unwrap_or(0))
+        .sum();
+    let header_bound: u64 = catalog
+        .tensors
+        .iter()
+        .map(|t| 128 + t.original_name.len() as u64)
+        .sum::<u64>()
+        .saturating_add(4096);
+    budget.justify_output_bytes(payload_bound.saturating_add(header_bound));
     struct NewTensor {
         name: String,
         dtype: String,
