@@ -635,6 +635,40 @@ enum NnCommand {
         #[command(subcommand)]
         command: EditCommand,
     },
+
+    /// Compare two catalogs layer by layer (exact, no lineage claims)
+    Diff {
+        /// Left catalog file
+        #[arg(long)]
+        left: String,
+
+        /// Right catalog file
+        #[arg(long)]
+        right: String,
+
+        /// Also compare decoded values of content-changed scalar tensors
+        #[arg(long)]
+        decoded: bool,
+
+        /// Decoded comparison policy: exact_bits, lenient
+        #[arg(long, default_value = "exact_bits", value_parser = ["exact_bits", "lenient"])]
+        policy: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Exact content fingerprints for every tensor in a catalog
+    Fingerprint {
+        /// Catalog file
+        #[arg(long)]
+        catalog: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1519,6 +1553,82 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                     out.flush()?;
                 }
             }
+        }
+        NnCommand::Diff {
+            left,
+            right,
+            decoded,
+            policy,
+            report_format,
+        } => {
+            use binfiddle::nn::compare::{self, DecodePolicy};
+            let left_path = nn_path_arg(Some(left.as_str()), "diff")?.ok_or_else(|| {
+                NnError::InvalidRequest {
+                    message: "invalid left catalog".to_string(),
+                }
+            })?;
+            let right_path = nn_path_arg(Some(right.as_str()), "diff")?.ok_or_else(|| {
+                NnError::InvalidRequest {
+                    message: "invalid right catalog".to_string(),
+                }
+            })?;
+            let left_catalog = binfiddle::nn::Catalog::from_route(
+                Some(left_path),
+                None,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let right_catalog = binfiddle::nn::Catalog::from_route(
+                Some(right_path),
+                None,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let policy = DecodePolicy::parse(policy)?;
+            let report = compare::DiffReport::compare(
+                &left_catalog,
+                &right_catalog,
+                *decoded,
+                policy,
+                &budget,
+            )?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                report.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(report.text().as_bytes())?;
+            }
+            out.flush()?;
+        }
+        NnCommand::Fingerprint {
+            catalog,
+            report_format,
+        } => {
+            use binfiddle::nn::compare;
+            let catalog_path =
+                nn_path_arg(Some(catalog.as_str()), "fingerprint")?.ok_or_else(|| {
+                    NnError::InvalidRequest {
+                        message: "invalid catalog".to_string(),
+                    }
+                })?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                Some(catalog_path),
+                None,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let records = compare::fingerprints(&loaded, &budget)?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                compare::fingerprints_envelope(&loaded, &records)?.write_json(&mut out)?;
+            } else {
+                out.write_all(compare::fingerprints_text(&records).as_bytes())?;
+            }
+            out.flush()?;
         }
     }
 

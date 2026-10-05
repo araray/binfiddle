@@ -632,6 +632,20 @@ binfiddle nn edit prune --catalog model.nn.json --pack qwen3-next/pack.yaml \
     --channels 1,3 --out-model pruned.safetensors
 ```
 
+`nn diff` compares two content-verified catalogs layer by layer and never confuses the layers: package members (added/removed), descriptor changes (shape/encoding), encoded-content equality by payload digest, and — crucially — the repack distinction (identical bytes at different offsets is a repack, not a content change). Missing tensors stay visible as unmatched; a missing tensor is never a zero tensor. Optional decoded comparison applies declared NaN/signed-zero policies and reports unequal counts. `nn fingerprint` emits exact content-identity records (canonical digest over name+shape+encoding+payload) — evidence, never lineage claims.
+
+```bash
+# Layered diff of two models
+binfiddle nn diff --left v1.nn.json --right v2.nn.json
+
+# Include decoded-value comparison under strict bit policies
+binfiddle nn diff --left v1.nn.json --right v2.nn.json \
+    --decoded --policy exact_bits
+
+# Exact fingerprints (stable across re-discovery of the same bytes)
+binfiddle nn fingerprint --catalog v1.nn.json
+```
+
 #### Process memory — Linux experimental
 
 Read memory from the current process or any same-user process via `/proc/<pid>/mem`, list mapped memory regions, and write back to the current process with an explicit opt-in.

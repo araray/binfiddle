@@ -116,13 +116,19 @@ pub fn capabilities() -> Vec<Capability> {
         Capability::unavailable("nn.impact", "impact analysis is not implemented yet"),
         Capability::unavailable("nn.split", "decomposition is not implemented yet"),
         Capability::unavailable("nn.quant", "quantization inspection is not implemented yet"),
-        Capability::unavailable("nn.diff", "model comparison is not implemented yet"),
         Capability::unavailable("nn.adapter", "adapter inspection is not implemented yet"),
-        Capability::unavailable("nn.fingerprint", "fingerprinting is not implemented yet"),
         Capability::unavailable("nn.tokenizer", "tokenizer inspection is not implemented yet"),
         Capability::implemented(
             "nn.select",
             "tensor selection by exact name, scoped name, id, or component selector through a pack (families with single/range/list/wildcard indexers; heads[N] row-range views on fused query/gate weights)",
+        ),
+        Capability::implemented(
+            "nn.diff",
+            "layered comparison of two content-verified catalogs: package member sets, descriptor changes, encoded-content equality with the repack-vs-payload distinction, optional decoded comparison with exact_bits/lenient NaN and signed-zero policies, unmatched populations visible, exact claims only — never lineage",
+        ),
+        Capability::implemented(
+            "nn.fingerprint",
+            "exact content fingerprints (canonical digest of name+shape+encoding+payload) with method statements; evidence records, no lineage or chronology claims",
         ),
         Capability::implemented(
             "nn.pack",

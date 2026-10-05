@@ -9,6 +9,7 @@ pub mod cancel;
 pub mod capabilities;
 pub mod catalog;
 pub mod codec;
+pub mod compare;
 pub mod component_selection;
 pub mod discover;
 pub mod edit;
