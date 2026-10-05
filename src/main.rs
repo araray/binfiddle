@@ -699,6 +699,61 @@ enum NnCommand {
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
         report_format: String,
     },
+
+    /// Adapter checkpoint operations
+    Adapter {
+        #[command(subcommand)]
+        command: AdapterCommand,
+    },
+
+    /// Tokenizer asset operations
+    Tokenizer {
+        #[command(subcommand)]
+        command: TokenizerCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdapterCommand {
+    /// Inspect a LoRA-style adapter checkpoint's factor pairs
+    Inspect {
+        /// Saved catalog file of the adapter checkpoint
+        #[arg(long)]
+        catalog: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum TokenizerCommand {
+    /// Inspect tokenizer assets in a package directory
+    Inspect {
+        /// Package directory containing tokenizer assets
+        #[arg(long)]
+        package: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Compare two tokenizer.json files at the vocabulary level
+    Diff {
+        /// Left tokenizer.json
+        #[arg(long)]
+        left: String,
+
+        /// Right tokenizer.json
+        #[arg(long)]
+        right: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1712,6 +1767,93 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 out.write_all(carve::carve_text(target_path, &findings).as_bytes())?;
             }
             out.flush()?;
+        }
+        NnCommand::Adapter { command } => match command {
+            AdapterCommand::Inspect {
+                catalog,
+                report_format,
+            } => {
+                use binfiddle::nn::adapter;
+                let catalog_path = nn_path_arg(Some(catalog.as_str()), "adapter inspect")?
+                    .ok_or_else(|| NnError::InvalidRequest {
+                        message: "invalid catalog".to_string(),
+                    })?;
+                let loaded = binfiddle::nn::Catalog::from_route(
+                    Some(catalog_path),
+                    None,
+                    &DiscoverOptions::default(),
+                    &budget,
+                )?;
+                let report = adapter::AdapterReport::inspect(&loaded)?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    report.envelope(&loaded)?.write_json(&mut out)?;
+                } else {
+                    out.write_all(report.text().as_bytes())?;
+                }
+                out.flush()?;
+            }
+        },
+        NnCommand::Tokenizer { command } => {
+            match command {
+                TokenizerCommand::Inspect {
+                    package,
+                    report_format,
+                } => {
+                    use binfiddle::nn::tokenizer;
+                    let package_path = nn_path_arg(Some(package.as_str()), "tokenizer inspect")?
+                        .ok_or_else(|| NnError::InvalidRequest {
+                            message: "invalid package directory".to_string(),
+                        })?;
+                    let assets = tokenizer::classify_assets(package_path)?;
+                    let summary = if package_path.join("tokenizer.json").exists() {
+                        Some(tokenizer::inspect_tokenizer_json(
+                            &package_path.join("tokenizer.json"),
+                        )?)
+                    } else {
+                        None
+                    };
+                    guard.propagate(&cancel);
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    if report_format == "json" {
+                        tokenizer::inspect_envelope(package_path, &assets, summary.as_ref())?
+                            .write_json(&mut out)?;
+                    } else {
+                        out.write_all(
+                            tokenizer::inspect_text(&assets, summary.as_ref()).as_bytes(),
+                        )?;
+                    }
+                    out.flush()?;
+                }
+                TokenizerCommand::Diff {
+                    left,
+                    right,
+                    report_format,
+                } => {
+                    use binfiddle::nn::tokenizer;
+                    let left_path = nn_path_arg(Some(left.as_str()), "tokenizer diff")?
+                        .ok_or_else(|| NnError::InvalidRequest {
+                            message: "invalid left tokenizer".to_string(),
+                        })?;
+                    let right_path = nn_path_arg(Some(right.as_str()), "tokenizer diff")?
+                        .ok_or_else(|| NnError::InvalidRequest {
+                            message: "invalid right tokenizer".to_string(),
+                        })?;
+                    let diff = tokenizer::diff_tokenizer_json(left_path, right_path)?;
+                    guard.propagate(&cancel);
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    if report_format == "json" {
+                        tokenizer::diff_envelope(&diff)?.write_json(&mut out)?;
+                    } else {
+                        out.write_all(tokenizer::diff_text(&diff).as_bytes())?;
+                    }
+                    out.flush()?;
+                }
+            }
         }
     }
 

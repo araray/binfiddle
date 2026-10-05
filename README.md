@@ -656,6 +656,19 @@ binfiddle nn partition --catalog model.nn.json --pack qwen3-next/pack.yaml --sta
 binfiddle nn carve --target disk.img
 ```
 
+`nn adapter inspect` inventories LoRA-style factor pairs in an adapter checkpoint: targets with their ranks and dimensions, orphan factors, rank mismatches, and extra adapter tensors — descriptor-level claims only (merge arithmetic and base compatibility are never claimed without a base model). `nn tokenizer inspect` classifies the standard tokenizer asset files in a package and summarizes `tokenizer.json` structure; `nn tokenizer diff` compares two tokenizer files at the vocabulary level with added/removed token lists. Neither evaluates tokenization behavior or renders templates.
+
+```bash
+# Inspect an adapter checkpoint's factors
+binfiddle nn adapter inspect --catalog adapter.nn.json
+
+# Summarize a package's tokenizer assets
+binfiddle nn tokenizer inspect --package model-dir/
+
+# Compare two tokenizer.json vocabularies
+binfiddle nn tokenizer diff --left v1/tokenizer.json --right v2/tokenizer.json
+```
+
 #### Process memory — Linux experimental
 
 Read memory from the current process or any same-user process via `/proc/<pid>/mem`, list mapped memory regions, and write back to the current process with an explicit opt-in.

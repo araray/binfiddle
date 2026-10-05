@@ -116,8 +116,6 @@ pub fn capabilities() -> Vec<Capability> {
         Capability::unavailable("nn.impact", "impact analysis is not implemented yet"),
         Capability::unavailable("nn.split", "decomposition is not implemented yet"),
         Capability::unavailable("nn.quant", "quantization inspection is not implemented yet"),
-        Capability::unavailable("nn.adapter", "adapter inspection is not implemented yet"),
-        Capability::unavailable("nn.tokenizer", "tokenizer inspection is not implemented yet"),
         Capability::implemented(
             "nn.select",
             "tensor selection by exact name, scoped name, id, or component selector through a pack (families with single/range/list/wildcard indexers; heads[N] row-range views on fused query/gate weights)",
@@ -129,6 +127,14 @@ pub fn capabilities() -> Vec<Capability> {
         Capability::implemented(
             "nn.fingerprint",
             "exact content fingerprints (canonical digest of name+shape+encoding+payload) with method statements; evidence records, no lineage or chronology claims",
+        ),
+        Capability::implemented(
+            "nn.adapter",
+            "LoRA-style adapter inspection: factor pairing by target, rank and orientation checks, orphan and extra-tensor findings; descriptor-level claims only — merge arithmetic and base-model compatibility are not verified",
+        ),
+        Capability::implemented(
+            "nn.tokenizer",
+            "tokenizer asset classification and tokenizer.json structure inspection (model type, vocab size, merges, added tokens) plus vocabulary-level two-file diffs; tokenization behavior and template rendering are not evaluated",
         ),
         Capability::implemented(
             "nn.partition",

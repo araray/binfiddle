@@ -2,6 +2,7 @@
 //! inspection. This module is self-contained and adds no mandatory ML
 //! dependencies; the legacy binary toolkit remains fully independent.
 
+pub mod adapter;
 pub mod address;
 pub mod analyze;
 pub mod budget;
@@ -28,6 +29,7 @@ pub mod selector;
 pub mod show;
 pub mod slice;
 pub mod source;
+pub mod tokenizer;
 pub mod where_cmd;
 pub mod wire;
 
