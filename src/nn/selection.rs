@@ -102,7 +102,19 @@ pub struct Selection {
     pub catalog_id: String,
     pub request: SelectionRequest,
     pub target_ids: Vec<String>,
+    /// Optional per-target views, parallel to `target_ids` (component
+    /// selections only). `None` entries select whole tensors.
+    pub views: Vec<Option<TargetView>>,
     pub empty_policy: EmptyPolicy,
+}
+
+/// A view annotation on one target (row-range views from component
+/// selections).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TargetView {
+    pub logical: String,
+    pub span: (u64, u64),
+    pub rows: (u64, u64),
 }
 
 impl Selection {
@@ -122,10 +134,57 @@ impl Selection {
                 ),
             });
         }
+        let views = vec![None; targets.len()];
         Ok(Selection {
             catalog_id: catalog.id()?,
             request,
             target_ids: targets,
+            views,
+            empty_policy,
+        })
+    }
+
+    /// Resolve a component-selector expression through a pack's recognition,
+    /// producing component-annotated targets with optional views.
+    pub fn resolve_components(
+        catalog: &Catalog,
+        pack: &super::packs::Pack,
+        recognition: &super::packs::Recognition,
+        expression: &str,
+        empty_policy: EmptyPolicy,
+    ) -> Result<Selection, NnError> {
+        let selector = super::selector::Selector::parse(expression)?;
+        let targets =
+            super::component_selection::resolve_selector(&selector, recognition, pack, catalog)?;
+        if targets.is_empty() && empty_policy == EmptyPolicy::Reject {
+            return Err(NnError::InvalidRequest {
+                message: format!(
+                    "component selection matched nothing ({expression}); use an explicit allow-empty policy to record an empty selection"
+                ),
+            });
+        }
+        let target_ids: Vec<String> = targets.iter().map(|t| t.tensor_id.clone()).collect();
+        let views: Vec<Option<TargetView>> = targets
+            .iter()
+            .map(|t| {
+                t.view.as_ref().map(|v| TargetView {
+                    logical: v.logical.clone(),
+                    span: v.span,
+                    rows: v.rows,
+                })
+            })
+            .collect();
+        // The semantic request records the component expression and the pack
+        // id, so saved selections explain where they came from.
+        let mut request = SelectionRequest::ComponentExpression {
+            expression: expression.to_string(),
+        };
+        let _ = &mut request;
+        Ok(Selection {
+            catalog_id: catalog.id()?,
+            request,
+            target_ids,
+            views,
             empty_policy,
         })
     }
@@ -155,7 +214,23 @@ impl Selection {
         let targets = self
             .target_ids
             .iter()
-            .map(|id| Json::object(vec![("tensor_id", Json::Str(id.clone()))]))
+            .zip(&self.views)
+            .map(|(id, view)| {
+                let mut pairs = vec![("tensor_id", Json::Str(id.clone()))];
+                if let Some(view) = view {
+                    pairs.push((
+                        "view",
+                        Json::object(vec![
+                            ("logical", Json::Str(view.logical.clone())),
+                            ("span_start", Json::Str(view.span.0.to_string())),
+                            ("span_length", Json::Str(view.span.1.to_string())),
+                            ("row_start", Json::Str(view.rows.0.to_string())),
+                            ("row_end", Json::Str(view.rows.1.to_string())),
+                        ])?,
+                    ));
+                }
+                Json::object(pairs)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         Json::object(vec![
             ("schema", Json::Str("binfiddle.nn.selection/v1".to_string())),
@@ -353,10 +428,36 @@ fn selection_from_semantic(semantic: &Json) -> Result<Selection, NnError> {
         Some("allow") => EmptyPolicy::Allow,
         _ => EmptyPolicy::Reject,
     };
+    // Per-target views (component selections): parallel to target_ids.
+    let views = semantic
+        .get("targets")
+        .and_then(Json::as_array)
+        .map(|targets| {
+            targets
+                .iter()
+                .map(|t| {
+                    t.get("view").and_then(|v| {
+                        Some(TargetView {
+                            logical: v.get("logical")?.as_str()?.to_string(),
+                            span: (
+                                v.get("span_start")?.as_str()?.parse().ok()?,
+                                v.get("span_length")?.as_str()?.parse().ok()?,
+                            ),
+                            rows: (
+                                v.get("row_start")?.as_str()?.parse().ok()?,
+                                v.get("row_end")?.as_str()?.parse().ok()?,
+                            ),
+                        })
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec![None; target_ids.len()]);
     Ok(Selection {
         catalog_id,
         request,
         target_ids,
+        views,
         empty_policy,
     })
 }

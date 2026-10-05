@@ -444,6 +444,10 @@ enum NnCommand {
         #[arg(long = "select", conflicts_with_all = ["tensor", "id"])]
         select_expr: Option<String>,
 
+        /// Model pack for component resolution of --select
+        #[arg(long, requires = "select")]
+        pack: Option<String>,
+
         /// Scope for --tensor: unique source id prefix or exact path
         #[arg(long, requires = "tensor")]
         source: Option<String>,
@@ -746,6 +750,29 @@ enum EditCommand {
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
         report_format: String,
     },
+
+    /// Remove intermediate MLP channels structurally (gate/up rows + down columns)
+    Prune {
+        /// Saved catalog file (content-verified discovery required)
+        #[arg(long)]
+        catalog: String,
+
+        /// Model pack with mlp_gate/mlp_up/mlp_down bindings
+        #[arg(long)]
+        pack: String,
+
+        /// Sorted unique channel indices to remove (comma-separated)
+        #[arg(long)]
+        channels: String,
+
+        /// Output file (must not exist; a fresh SafeTensors file)
+        #[arg(long)]
+        out_model: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
 }
 
 /// Run one NN workbench command. `input` is the root `--input` value, when
@@ -953,6 +980,7 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             tensor,
             id,
             select_expr,
+            pack,
             source,
             allow_empty,
             out_selection,
@@ -988,7 +1016,23 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             } else {
                 EmptyPolicy::Reject
             };
-            let selection = Selection::resolve(&loaded, request, policy)?;
+            // Component expressions resolve through a pack when --pack is
+            // given; without one they parse and explain (M2 behavior).
+            let selection = match (select_expr.as_deref(), pack.as_deref()) {
+                (Some(expression), Some(pack_path)) => {
+                    let loaded_pack = binfiddle::nn::packs::Pack::load(Path::new(pack_path))?;
+                    let recognition =
+                        binfiddle::nn::packs::Recognition::recognize(&loaded_pack, &loaded)?;
+                    Selection::resolve_components(
+                        &loaded,
+                        &loaded_pack,
+                        &recognition,
+                        expression,
+                        policy,
+                    )?
+                }
+                _ => Selection::resolve(&loaded, request, policy)?,
+            };
             if let Some(path) = out_selection {
                 selection.save(Path::new(path))?;
             }
@@ -1435,6 +1479,42 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                         edit::receipt_envelope(&receipt)?.write_json(&mut out)?;
                     } else {
                         out.write_all(edit::receipt_text(&receipt).as_bytes())?;
+                    }
+                    out.flush()?;
+                }
+                EditCommand::Prune {
+                    catalog,
+                    pack,
+                    channels,
+                    out_model,
+                    report_format,
+                } => {
+                    use binfiddle::nn::recipes;
+                    let catalog_path = nn_path_arg(Some(catalog.as_str()), "edit prune")?;
+                    let loaded = binfiddle::nn::Catalog::from_route(
+                        catalog_path,
+                        None,
+                        &DiscoverOptions::default(),
+                        &budget,
+                    )?;
+                    let loaded_pack = binfiddle::nn::packs::Pack::load(Path::new(pack))?;
+                    let recognition =
+                        binfiddle::nn::packs::Recognition::recognize(&loaded_pack, &loaded)?;
+                    let channel_list = binfiddle::nn::where_cmd::parse_coordinate(channels)?;
+                    let receipt = recipes::apply_prune(
+                        &loaded,
+                        &recognition,
+                        &channel_list,
+                        Path::new(out_model),
+                        &budget,
+                    )?;
+                    guard.propagate(&cancel);
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    if report_format == "json" {
+                        receipt.envelope()?.write_json(&mut out)?;
+                    } else {
+                        out.write_all(receipt.text().as_bytes())?;
                     }
                     out.flush()?;
                 }

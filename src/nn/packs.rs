@@ -42,6 +42,12 @@ pub enum BindingKind {
     LinearQkvzGroups,
     /// GatedDeltaNet grouped `ba` projection `[2Nv, d]`.
     LinearBaGroups,
+    /// MLP gate projection `[m, d]` (rows are intermediate channels).
+    MlpGate,
+    /// MLP up projection `[m, d]` (rows are intermediate channels).
+    MlpUp,
+    /// MLP down projection `[d, m]` (columns are intermediate channels).
+    MlpDown,
 }
 
 impl BindingKind {
@@ -52,6 +58,9 @@ impl BindingKind {
             BindingKind::NormZeroCentered => "norm_zero_centered",
             BindingKind::LinearQkvzGroups => "linear_qkvz_groups",
             BindingKind::LinearBaGroups => "linear_ba_groups",
+            BindingKind::MlpGate => "mlp_gate",
+            BindingKind::MlpUp => "mlp_up",
+            BindingKind::MlpDown => "mlp_down",
         }
     }
 
@@ -62,6 +71,9 @@ impl BindingKind {
             "norm_zero_centered" => Ok(BindingKind::NormZeroCentered),
             "linear_qkvz_groups" => Ok(BindingKind::LinearQkvzGroups),
             "linear_ba_groups" => Ok(BindingKind::LinearBaGroups),
+            "mlp_gate" => Ok(BindingKind::MlpGate),
+            "mlp_up" => Ok(BindingKind::MlpUp),
+            "mlp_down" => Ok(BindingKind::MlpDown),
             other => Err(NnError::MalformedInput {
                 detail: format!("unknown binding kind {other}"),
             }),
@@ -1076,6 +1088,12 @@ pub fn component_detail(
         }
         BindingKind::NormZeroCentered => {
             maps.push("effective scale = 1 + stored weight (gamma = 1 + w)".to_string());
+        }
+        BindingKind::MlpGate | BindingKind::MlpUp => {
+            maps.push("rows are intermediate channels (pruning coordinates)".to_string());
+        }
+        BindingKind::MlpDown => {
+            maps.push("columns are intermediate channels (pruning coordinates)".to_string());
         }
         BindingKind::Dense => {}
     }

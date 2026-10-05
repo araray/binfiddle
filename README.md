@@ -611,6 +611,27 @@ binfiddle nn show --catalog model.nn.json --pack qwen3-next/pack.yaml \
     --component decoder.layers[3].attention.query_gate
 ```
 
+Component selectors resolve through a pack: families support single indices, ranges, lists, and wildcards; a shorter selector selects the subtree below it. `heads[N]` on a query/gate component selects the exact stored rows of one head, and slicing such a selection extracts those bytes with a logical-view statement in the bundle manifest. A structural recipe removes intermediate MLP channels (gate/up rows and down columns) into a fresh SafeTensors file with updated shapes and digest-verified untouched payloads.
+
+```bash
+# Select components: layers 8..16, every MLP, one head of one layer
+binfiddle nn select --catalog model.nn.json --pack qwen3-next/pack.yaml \
+    --select 'decoder.layers[8:16].attention' --out-selection attn.sel.json
+binfiddle nn select --catalog model.nn.json --pack qwen3-next/pack.yaml \
+    --select 'decoder.layers[*].mlp' --out-selection mlp.sel.json
+binfiddle nn select --catalog model.nn.json --pack qwen3-next/pack.yaml \
+    --select 'decoder.layers[3].attention.query_gate.heads[1]' \
+    --out-selection h1.sel.json
+
+# Slice the head view: exact row bytes + logical_view in the manifest
+binfiddle nn slice --catalog model.nn.json --selection h1.sel.json \
+    --out-dir slices/h1/
+
+# Remove intermediate MLP channels structurally
+binfiddle nn edit prune --catalog model.nn.json --pack qwen3-next/pack.yaml \
+    --channels 1,3 --out-model pruned.safetensors
+```
+
 #### Process memory — Linux experimental
 
 Read memory from the current process or any same-user process via `/proc/<pid>/mem`, list mapped memory regions, and write back to the current process with an explicit opt-in.

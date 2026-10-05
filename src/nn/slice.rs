@@ -102,6 +102,8 @@ pub struct SliceEntry {
     pub span_length: u64,
     /// How this entry is materialized under the chosen policy.
     pub effect: String,
+    /// Logical-view annotation (component selections with row-range views).
+    pub logical_view: Option<String>,
 }
 
 /// An immutable slice plan.
@@ -131,7 +133,7 @@ impl SlicePlan {
         let mut entries = Vec::with_capacity(targets.len());
         let mut source_digests: BTreeMap<String, String> = BTreeMap::new();
 
-        for tensor in &targets {
+        for (position, tensor) in targets.iter().enumerate() {
             let Some(length) = tensor.payload_length else {
                 return Err(NnError::InvalidRequest {
                     message: format!(
@@ -141,14 +143,39 @@ impl SlicePlan {
                 });
             };
             let effect = plan_effect(tensor, quant)?;
+            // Component views narrow the extracted span to the viewed rows;
+            // the logical statement records what the bytes represent.
+            let view = selection.views.get(position).cloned().flatten();
+            let (span_start, span_length, logical_view) = match &view {
+                Some(view) => {
+                    if view.span.0 + view.span.1 > length {
+                        return Err(NnError::InvalidRequest {
+                            message: format!(
+                                "view span [{}, {}) exceeds the {}-byte payload of {}",
+                                view.span.0,
+                                view.span.0 + view.span.1,
+                                length,
+                                tensor.original_name
+                            ),
+                        });
+                    }
+                    (
+                        tensor.payload_start + view.span.0,
+                        view.span.1,
+                        Some(view.logical.clone()),
+                    )
+                }
+                None => (tensor.payload_start, length, None),
+            };
             entries.push(SliceEntry {
                 tensor_id: tensor.id.clone(),
                 name: tensor.original_name.clone(),
                 source_id: tensor.source_id.clone(),
                 encoding: tensor.encoding.clone(),
-                span_start: tensor.payload_start,
-                span_length: length,
+                span_start,
+                span_length,
                 effect,
+                logical_view,
             });
             // Record the source digest when the revision is content-verified.
             if let Ok(source) = catalog.resolve_source(&tensor.source_id) {
@@ -190,6 +217,13 @@ impl SlicePlan {
                     ("span_start", Json::Str(e.span_start.to_string())),
                     ("span_length", Json::Str(e.span_length.to_string())),
                     ("effect", Json::Str(e.effect.clone())),
+                    (
+                        "logical_view",
+                        match &e.logical_view {
+                            Some(view) => Json::Str(view.clone()),
+                            None => Json::Null,
+                        },
+                    ),
                 ])
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -347,6 +381,10 @@ fn plan_from_semantic(semantic: &Json, plan_id: String) -> Result<SlicePlan, NnE
                     .parse()
                     .map_err(bad_number)?,
                 effect: required_str(entry, "effect")?,
+                logical_view: entry
+                    .get("logical_view")
+                    .and_then(Json::as_str)
+                    .map(str::to_string),
             });
         }
     }
@@ -572,6 +610,13 @@ pub fn apply_plan(
             ("sha256", Json::Str(digest.clone())),
             ("bytes", Json::Str(bytes.to_string())),
             ("effect", Json::Str(entry.effect.clone())),
+            (
+                "logical_view",
+                match &entry.logical_view {
+                    Some(view) => Json::Str(view.clone()),
+                    None => Json::Null,
+                },
+            ),
         ])?);
         if !member_rel.is_empty() {
             members.push((member_rel, bytes, digest));

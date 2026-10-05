@@ -90,10 +90,6 @@ pub fn capabilities() -> Vec<Capability> {
             "one tensor's full record (exact name, scoped name, or unique id prefix) with optional --explain evidence",
         ),
         Capability::implemented(
-            "nn.select",
-            "tensor selection by exact name, scoped name, or id; saved selections bind their catalog and never silently rematch",
-        ),
-        Capability::implemented(
             "nn.where",
             "forward address mapping with precision classifications (exact_contiguous/exact_bits/no_payload/unresolved); scalar codecs and the Q4_0 block layout",
         ),
@@ -103,7 +99,7 @@ pub fn capabilities() -> Vec<Capability> {
         ),
         Capability::implemented(
             "nn.slice",
-            "weight extraction over saved selections: dry-run plans, id-verified plan files, reference and materialized bundles with per-member digests, preserve_encoding/cover_blocks/decode policies",
+            "weight extraction over saved selections: dry-run plans, id-verified plan files, reference and materialized bundles with per-member digests, preserve_encoding/cover_blocks/decode policies, component annotations and logical-view sections for row-range views",
         ),
         Capability::implemented(
             "nn.assemble",
@@ -111,7 +107,7 @@ pub fn capabilities() -> Vec<Capability> {
         ),
         Capability::implemented(
             "nn.edit",
-            "transactional fixed-size edits: preimage-recording plans, typed scalar writes through codecs (exact/nearest policies), masked sub-byte writes for Q4_0 nibbles, verification ladder (catalog + source digest + preimage), fresh-output application with preservation proof and container reparse, undo bundles bound to the exact edited revision",
+            "transactional fixed-size edits: preimage-recording plans, typed scalar writes through codecs (exact/nearest policies), masked sub-byte writes for Q4_0 nibbles, verification ladder (catalog + source digest + preimage), fresh-output application with preservation proof and container reparse, undo bundles bound to the exact edited revision, and an MLP channel-prune structural recipe (gate/up rows + down columns with shape updates)",
         ),
         Capability::implemented(
             "nn.analyze",
@@ -124,6 +120,10 @@ pub fn capabilities() -> Vec<Capability> {
         Capability::unavailable("nn.adapter", "adapter inspection is not implemented yet"),
         Capability::unavailable("nn.fingerprint", "fingerprinting is not implemented yet"),
         Capability::unavailable("nn.tokenizer", "tokenizer inspection is not implemented yet"),
+        Capability::implemented(
+            "nn.select",
+            "tensor selection by exact name, scoped name, id, or component selector through a pack (families with single/range/list/wildcard indexers; heads[N] row-range views on fused query/gate weights)",
+        ),
         Capability::implemented(
             "nn.pack",
             "declarative model packs: id-verified YAML manifests, name-pattern bindings with capture groups, shape expressions over configuration parameters, recognition with contradiction retention, and architecture views in ls/show",
