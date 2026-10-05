@@ -1,6 +1,6 @@
 # Binfiddle User Guide
 
-*Version 0.27.0*
+*Version 0.28.0*
 
 This guide is the definitive reference for **binfiddle**, a Rust binary manipulation toolkit. It covers every command, option, I/O mode, streaming/block feature, and real-world workflow.
 
@@ -36,6 +36,7 @@ This guide is the definitive reference for **binfiddle**, a Rust binary manipula
   - [chain](#chain) — multi-step workflows
   - [struct](#struct) — template-based parsing
   - [Process Memory](#process-memory) — Linux live memory
+  - [NN Workbench (`nn`)](#nn-workbench-nn) — neural-network model artifacts
 - [Memory-Mapped Input, Streaming & Large Files](#memory-mapped-input-streaming--large-files)
   - [Memory-Mapped File Input](#memory-mapped-file-input)
   - [In-Place Modification with `MmapMut`](#in-place-modification-with-mmapmut)
@@ -57,6 +58,7 @@ This guide is the definitive reference for **binfiddle**, a Rust binary manipula
   - [Disk & File Recovery](#disk--file-recovery)
   - [Batch Checksumming](#batch-checksumming)
   - [Binary Patch Pipelines](#binary-patch-pipelines)
+  - [Neural-Network Model Files](#neural-network-model-files)
   - [Integration with Other Tools](#integration-with-other-tools)
 - [Troubleshooting](#troubleshooting)
 - [Quick Reference Card](#quick-reference-card)
@@ -1114,6 +1116,80 @@ binfiddle --process-self --address 0x7f8a1b2c3000 --size 0x2000 \
 
 ---
 
+## NN Workbench (`nn`)
+
+A static workbench for neural-network artifact files — SafeTensors, GGUF,
+ONNX — and the directories that package them. It inventories, addresses,
+extracts, edits, analyzes, and compares model artifacts without ever
+executing model code, without Python or ML frameworks, and without modifying
+inputs (all outputs are fresh files). Every report ends with a `claims:`
+line stating exactly what it proves and what it does not.
+
+> Full guide with every command and option: [NN_USAGE.md](NN_USAGE.md) ·
+> one-page card: [NN_QUICK_REFERENCE.md](NN_QUICK_REFERENCE.md)
+
+### The command families
+
+| Family | Commands | What for |
+|---|---|---|
+| Discovery | `nn discover`, `nn ls`, `nn show`, `nn select`, `nn capabilities` | Inventory a file or package; save an id-verified catalog; browse tensors; resolve selections |
+| Addressing | `nn where`, `nn locate`, `nn impact` | Element → file bytes (bit-exact for packed encodings), offset → owner, span → dependencies/influence |
+| Extraction | `nn slice`, `nn split`, `nn assemble` | Bundles of selected tensors or per-layer splits, with named reassembly guarantees |
+| Inspection | `nn analyze` | Statistics, distributions, quantization blocks, reference errors — with honest coverage |
+| Mutation | `nn edit set/apply/undo/prune` | Transactional edits: preimage-verified plans, fresh outputs, exact-revision undo |
+| Comparison | `nn diff`, `nn fingerprint`, `nn adapter inspect`, `nn tokenizer inspect/diff` | Layered diffs, content fingerprints, evidence graphs, adapter/tokenizer inspection |
+| Packages | `nn pack verify/lint/scaffold`, `nn partition`, `nn split` | Declarative model packs, layer planning (static byte estimates only) |
+| Validation & research | `nn validate`, `nn carve`, `nn research align` | Structural verdicts, embedded-container recovery, exact permutation experiments |
+
+### First contact
+
+```bash
+# Inventory a package; hash contents for a stronger identity
+binfiddle -i model-dir/ nn discover --verify-content --out-catalog m.nn.json
+
+# Structural verdicts for every file
+binfiddle -i model-dir/ nn validate
+
+# Biggest tensors first; then inspect one with its evidence
+binfiddle nn ls --catalog m.nn.json --sort bytes --limit 20
+binfiddle nn show --catalog m.nn.json --tensor w --explain
+
+# Where does element [1,1] of tensor w live? And who owns offset 0x27c?
+binfiddle nn where --catalog m.nn.json --tensor w --index 1,1
+binfiddle nn locate --catalog m.nn.json --offset 0x27c
+```
+
+### A safe edit, start to finish
+
+```bash
+binfiddle -i model.safetensors nn discover --verify-content --out-catalog m.nn.json
+binfiddle nn edit set --catalog m.nn.json --tensor w --index 0,0 --value 9 \
+    --save-plan e.plan.json
+binfiddle nn edit apply --catalog m.nn.json --plan e.plan.json \
+    --out-model edited.safetensors --undo-bundle undo/e
+binfiddle nn edit undo --bundle undo/e --target edited.safetensors \
+    --out-model restored.safetensors   # byte-identical to the original
+```
+
+Plans re-verify the catalog, the full source digest, and the observed bytes
+(preimage) before anything is written; every byte outside the planned span is
+verified unchanged and the patched container must reparse.
+
+### Reading `nn` output
+
+- Text reports are for humans; every command also takes
+  `--report-format json` for a canonical result envelope
+  (`binfiddle.nn.result/v1`) with status, coverage, diagnostics, and the
+  semantic payload. Integers appear as decimal strings.
+- Exit codes are stable: `2` invalid request, `3` unsupported/ambiguous,
+  `4` malformed input, `5` source changed/missing/conflict, `6` I/O or
+  budget, `7` validation failed, `8` incomplete (`--require-complete`),
+  `130` cancelled.
+- Unknown formats and encodings never hide data — they are reported as
+  findings, and `nn capabilities` lists exactly what this build supports.
+
+---
+
 ## Memory-Mapped Input, Streaming & Large Files
 
 ### Memory-Mapped File Input
@@ -1441,6 +1517,25 @@ binfiddle -i game.exe --in-file write 0x12345A EB10
 binfiddle -i game.exe --in-file write 0x123500 "UNLOCKED" --input-format ascii
 ```
 
+### Neural-Network Model Files
+
+```bash
+# Inventory any SafeTensors/GGUF/ONNX package (no payload reads, no execution)
+binfiddle -i model-dir/ nn discover --verify-content --out-catalog m.nn.json
+
+# Structural validation with precise per-source verdicts
+binfiddle -i model-dir/ nn validate
+
+# Recover an embedded model container from a dump or disk image
+binfiddle nn carve --target disk.img
+
+# Layered comparison of two checkpoints (repacks ≠ content changes)
+binfiddle nn diff --left v1.nn.json --right v2.nn.json
+```
+
+The full workbench guide — addressing, slicing, transactional editing,
+analysis, fingerprints, model packs — is [NN_USAGE.md](NN_USAGE.md).
+
 ### Integration with Other Tools
 
 ```bash
@@ -1592,5 +1687,15 @@ For simple exact-byte patterns, prefer `hex`, `ascii`, or `mask`. Reserve `regex
 │   --pid PID --list-regions                                      │
 │   --process-self --address ADDR --size N read 0..N              │
 │   --process-self --address ADDR --size N --allow-write write 0..│
+├─────────────────────────────────────────────────────────────────┤
+│ NN WORKBENCH (see docs/NN_QUICK_REFERENCE.md)                   │
+│   binfiddle -i DIR nn discover --verify-content                 │
+│              --out-catalog m.nn.json                            │
+│   binfiddle nn ls --catalog m.nn.json --sort bytes --limit 20   │
+│   binfiddle nn show --catalog m.nn.json --tensor w --explain    │
+│   binfiddle nn where --catalog m.nn.json --tensor w --index 1,1 │
+│   binfiddle nn analyze --catalog m.nn.json --tensor w           │
+│   binfiddle nn diff --left v1.nn.json --right v2.nn.json        │
+│   binfiddle nn edit set … --save-plan e.json   (then apply/undo)│
 └─────────────────────────────────────────────────────────────────┘
 ```

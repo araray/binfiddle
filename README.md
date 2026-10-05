@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.90%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.27.0 | Cross-platform (Windows/Linux/macOS) | x86_64 / Arm64 Support | Linux process-memory features*
+*Version 0.28.0 | Cross-platform (Windows/Linux/macOS) | x86_64 / Arm64 Support | Linux process-memory features*
 
 Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, hashing, checksum verification, and custom exploration of binary data across a variety of formats.
 
@@ -45,6 +45,7 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 | **Chain** | Pipe multiple binfiddle commands together without shell escaping |
 | **Process Memory** | Read/write memory from any same-user process via `/proc/<pid>/mem` (Linux) |
 | **Struct** | Parse binary data using YAML templates for structure definitions |
+| **NN Workbench** | Inspect, address, extract, edit, and compare neural-network artifacts (SafeTensors/GGUF/ONNX) — static, offline, no model execution |
 | **Progress Bars** | Opt-in throughput/ETA feedback for long-running commands |
 
 ### Key Differentiators
@@ -158,6 +159,10 @@ binfiddle -i archive.bin read 0..4 --format raw | file -
 
 # Show a progress bar on a long operation
 binfiddle -i huge.bin hash sha256 --stream --read-block-size 64M --progress
+
+# Inventory a neural-network model package (see docs/NN_USAGE.md)
+binfiddle -i model-dir/ nn discover --verify-content --out-catalog m.nn.json
+binfiddle nn ls --catalog m.nn.json --sort bytes --limit 20
 ```
 
 ## Command Reference
@@ -475,237 +480,176 @@ binfiddle --silent -i data.bin -o out.bin chain \
 
 #### `nn` — Neural-network artifact workbench (early access)
 
-Reports which neural-network artifact workbench capabilities this build actually implements. All other `nn` operations are listed as unavailable; the report never advertises unimplemented behavior as supported.
+A static workbench for neural-network artifact files — SafeTensors, GGUF,
+ONNX — and the directories that package them. It inventories, addresses,
+extracts, edits, analyzes, and compares model artifacts **without executing
+model code, without Python or ML frameworks, without network access, and
+without modifying inputs** (all outputs are fresh files). Every report ends
+with a `claims:` line stating exactly what it proves — and what it does not.
+
+Full guides: [docs/NN_USAGE.md](docs/NN_USAGE.md) (every command and option),
+[docs/NN_QUICK_REFERENCE.md](docs/NN_QUICK_REFERENCE.md) (one-page card).
 
 ```bash
-# Human-readable capability report
+# Honest self-description of this build's capabilities
 binfiddle nn capabilities
-
-# Machine-readable JSON result envelope
-binfiddle nn capabilities --report-format json
 ```
 
-`nn discover` inventories supported model artifacts without reading payload bytes and without executing model code. It recognizes SafeTensors, GGUF (v2/v3), and ONNX (protobuf, descriptor tier) files, scans package directories (symlinks are never followed), keeps unknown or malformed files visible as reported evidence, and emits a JSON result envelope with per-tensor descriptors and exact file-qualified payload spans. ONNX initializers with `raw_data` get exact spans; external-data tensors stay visible with unresolved extents; packed protobuf fields are reported as non-contiguous storage rather than faked spans.
+##### Discovery — `discover`, `ls`, `show`, `select`
+
+`nn discover` inventories model artifacts descriptor-only (no payload reads):
+SafeTensors, GGUF v2/v3 (including split-shard groups with completeness and
+cross-shard uniqueness checks), ONNX at the descriptor tier (exact spans for
+`raw_data` initializers; external data and packed fields stay visible and
+honestly labeled), plus package directories where unknown files are kept
+visible as classified assets. Stdin (`-i -`) is spooled to a bounded private
+temp file with its own content-verified identity. `nn ls` / `nn show` /
+`nn select` browse and resolve tensors from a saved catalog; identities are
+content-addressed, so a saved selection never silently rematches different
+bytes (`--rebind` rebinds explicitly and reports additions/removals).
 
 ```bash
-# Inventory one model file (text report)
-binfiddle -i model.safetensors nn discover
-
-# Inventory a package directory as a JSON envelope
-binfiddle -i model-dir/ nn discover --report-format json
-
-# Hash full contents, strengthening source identity to content_verified
-binfiddle -i model.gguf nn discover --verify-content
-
-# Fail (exit 8) when coverage is incomplete
-binfiddle -i model-dir/ nn discover --require-complete
-
-# Save the resulting catalog for later commands
-binfiddle -i model-dir/ nn discover --out-catalog model.nn.json
+binfiddle -i model-dir/ nn discover --verify-content --out-catalog m.nn.json
+binfiddle -i model.gguf nn discover --require-complete     # exit 8 if incomplete
+binfiddle nn ls --catalog m.nn.json --sort bytes --limit 20
+binfiddle nn ls --catalog m.nn.json --name-regex 'gate|down' --view architecture --pack p.yaml
+binfiddle nn show --catalog m.nn.json --tensor w --explain
+binfiddle nn select --catalog m.nn.json --tensor w --out-selection w.sel.json
 ```
 
-`nn ls`, `nn show`, and `nn select` operate on a saved catalog (or discover on the fly through the root `-i`). Tensor identities are stable content-addressed records; a saved selection is bound to the exact catalog it was created from and never silently rematches against different bytes.
+##### Addressing — `where`, `locate`, `impact`
+
+Forward and reverse addressing with precision classifications
+(`exact_contiguous` / `exact_bits`), bit masks for packed encodings, shared
+decode dependencies (a Q4_0 element depends on its nibble *and* its block
+scale), and influence analysis that keeps *decode dependencies* distinct from
+*numerical influence* (a Q4_0 scale byte influences all 32 elements of its
+block; a code nibble exactly one). Behavior is never predicted.
 
 ```bash
-# List tensors (filters, ordering, bounded pagination)
-binfiddle -i model-dir/ nn ls --encoding safetensors.F32 --sort bytes --limit 50
-binfiddle nn ls --catalog model.nn.json --view sources
-
-# Show one tensor with its evidence
-binfiddle nn show --catalog model.nn.json --tensor model.layers.0.weight --explain
-binfiddle nn show --catalog model.nn.json --id tensor:1c79818b
-
-# Resolve and save a selection (exact name, optional source scope, or id)
-binfiddle nn select --catalog model.nn.json \
-    --tensor model.layers.0.weight --out-selection head.selection.json
+binfiddle nn where --catalog m.nn.json --tensor w --index 1,1   # element → bytes/bits
+binfiddle nn locate --catalog m.nn.json --offset 0x27c          # offset → owner
+binfiddle nn impact --catalog m.nn.json --span 0x27c..0x280     # deps + influence
+binfiddle nn impact --catalog m.nn.json --plan e.plan.json
 ```
 
-`nn where` maps a tensor or one element coordinate to its exact file location — with a precision classification, the byte span, and (for packed encodings like Q4_0) the bit mask, bit numbering, and shared decode dependencies such as the block scale. `nn locate` answers the reverse question: which tensor owns a given file offset.
+##### Extraction — `slice`, `split`, `assemble`
+
+Id-verified plans re-verify the catalog and full source digests before
+extracting — stale sources abort, never extract silently. Storage policies:
+`reference` (payloads stay in content-verified sources) or `materialized`
+(exact spans copied and hashed); quantization policies: `preserve_encoding`,
+`cover_blocks`, or `decode` (records the loss of encoding identity). `nn
+split` decomposes by layer into child selections plus plans or bundles, with
+coverage partitioning and member-vs-unique byte accounting.
 
 ```bash
-# Where does element [123,456] of a tensor live?
-binfiddle nn where --catalog model.nn.json \
-    --tensor model.layers.0.weight --index 123,456
-
-# Whole-tensor span
-binfiddle nn where --catalog model.nn.json --tensor model.layers.0.weight
-
-# Which tensor owns file offset 0x010F6390?
-binfiddle nn locate --catalog model.nn.json --offset 0x010F6390
+binfiddle nn slice --catalog m.nn.json --selection w.sel.json --dry-run
+binfiddle nn slice --catalog m.nn.json --selection w.sel.json --out-dir slices/w
+binfiddle nn slice --catalog m.nn.json --selection q.sel.json --storage reference
+binfiddle nn assemble --bundle slices/w --out-dir rebuilt/w
+binfiddle nn split --catalog m.nn.json --pack p.yaml --storage materialized --out-dir split/
 ```
 
-`nn slice` extracts selected tensors into a bundle, and `nn assemble` reconstructs tensor content from a materialized bundle. Plans are id-verified files; applying a plan re-verifies the catalog and full source digests — anything that changed since planning aborts with an error instead of extracting silently stale bytes. Reference bundles keep payloads in their content-verified sources; materialized bundles copy exact spans and hash every member. The `decode` policy materializes a numeric representation and records the loss of original encoding identity.
+##### Inspection — `analyze`
+
+Numerical inspection with honest coverage modes (`metadata` reads no payload,
+`sample` is seeded and deterministic, `full` scans within its budget):
+Welford statistics, min/max with coordinates and ties, non-finite category
+counts, overflow-safe L2 norm, histograms, reference-error metrics
+(MAE/RMSE/maxAE with explicit zero-denominator policies), and quantization
+block views through the reference decoder.
 
 ```bash
-# Preview a slice of the saved selection
-binfiddle nn slice --catalog model.nn.json \
-    --selection head.selection.json --dry-run
-
-# Save a plan, then apply it to a fresh output directory
-binfiddle nn slice --catalog model.nn.json \
-    --selection head.selection.json --save-plan head.plan.json
-binfiddle nn slice --catalog model.nn.json \
-    --plan head.plan.json --out-dir slices/head/
-
-# Quantization-aware and decoding policies
-binfiddle nn slice --catalog model.nn.json --selection q.selection.json \
-    --storage reference --quant preserve_encoding --out-dir slices/ref/
-binfiddle nn slice --catalog model.nn.json --selection q.selection.json \
-    --quant decode --out-dir slices/decoded/
-
-# Reconstruct tensor content from a materialized bundle (digests verified)
-binfiddle nn assemble --bundle slices/head --out-dir rebuilt/head/
+binfiddle nn analyze --catalog m.nn.json --tensor w
+binfiddle nn analyze --catalog m.nn.json --tensor w --mode sample --seed 17 --sample-size 4096
+binfiddle nn analyze --catalog m.nn.json --tensor w --reference ref.f32
+binfiddle nn analyze --catalog m.nn.json --tensor q4w --blocks 4
 ```
 
-`nn analyze` inspects one tensor numerically with honest coverage: metadata mode reads no payload bytes, sample mode examines a seeded deterministic selection, full mode scans everything within its budget. Results include Welford mean/variance (population and sample named separately), min/max with coordinates and tie counts, non-finite category counts, an overflow-safe L2 norm, optional declared-edge histograms, optional reference-error metrics (MAE/RMSE/maxAE with explicit zero-denominator policies), and quantization-block views.
+##### Mutation — `edit set`, `edit apply`, `edit undo`, `edit prune`
+
+Transactional fixed-size edits: the plan records the write unit, the observed
+preimage bytes, and the replacement; apply re-verifies catalog + source digest
++ preimage, writes a **fresh** output (originals never modified), verifies
+every byte outside the span unchanged, and revalidates the container.
+Sub-byte (Q4_0 nibble) writes preserve the neighbor by mask. Undo bundles
+reverse an edit against its exact edited revision. `edit prune` removes MLP
+channels structurally (gate/up rows, down columns) into a fresh SafeTensors
+file. Negative values need `--value=-0.5` syntax.
 
 ```bash
-# Full scan of one tensor
-binfiddle nn analyze --catalog model.nn.json --tensor model.layers.0.weight
-
-# Seeded 4k-element sample with a 32-bin histogram
-binfiddle nn analyze --catalog model.nn.json --tensor w --mode sample \
-    --seed 17 --sample-size 4096 --histogram-bins 32
-
-# Descriptor-only inspection (no payload reads)
-binfiddle nn analyze --catalog model.nn.json --tensor w --mode metadata
-
-# Compare a tensor against raw f32 reference values
-binfiddle nn analyze --catalog model.nn.json --tensor w --reference ref.f32 --reference-width 4
-
-# Show the first quantization blocks of a Q4_0 tensor
-binfiddle nn analyze --catalog model.nn.json --tensor w --blocks 4
+binfiddle nn edit set --catalog m.nn.json --tensor w --index 0,0 --value 9 \
+    --save-plan e.plan.json
+binfiddle nn edit apply --catalog m.nn.json --plan e.plan.json \
+    --out-model edited.safetensors --undo-bundle undo/e
+binfiddle nn edit undo --bundle undo/e --target edited.safetensors \
+    --out-model restored.safetensors     # byte-identical to the original
+binfiddle nn edit prune --catalog m.nn.json --pack p.yaml --channels 0 \
+    --out-model pruned.safetensors
 ```
 
-`nn edit` performs transactional fixed-size changes: a plan records the exact write unit, the observed bytes (preimage), and the computed replacement; applying re-verifies the catalog, the full source digest, and the preimage before writing a fresh output file — the original is never modified. Every byte outside the planned span is verified unchanged and the patched container must reparse. Sub-byte writes (Q4_0 nibbles) preserve the neighboring value by mask. Undo bundles reverse an edit against its exact edited revision. Edit plans require content-verified discovery (`nn discover --verify-content`).
+##### Comparison — `diff`, `fingerprint`, `adapter`, `tokenizer`
+
+Layered diff that never confuses content changes with repacks (same bytes,
+different offsets), descriptor changes, or package membership; a missing
+tensor is never a zero tensor. Exact fingerprints are content-identity
+records — evidence, never lineage claims. With `--compare`, an experimental
+evidence graph adds exact-payload, structural, and sampled-block similarity
+edges (method/threshold/score recorded; unsampled bytes never certified).
+Adapter inspection inventories LoRA factor pairs at the descriptor level;
+tokenizer commands inspect assets and diff vocabularies without ever
+rendering templates.
 
 ```bash
-# Plan a typed value change (policy auto: fixed_parameters for Q4_0)
-binfiddle nn edit set --catalog model.nn.json --tensor w \
-    --index 123,456 --value 0.125 --save-plan tweak.plan.json
-
-# Apply to a fresh output (original untouched), with an undo bundle
-binfiddle nn edit apply --catalog model.nn.json --plan tweak.plan.json \
-    --out-model edited.gguf --undo-bundle undo/tweak/
-
-# Reverse the edit (target must be the exact edited revision)
-binfiddle nn edit undo --bundle undo/tweak --target edited.gguf \
-    --out-model restored.gguf
-
-# Raw-bit edits for exact bit patterns (nibble for sub-byte units)
-binfiddle nn edit set --catalog model.nn.json --tensor w \
-    --index 0,0 --raw-bits a4 --save-plan raw.plan.json
-```
-
-`nn pack verify` validates a declarative model pack — a pure-data YAML manifest mapping tensor-name patterns to component roles with expected shapes written as integer expressions over configuration parameters. Recognition matches a catalog against the pack, keeps contradictions (name matched, shape disagreed) as visible findings instead of hiding them, and surfaces components in `ls --view architecture` and `show --component`, including layout maps for fused query/gate projections, grouped linear-attention projections, and zero-centered normalization. Packs contain no executable content.
-
-```bash
-# Verify a pack
-binfiddle nn pack verify --pack qwen3-next/pack.yaml
-
-# Recognize components and the full-attention layer schedule
-binfiddle nn ls --catalog model.nn.json --view architecture --pack qwen3-next/pack.yaml
-
-# Inspect one component with its layout maps
-binfiddle nn show --catalog model.nn.json --pack qwen3-next/pack.yaml \
-    --component decoder.layers[3].attention.query_gate
-```
-
-Component selectors resolve through a pack: families support single indices, ranges, lists, and wildcards; a shorter selector selects the subtree below it. `heads[N]` on a query/gate component selects the exact stored rows of one head, and slicing such a selection extracts those bytes with a logical-view statement in the bundle manifest. A structural recipe removes intermediate MLP channels (gate/up rows and down columns) into a fresh SafeTensors file with updated shapes and digest-verified untouched payloads.
-
-```bash
-# Select components: layers 8..16, every MLP, one head of one layer
-binfiddle nn select --catalog model.nn.json --pack qwen3-next/pack.yaml \
-    --select 'decoder.layers[8:16].attention' --out-selection attn.sel.json
-binfiddle nn select --catalog model.nn.json --pack qwen3-next/pack.yaml \
-    --select 'decoder.layers[*].mlp' --out-selection mlp.sel.json
-binfiddle nn select --catalog model.nn.json --pack qwen3-next/pack.yaml \
-    --select 'decoder.layers[3].attention.query_gate.heads[1]' \
-    --out-selection h1.sel.json
-
-# Slice the head view: exact row bytes + logical_view in the manifest
-binfiddle nn slice --catalog model.nn.json --selection h1.sel.json \
-    --out-dir slices/h1/
-
-# Remove intermediate MLP channels structurally
-binfiddle nn edit prune --catalog model.nn.json --pack qwen3-next/pack.yaml \
-    --channels 1,3 --out-model pruned.safetensors
-```
-
-`nn diff` compares two content-verified catalogs layer by layer and never confuses the layers: package members (added/removed), descriptor changes (shape/encoding), encoded-content equality by payload digest, and — crucially — the repack distinction (identical bytes at different offsets is a repack, not a content change). Missing tensors stay visible as unmatched; a missing tensor is never a zero tensor. Optional decoded comparison applies declared NaN/signed-zero policies and reports unequal counts. `nn fingerprint` emits exact content-identity records (canonical digest over name+shape+encoding+payload) — evidence, never lineage claims. With `--compare`, it additionally builds an **experimental evidence graph**: exact-payload, structural, and sampled-block similarity edges, each carrying method/version/threshold/score records. Sampled fingerprints digest a fixed number of evenly spaced 64 KiB blocks — they find candidate relationships cheaply but never certify unsampled bytes, and a false-match analysis on a documented synthetic corpus backs the default threshold.
-
-```bash
-# Layered diff of two models
-binfiddle nn diff --left v1.nn.json --right v2.nn.json
-
-# Include decoded-value comparison under strict bit policies
-binfiddle nn diff --left v1.nn.json --right v2.nn.json \
-    --decoded --policy exact_bits
-
-# Exact fingerprints (stable across re-discovery of the same bytes)
+binfiddle nn diff --left v1.nn.json --right v2.nn.json --decoded --policy exact_bits
 binfiddle nn fingerprint --catalog v1.nn.json
-
-# Experimental evidence graph: exact + structural + sampled-block
-# similarity edges between two catalogs, with method, threshold, and score
 binfiddle nn fingerprint --catalog v1.nn.json --compare v2.nn.json --threshold 0.75
-```
-
-`nn partition` plans contiguous layer groups per stage balanced by encoded weight bytes — a static estimate that states exactly what it includes (layer weight bytes) and excludes (activations, workspace, state, transfers, all runtime behavior). Unlayered tensors (embeddings, norms, heads) are reported, never silently distributed. `nn carve` scans raw files for embedded SafeTensors/GGUF containers, validates candidates structurally, and reports spans with confidence labels.
-
-```bash
-# Plan a 2-stage split of a layered model
-binfiddle nn partition --catalog model.nn.json --pack qwen3-next/pack.yaml --stages 2
-
-# Carve containers out of a disk image or process dump
-binfiddle nn carve --target disk.img
-```
-
-`nn adapter inspect` inventories LoRA-style factor pairs in an adapter checkpoint: targets with their ranks and dimensions, orphan factors, rank mismatches, and extra adapter tensors — descriptor-level claims only (merge arithmetic and base compatibility are never claimed without a base model). `nn tokenizer inspect` classifies the standard tokenizer asset files in a package and summarizes `tokenizer.json` structure; `nn tokenizer diff` compares two tokenizer files at the vocabulary level with added/removed token lists. Neither evaluates tokenization behavior or renders templates.
-
-```bash
-# Inspect an adapter checkpoint's factors
 binfiddle nn adapter inspect --catalog adapter.nn.json
-
-# Summarize a package's tokenizer assets
 binfiddle nn tokenizer inspect --package model-dir/
-
-# Compare two tokenizer.json vocabularies
 binfiddle nn tokenizer diff --left v1/tokenizer.json --right v2/tokenizer.json
 ```
 
-`nn select --rebind` re-evaluates a saved selection's request against a different catalog and reports which resolved tensor identities were added or removed — the old selection stays untouched. Directory discovery understands GGUF split-shard naming (`name-00001-of-00002.gguf`), verifies each group's declared completeness and cross-shard tensor-name uniqueness, and honors `-i -` by spooling stdin into a bounded private temporary file with its own content-verified identity. Typed scalar edits apply to ONNX `raw_data` spans with full container revalidation. `nn research align` (experimental) decides exactly whether one same-shape dense weight is a row permutation of another via per-row digest multisets, recovering the mapping and counting duplicate-row ambiguity — computational equivalence is never claimed.
+##### Packages — `pack verify/lint/scaffold`, `partition`
+
+Model packs are pure-data YAML manifests mapping tensor-name patterns to
+named components with shape expressions over configuration parameters — no
+executable content, ever. Recognition keeps contradictions visible;
+scaffolding derives heuristic-labeled drafts from an observed catalog.
+`nn partition` plans contiguous layer groups per stage balanced by encoded
+weight bytes — a static estimate that states exactly what it excludes
+(activations, workspace, runtime behavior); unlayered tensors are reported,
+never silently distributed.
 
 ```bash
-# Rebind a saved selection to a new model revision
-binfiddle nn select --catalog v2.nn.json --rebind head.sel.json \
-    --out-selection head-v2.sel.json
-
-# Discover a model streamed over stdin
-cat model.gguf | binfiddle -i - nn discover
-
-# Edit an ONNX initializer's value in place of a fresh output
-binfiddle nn edit set --catalog m.nn.json --tensor w --index 0 --value 1.5 \
-    --save-plan w.plan.json
-binfiddle nn edit apply --catalog m.nn.json --plan w.plan.json --out-model m2.onnx
-
-# Test two models for row-permutation relationships (experimental)
-binfiddle nn research align --left v1.nn.json --right v2.nn.json
-
-# Decompose a model by layer: child selections + plans (or materialized
-# bundles) + a root manifest with coverage and byte accounting
-binfiddle nn split --catalog model.nn.json --pack qwen3-next/pack.yaml \
-    --by layer --storage materialized --out-dir split/
-
-# What does this byte span touch? (owners, read deps, influence sets)
-binfiddle nn impact --catalog model.nn.json --offset 0x10F6390
-
-# Structural validation with precise per-source verdicts (exit 7 on defects)
-binfiddle -i model-dir/ nn validate
-
-# Lint a pack statically; scaffold a provisional draft from a catalog
-binfiddle nn pack lint --pack qwen3-next/pack.yaml
-binfiddle nn pack scaffold --catalog model.nn.json
+binfiddle nn pack verify --pack my-model/pack.yaml
+binfiddle nn pack lint --pack my-model/pack.yaml
+binfiddle nn pack scaffold --catalog m.nn.json > draft.pack.yaml
+binfiddle nn partition --catalog m.nn.json --pack my-model/pack.yaml --stages 2
 ```
+
+##### Validation & research — `validate`, `carve`, `research align`
+
+Precise per-source structural verdicts (`structurally_valid_for_reader`,
+`unsupported_feature`, `invalid`, `incomplete`; exit 7 on defects); carving
+of embedded SafeTensors/GGUF containers out of raw files with stated
+confidence; and exact, reproducible research: row-permutation alignment
+decided by per-row digest multisets with ambiguity counted, never guessed.
+
+```bash
+binfiddle -i model-dir/ nn validate
+binfiddle nn carve --target disk.img
+binfiddle nn research align --left v1.nn.json --right v2.nn.json
+```
+
+##### Reading `nn` output
+
+Every command takes `--report-format json` and emits the same canonical
+envelope (`binfiddle.nn.result/v1`) with status, coverage, diagnostics, and
+the semantic payload — integers as decimal strings, byte-identical output
+for identical runs. Exit codes are stable: `2` invalid request, `3`
+unsupported/ambiguous, `4` malformed, `5` source changed/missing/conflict,
+`6` I/O or budget, `7` validation failed, `8` incomplete, `130` cancelled.
 
 #### Process memory — Linux experimental
 
@@ -1015,6 +959,8 @@ src/
 │   ├── patch.rs        # Patch command (apply/revert binary patches)
 │   ├── chain.rs        # Command chaining
 │   └── struct_cmd.rs   # Struct command (template-based parsing)
+├── nn/                 # NN workbench library (nn commands are a thin CLI
+│                       # over this reusable layer; see docs/NN_USAGE.md)
 └── utils/
     ├── mod.rs          # Utility exports
     ├── parsing.rs      # Range and format parsing
@@ -1098,7 +1044,8 @@ cargo check --target aarch64-unknown-linux-gnu
 | 6 | Command chaining & pipelines | ✅ Complete |
 | 7 | Live process memory | ✅ Complete |
 | 8 | Large files, hashing, streaming, progress | ✅ Complete |
-| 9 | Advanced analysis & intelligence | 🔲 Planned |
+| 9 | NN artifact workbench (`nn`) | ✅ Complete (early access; runtime replay intentionally out of scope) |
+| 10 | Advanced analysis & intelligence | 🔲 Planned |
 
 ## License
 
