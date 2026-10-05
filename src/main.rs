@@ -354,9 +354,13 @@ enum NnCommand {
         #[arg(long)]
         catalog: Option<String>,
 
-        /// View: tensors, sources
-        #[arg(long, default_value = "tensors", value_parser = ["tensors", "sources"])]
+        /// View: tensors, sources, architecture (needs --pack)
+        #[arg(long, default_value = "tensors", value_parser = ["tensors", "sources", "architecture"])]
         view: String,
+
+        /// Model pack file or directory (pack.yaml)
+        #[arg(long)]
+        pack: Option<String>,
 
         /// Exact encoding filter (e.g. safetensors.F32, ggml.q4_0)
         #[arg(long)]
@@ -392,6 +396,14 @@ enum NnCommand {
         /// Saved catalog file (use the root -i option to discover instead)
         #[arg(long)]
         catalog: Option<String>,
+
+        /// Model pack file or directory (enables --component)
+        #[arg(long)]
+        pack: Option<String>,
+
+        /// Component path from a pack (e.g. decoder.layers[3].attention)
+        #[arg(long, requires = "pack")]
+        component: Option<String>,
 
         /// Exact original tensor name
         #[arg(long, conflicts_with = "id")]
@@ -608,10 +620,30 @@ enum NnCommand {
         report_format: String,
     },
 
+    /// Model pack operations
+    Pack {
+        #[command(subcommand)]
+        command: PackCommand,
+    },
+
     /// Transactional fixed-size edits over catalog tensors
     Edit {
         #[command(subcommand)]
         command: EditCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum PackCommand {
+    /// Verify a declarative model pack
+    Verify {
+        /// Pack file or directory (pack.yaml)
+        #[arg(long)]
+        pack: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
     },
 }
 
@@ -789,6 +821,7 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
         NnCommand::Ls {
             catalog,
             view,
+            pack,
             encoding,
             source,
             name_regex,
@@ -809,6 +842,22 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             guard.propagate(&cancel);
             let stdout = io::stdout();
             let mut out = stdout.lock();
+            if view == "architecture" {
+                use binfiddle::nn::packs;
+                let pack_path = pack.as_deref().ok_or_else(|| NnError::InvalidRequest {
+                    message: "architecture view requires --pack <file-or-dir>".to_string(),
+                })?;
+                let loaded_pack = packs::Pack::load(Path::new(pack_path))?;
+                let recognition = packs::Recognition::recognize(&loaded_pack, &loaded)?;
+                if report_format == "json" {
+                    packs::architecture_envelope(&recognition, &loaded_pack, &loaded)?
+                        .write_json(&mut out)?;
+                } else {
+                    out.write_all(packs::architecture_text(&recognition, &loaded_pack).as_bytes())?;
+                }
+                out.flush()?;
+                return Ok(());
+            }
             if view == "sources" {
                 let envelope = queries::sources_envelope(&loaded)?;
                 if report_format == "json" {
@@ -842,6 +891,8 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             catalog,
             tensor,
             id,
+            pack,
+            component,
             source,
             explain,
             report_format,
@@ -855,6 +906,25 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 &DiscoverOptions::default(),
                 &budget,
             )?;
+            if let Some(component_path) = component.as_deref() {
+                use binfiddle::nn::packs;
+                let pack_path = pack
+                    .as_deref()
+                    .expect("clap requires --pack with --component");
+                let loaded_pack = packs::Pack::load(Path::new(pack_path))?;
+                let recognition = packs::Recognition::recognize(&loaded_pack, &loaded)?;
+                let detail = packs::component_detail(&recognition, &loaded_pack, component_path)?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    packs::component_envelope(&detail, &recognition)?.write_json(&mut out)?;
+                } else {
+                    out.write_all(packs::component_text(&detail).as_bytes())?;
+                }
+                out.flush()?;
+                return Ok(());
+            }
             let target = match (tensor, id) {
                 (Some(name), None) => ShowTarget::Name {
                     name,
@@ -1181,6 +1251,55 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             }
             out.flush()?;
         }
+        NnCommand::Pack { command } => match command {
+            PackCommand::Verify {
+                pack,
+                report_format,
+            } => {
+                use binfiddle::nn::packs;
+                let loaded_pack = packs::Pack::load(Path::new(pack))?;
+                // Verify: every binding pattern compiles, every expression
+                // evaluates against the config, and the schedule resolves.
+                for binding in &loaded_pack.bindings {
+                    for axis in &binding.shape {
+                        loaded_pack.eval(axis)?;
+                    }
+                }
+                let _ = loaded_pack.full_attention_layers().ok();
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    let semantic = binfiddle::nn::Json::object(vec![
+                        ("pack_id", binfiddle::nn::Json::Str(loaded_pack.pack_id()?)),
+                        ("id", binfiddle::nn::Json::Str(loaded_pack.id_name.clone())),
+                        (
+                            "version",
+                            binfiddle::nn::Json::Str(loaded_pack.version.clone()),
+                        ),
+                        (
+                            "bindings",
+                            binfiddle::nn::Json::Str(loaded_pack.bindings.len().to_string()),
+                        ),
+                    ])?;
+                    binfiddle::nn::ResultEnvelope::new("pack verify")
+                        .with_semantic(semantic)
+                        .write_json(&mut out)?;
+                } else {
+                    out.write_all(
+                        format!(
+                            "pack verified: {} v{} ({} bindings, id {})\n",
+                            loaded_pack.id_name,
+                            loaded_pack.version,
+                            loaded_pack.bindings.len(),
+                            loaded_pack.pack_id()?,
+                        )
+                        .as_bytes(),
+                    )?;
+                }
+                out.flush()?;
+            }
+        },
         NnCommand::Edit { command } => {
             use binfiddle::nn::edit;
             use binfiddle::nn::show::{self, ShowTarget};

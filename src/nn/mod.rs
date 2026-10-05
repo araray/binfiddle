@@ -15,6 +15,7 @@ pub mod error;
 pub mod format;
 pub mod id;
 pub mod json;
+pub mod packs;
 pub mod queries;
 pub mod report;
 pub mod selection;

@@ -124,7 +124,10 @@ pub fn capabilities() -> Vec<Capability> {
         Capability::unavailable("nn.adapter", "adapter inspection is not implemented yet"),
         Capability::unavailable("nn.fingerprint", "fingerprinting is not implemented yet"),
         Capability::unavailable("nn.tokenizer", "tokenizer inspection is not implemented yet"),
-        Capability::unavailable("nn.pack", "model-pack management is not implemented yet"),
+        Capability::implemented(
+            "nn.pack",
+            "declarative model packs: id-verified YAML manifests, name-pattern bindings with capture groups, shape expressions over configuration parameters, recognition with contradiction retention, and architecture views in ls/show",
+        ),
         Capability::unavailable("nn.replay", "runtime replay is not implemented yet"),
         Capability::unavailable("nn.capture", "runtime capture is not implemented yet"),
         Capability::unavailable("nn.validate", "artifact validation is not implemented yet"),

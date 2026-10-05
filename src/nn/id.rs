@@ -19,6 +19,7 @@ pub enum IdKind {
     Selection,
     Plan,
     Receipt,
+    Pack,
 }
 
 impl IdKind {
@@ -33,6 +34,7 @@ impl IdKind {
             IdKind::Selection => "selection",
             IdKind::Plan => "plan",
             IdKind::Receipt => "receipt",
+            IdKind::Pack => "pack",
         }
     }
 
@@ -47,6 +49,7 @@ impl IdKind {
             "selection" => IdKind::Selection,
             "plan" => IdKind::Plan,
             "receipt" => IdKind::Receipt,
+            "pack" => IdKind::Pack,
             other => {
                 return Err(NnError::WireSyntax {
                     detail: format!("unknown identifier domain {}", super::error::brief(other)),

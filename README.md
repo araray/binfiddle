@@ -597,6 +597,20 @@ binfiddle nn edit set --catalog model.nn.json --tensor w \
     --index 0,0 --raw-bits a4 --save-plan raw.plan.json
 ```
 
+`nn pack verify` validates a declarative model pack — a pure-data YAML manifest mapping tensor-name patterns to component roles with expected shapes written as integer expressions over configuration parameters. Recognition matches a catalog against the pack, keeps contradictions (name matched, shape disagreed) as visible findings instead of hiding them, and surfaces components in `ls --view architecture` and `show --component`, including layout maps for fused query/gate projections, grouped linear-attention projections, and zero-centered normalization. Packs contain no executable content.
+
+```bash
+# Verify a pack
+binfiddle nn pack verify --pack qwen3-next/pack.yaml
+
+# Recognize components and the full-attention layer schedule
+binfiddle nn ls --catalog model.nn.json --view architecture --pack qwen3-next/pack.yaml
+
+# Inspect one component with its layout maps
+binfiddle nn show --catalog model.nn.json --pack qwen3-next/pack.yaml \
+    --component decoder.layers[3].attention.query_gate
+```
+
 #### Process memory — Linux experimental
 
 Read memory from the current process or any same-user process via `/proc/<pid>/mem`, list mapped memory regions, and write back to the current process with an explicit opt-in.
