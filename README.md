@@ -489,8 +489,10 @@ with a `claims:` line stating exactly what it proves — and what it does not.
 
 Full guides: [docs/NN_USAGE.md](docs/NN_USAGE.md) (every command and option),
 [docs/NN_QUICK_REFERENCE.md](docs/NN_QUICK_REFERENCE.md) (one-page card),
-and a real-model walkthrough: [docs/NN_DEEPDIVE_KOKORO.md](docs/NN_DEEPDIVE_KOKORO.md)
-(dissecting Kokoro-82M, pickle boundary to transactional edits).
+and real-model walkthroughs: [docs/NN_DEEPDIVE_KOKORO.md](docs/NN_DEEPDIVE_KOKORO.md)
+(Kokoro-82M — pickle boundary, ONNX tier, precision family) and
+[docs/NN_DEEPDIVE_GEMMA.md](docs/NN_DEEPDIVE_GEMMA.md) (Gemma-4 E4B — 16 GB
+SafeTensors, model packs, transactional editing at scale).
 
 ```bash
 # Honest self-description of this build's capabilities

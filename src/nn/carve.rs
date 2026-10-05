@@ -190,7 +190,7 @@ fn validate_safetensors(
             }))
         }
     };
-    let parsed = Json::parse_foreign(&header_text, ParseLimits::default())?;
+    let parsed = Json::parse_foreign(&header_text, ParseLimits::for_input_len(header_text.len()))?;
     if !matches!(parsed, Json::Object(_)) {
         return Ok(None); // not a safetensors header at all — silent skip
     }

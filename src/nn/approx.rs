@@ -20,7 +20,6 @@ use super::json::Json;
 use super::report::ResultEnvelope;
 use super::source::BoundedFile;
 use sha2::{Digest, Sha256};
-use std::path::Path;
 
 /// Method identity for the sampled-block fingerprint.
 pub const METHOD_NAME: &str = "sampled-block-digest";
@@ -114,7 +113,7 @@ pub fn approximate_fingerprints(
         let mut blocks = Vec::new();
         if let Some(length) = tensor.payload_length {
             let source = catalog.resolve_source(&tensor.source_id)?;
-            let reader = BoundedFile::open(Path::new(&source.path))?;
+            let reader = BoundedFile::open(&catalog.resolve_path(&source.path))?;
             for offset in sample_positions(length) {
                 let take = BLOCK_BYTES.min(length - offset);
                 let mut buffer = vec![0u8; take as usize];

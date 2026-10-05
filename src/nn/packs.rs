@@ -27,6 +27,49 @@ pub struct Binding {
     pub component: String,
     pub kind: BindingKind,
     pub shape: Vec<String>,
+    /// Restricts the binding to layers whose declared attention kind matches
+    /// (requires a `{layer}` capture and a declared layer schedule). Used for
+    /// architectures whose projection shapes differ per layer kind (e.g. the
+    /// Gemma family's dual head dimensions on full-attention layers).
+    pub layer_kinds: Option<Vec<LayerKind>>,
+}
+
+/// Declared per-layer attention mechanism. `sliding_attention` covers the
+/// windowed/full hybrid schedules used by the Gemma family (and others):
+/// not full attention, and never mislabeled as linear attention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerKind {
+    FullAttention,
+    LinearAttention,
+    SlidingAttention,
+}
+
+impl LayerKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LayerKind::FullAttention => "full_attention",
+            LayerKind::LinearAttention => "linear_attention",
+            LayerKind::SlidingAttention => "sliding_attention",
+        }
+    }
+
+    fn parse(text: &str) -> Result<LayerKind, NnError> {
+        match text {
+            "full_attention" => Ok(LayerKind::FullAttention),
+            "linear_attention" => Ok(LayerKind::LinearAttention),
+            "sliding_attention" => Ok(LayerKind::SlidingAttention),
+            other => Err(NnError::MalformedInput {
+                detail: format!(
+                    "layer_types entries must be full_attention, linear_attention, or sliding_attention (got {other})"
+                ),
+            }),
+        }
+    }
+
+    /// Whether the layer attends over the full context (no window).
+    pub fn is_full_attention(self) -> bool {
+        matches!(self, LayerKind::FullAttention)
+    }
 }
 
 /// Component kinds carrying layout mechanics.
@@ -90,8 +133,8 @@ pub struct Pack {
     /// Integer parameters referenced by shape expressions.
     pub config: BTreeMap<String, u64>,
     pub bindings: Vec<Binding>,
-    /// Explicit full-attention layer indices, when declared.
-    pub layer_types_explicit: Option<Vec<bool>>,
+    /// Explicit per-layer attention kinds, when declared.
+    pub layer_types_explicit: Option<Vec<LayerKind>>,
     /// Fallback interval: layer i is full attention when (i+1) % interval == 0.
     pub full_attention_interval: Option<u64>,
 }
@@ -171,6 +214,35 @@ impl Pack {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
+                let layer_kinds = entry
+                    .get("layer_kinds")
+                    .map(|v| {
+                        v.as_sequence().ok_or_else(|| NnError::MalformedInput {
+                            detail: format!("binding {pattern}: layer_kinds must be a list"),
+                        })?
+                        .iter()
+                        .map(|k| {
+                            k.as_str().ok_or_else(|| NnError::MalformedInput {
+                                detail: format!("binding {pattern}: layer_kinds entries must be strings"),
+                            }).and_then(LayerKind::parse)
+                        })
+                        .collect::<Result<Vec<LayerKind>, NnError>>()
+                    })
+                    .transpose()?;
+                if let Some(kinds) = &layer_kinds {
+                    if kinds.is_empty() {
+                        return Err(NnError::MalformedInput {
+                            detail: format!("binding {pattern}: layer_kinds must not be empty"),
+                        });
+                    }
+                    if !pattern.contains("{layer}") {
+                        return Err(NnError::MalformedInput {
+                            detail: format!(
+                                "binding {pattern}: layer_kinds requires a {{layer}} capture in the pattern"
+                            ),
+                        });
+                    }
+                }
                 // Patterns and expressions must parse before the pack loads.
                 validate_pattern(&pattern)?;
                 for axis in &shape {
@@ -181,6 +253,7 @@ impl Pack {
                     component,
                     kind,
                     shape,
+                    layer_kinds,
                 });
             }
         }
@@ -192,25 +265,32 @@ impl Pack {
 
         let mut layer_types_explicit = None;
         if let Some(list) = value.get("layer_types").and_then(|v| v.as_sequence()) {
-            let flags = list
+            let kinds = list
                 .iter()
                 .map(|v| {
-                    v.as_str().and_then(|s| match s {
-                        "full_attention" => Some(true),
-                        "linear_attention" => Some(false),
-                        _ => None,
-                    })
+                    v.as_str()
+                        .ok_or_else(|| NnError::MalformedInput {
+                            detail: "layer_types entries must be strings".to_string(),
+                        })
+                        .and_then(LayerKind::parse)
                 })
-                .collect::<Option<Vec<bool>>>()
-                .ok_or_else(|| NnError::MalformedInput {
-                    detail: "layer_types entries must be full_attention or linear_attention"
-                        .to_string(),
-                })?;
-            layer_types_explicit = Some(flags);
+                .collect::<Result<Vec<LayerKind>, NnError>>()?;
+            layer_types_explicit = Some(kinds);
         }
         let full_attention_interval = value
             .get("full_attention_interval")
             .and_then(|v| v.as_u64());
+
+        // Bindings scoped by layer kind are meaningless without a schedule.
+        if bindings.iter().any(|b| b.layer_kinds.is_some())
+            && layer_types_explicit.is_none()
+            && full_attention_interval.is_none()
+        {
+            return Err(NnError::MalformedInput {
+                detail: "a binding declares layer_kinds but the pack declares neither layer_types nor full_attention_interval"
+                    .to_string(),
+            });
+        }
 
         Ok(Pack {
             id_name,
@@ -248,7 +328,7 @@ impl Pack {
             .bindings
             .iter()
             .map(|b| {
-                Json::object(vec![
+                let mut fields = vec![
                     ("pattern", Json::Str(b.pattern.clone())),
                     ("component", Json::Str(b.component.clone())),
                     ("kind", Json::Str(b.kind.as_str().to_string())),
@@ -256,7 +336,19 @@ impl Pack {
                         "shape",
                         Json::Array(b.shape.iter().cloned().map(Json::Str).collect()),
                     ),
-                ])
+                ];
+                if let Some(kinds) = &b.layer_kinds {
+                    fields.push((
+                        "layer_kinds",
+                        Json::Array(
+                            kinds
+                                .iter()
+                                .map(|k| Json::Str(k.as_str().to_string()))
+                                .collect(),
+                        ),
+                    ));
+                }
+                Json::object(fields)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let mut pairs = vec![
@@ -269,19 +361,13 @@ impl Pack {
             ("config", config),
             ("bindings", Json::Array(bindings)),
         ];
-        if let Some(flags) = &self.layer_types_explicit {
+        if let Some(kinds) = &self.layer_types_explicit {
             pairs.push((
                 "layer_types",
                 Json::Array(
-                    flags
+                    kinds
                         .iter()
-                        .map(|f| {
-                            Json::Str(
-                                f.then_some("full_attention")
-                                    .unwrap_or("linear_attention")
-                                    .to_string(),
-                            )
-                        })
+                        .map(|k| Json::Str(k.as_str().to_string()))
                         .collect(),
                 ),
             ));
@@ -303,15 +389,15 @@ impl Pack {
         eval_expression(&parsed, &self.config)
     }
 
-    /// The full-attention layer schedule: explicit flags when declared, the
+    /// The full-attention layer schedule: explicit kinds when declared, the
     /// interval fallback otherwise (layer i is full attention when
     /// (i+1) % interval == 0).
     pub fn full_attention_layers(&self) -> Result<Vec<usize>, NnError> {
-        if let Some(flags) = &self.layer_types_explicit {
-            return Ok(flags
+        if let Some(kinds) = &self.layer_types_explicit {
+            return Ok(kinds
                 .iter()
                 .enumerate()
-                .filter(|(_, f)| **f)
+                .filter(|(_, k)| k.is_full_attention())
                 .map(|(i, _)| i)
                 .collect());
         }
@@ -330,6 +416,39 @@ impl Pack {
         Ok((0..layers)
             .filter(|i| (i + 1) % interval as usize == 0)
             .collect())
+    }
+
+    /// The declared attention kind of one layer. With an explicit schedule
+    /// this is the declared kind; the interval fallback classifies layer i
+    /// as full attention when (i+1) % interval == 0 and linear otherwise.
+    pub fn layer_kind(&self, layer: usize) -> Result<LayerKind, NnError> {
+        if let Some(kinds) = &self.layer_types_explicit {
+            return kinds
+                .get(layer)
+                .copied()
+                .ok_or_else(|| NnError::InvalidRequest {
+                    message: format!(
+                        "layer {layer} has no declared kind (layer_types has {} entries)",
+                        kinds.len()
+                    ),
+                });
+        }
+        let interval = self
+            .full_attention_interval
+            .ok_or_else(|| NnError::InvalidRequest {
+                message: "pack declares neither layer_types nor full_attention_interval"
+                    .to_string(),
+            })?;
+        if interval == 0 {
+            return Err(NnError::MalformedInput {
+                detail: "full_attention_interval must be positive".to_string(),
+            });
+        }
+        if (layer + 1).is_multiple_of(interval as usize) {
+            Ok(LayerKind::FullAttention)
+        } else {
+            Ok(LayerKind::LinearAttention)
+        }
     }
 }
 
@@ -801,6 +920,25 @@ impl Recognition {
                 let Some(captures) = match_pattern(tokens, &tensor.original_name) else {
                     continue;
                 };
+                // Layer-kind scoping: a binding restricted to certain layer
+                // kinds applies only when the captured layer's declared kind
+                // matches. A kind mismatch is not a contradiction — the
+                // tensor simply is not this binding's.
+                if let Some(allowed) = &binding.layer_kinds {
+                    let layer = captures
+                        .get("layer")
+                        .copied()
+                        .map(|l| l as usize)
+                        .ok_or_else(|| NnError::InvalidRequest {
+                            message: format!(
+                                "binding {} declares layer_kinds but the pattern did not capture a numeric layer",
+                                binding.pattern
+                            ),
+                        })?;
+                    if !allowed.contains(&pack.layer_kind(layer)?) {
+                        continue;
+                    }
+                }
                 matched = true;
                 // Expected shape from expressions.
                 let expected: Vec<u64> = binding
@@ -1229,6 +1367,152 @@ mod tests {
         assert!(params.group_width().is_err());
     }
 
+    // ---- layer_kinds binding scoping (Gemma-style dual head dims) ----
+
+    fn catalog_with(tensors: &[(&str, Vec<u64>)]) -> Catalog {
+        use super::super::catalog::{CatalogCoverage, CatalogTensor};
+        Catalog {
+            sources: vec![],
+            tensors: tensors
+                .iter()
+                .map(|(name, shape)| CatalogTensor {
+                    id: format!("tensor:{name}"),
+                    semantic: Json::Null,
+                    source_id: "src:test".to_string(),
+                    original_name: name.to_string(),
+                    encoding: "safetensors.F32".to_string(),
+                    decode_supported: true,
+                    shape: shape.clone(),
+                    element_count: shape.iter().product(),
+                    payload_start: 0,
+                    payload_length: Some(shape.iter().product::<u64>() * 4),
+                    extent: super::super::format::Extent::Exact,
+                })
+                .collect(),
+            unresolved: vec![],
+            source_base: None,
+            coverage: CatalogCoverage {
+                sources_total: 1,
+                sources_parsed: 1,
+                tensors_total: tensors.len(),
+                tensors_exact_extent: tensors.len(),
+                tensors_bounded_extent: 0,
+                unresolved_members: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn layer_kinds_scope_bindings_per_declared_schedule() {
+        // Gemma-style: full-attention layers use global_head_dim (512-based
+        // projections), sliding layers use head_dim (256-based). Two binding
+        // sets target the same component paths, scoped by layer kind.
+        let text = r#"
+schema: binfiddle.nn.pack/v1
+id: dual.test
+version: "1"
+config:
+  hidden_size: 2560
+  head_dim: 256
+  global_head_dim: 512
+layer_types: [sliding_attention, full_attention, sliding_attention]
+bindings:
+  - pattern: "layers.{layer}.q_proj.weight"
+    component: "decoder.layers[{layer}].attention.q"
+    kind: dense
+    shape: ["8 * head_dim", "hidden_size"]
+    layer_kinds: [sliding_attention, linear_attention]
+  - pattern: "layers.{layer}.q_proj.weight"
+    component: "decoder.layers[{layer}].attention.q"
+    kind: dense
+    shape: ["8 * global_head_dim", "hidden_size"]
+    layer_kinds: [full_attention]
+"#;
+        let pack = Pack::parse(text).unwrap();
+        let catalog = catalog_with(&[
+            ("layers.0.q_proj.weight", vec![2048, 2560]), // sliding
+            ("layers.1.q_proj.weight", vec![4096, 2560]), // full
+            ("layers.2.q_proj.weight", vec![2048, 2560]), // sliding
+        ]);
+        let recognition = Recognition::recognize(&pack, &catalog).unwrap();
+        assert_eq!(recognition.components.len(), 3, "all three bind");
+        assert!(recognition.contradictions.is_empty(), "no shape conflicts");
+        assert!(recognition.unassigned.is_empty());
+
+        // A tensor whose kind-scoped binding matched by name but disagreed on
+        // shape stays visible as a contradiction — never bound, never hidden.
+        let odd = catalog_with(&[
+            ("layers.1.q_proj.weight", vec![2048, 2560]), // full layer, sliding shape
+        ]);
+        let recognition = Recognition::recognize(&pack, &odd).unwrap();
+        assert_eq!(recognition.components.len(), 0);
+        assert_eq!(recognition.contradictions.len(), 1);
+        assert_eq!(recognition.unassigned, Vec::<String>::new());
+    }
+
+    #[test]
+    fn layer_kinds_require_schedule_and_layer_capture() {
+        let base = r#"schema: binfiddle.nn.pack/v1
+id: scope.test
+version: "1"
+config: {}
+{schedule}bindings:
+  - pattern: "{pattern}"
+    component: "c"
+    kind: dense
+    shape: ["1"]
+{kinds}"#;
+        let render = |pattern: &str, schedule: &str, kinds: &str| {
+            base.replace("{pattern}", pattern)
+                .replace("{schedule}", schedule)
+                .replace("{kinds}", kinds)
+        };
+        // No schedule declared → malformed.
+        assert!(Pack::parse(&render(
+            "layers.{layer}.w",
+            "",
+            "    layer_kinds: [full_attention]\n"
+        ))
+        .is_err());
+        // Schedule declared but the pattern lacks a {layer} capture → malformed.
+        assert!(Pack::parse(&render(
+            "model.w",
+            "layer_types: [full_attention, sliding_attention]\n",
+            "    layer_kinds: [full_attention]\n"
+        ))
+        .is_err());
+        // Fully scoped and scheduled → valid.
+        assert!(Pack::parse(&render(
+            "layers.{layer}.w",
+            "layer_types: [full_attention, sliding_attention]\n",
+            "    layer_kinds: [full_attention]\n"
+        ))
+        .is_ok());
+        // The semantic record carries layer_kinds verbatim.
+        let pack = Pack::parse(&render(
+            "layers.{layer}.w",
+            "layer_types: [full_attention, sliding_attention]\n",
+            "    layer_kinds: [full_attention]\n",
+        ))
+        .unwrap();
+        let semantic = pack.semantic().unwrap();
+        let binding = semantic
+            .get("bindings")
+            .and_then(|b| b.as_array())
+            .unwrap()
+            .first()
+            .unwrap()
+            .clone();
+        let kinds: Vec<&str> = binding
+            .get("layer_kinds")
+            .and_then(|k| k.as_array())
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(kinds, ["full_attention"]);
+    }
+
     // ---- B.6: layer schedule ----
 
     #[test]
@@ -1243,6 +1527,7 @@ mod tests {
                 component: "w".into(),
                 kind: BindingKind::Dense,
                 shape: vec!["1".into()],
+                layer_kinds: None,
             }],
             layer_types_explicit: None,
             full_attention_interval: Some(4),
@@ -1250,13 +1535,71 @@ mod tests {
         // Interval fallback: (i+1) % 4 == 0 → [3, 7]. Not i % 4 == 0.
         assert_eq!(pack.full_attention_layers().unwrap(), vec![3, 7]);
         // Explicit schedule wins.
-        pack.layer_types_explicit =
-            Some(vec![true, false, false, false, true, false, false, false]);
+        pack.layer_types_explicit = Some(vec![
+            LayerKind::FullAttention,
+            LayerKind::LinearAttention,
+            LayerKind::LinearAttention,
+            LayerKind::LinearAttention,
+            LayerKind::FullAttention,
+            LayerKind::LinearAttention,
+            LayerKind::LinearAttention,
+            LayerKind::LinearAttention,
+        ]);
         assert_eq!(pack.full_attention_layers().unwrap(), vec![0, 4]);
+        // Sliding-window layers are a distinct third kind: not full, and
+        // their label survives (never mislabeled as linear attention).
+        pack.layer_types_explicit = Some(vec![
+            LayerKind::SlidingAttention,
+            LayerKind::SlidingAttention,
+            LayerKind::FullAttention,
+        ]);
+        assert_eq!(pack.full_attention_layers().unwrap(), vec![2]);
         // Zero interval is malformed.
         pack.full_attention_interval = Some(0);
         pack.layer_types_explicit = None;
         assert!(pack.full_attention_layers().is_err());
+    }
+
+    #[test]
+    fn sliding_attention_layer_types_parse_and_render() {
+        let text = r#"
+schema: binfiddle.nn.pack/v1
+id: sched.test
+version: "1"
+config:
+  num_layers: 3
+bindings:
+  - pattern: "l.{layer}.w"
+    component: "layers[{layer}].w"
+    kind: dense
+    shape: ["1"]
+layer_types: [sliding_attention, sliding_attention, full_attention]
+"#;
+        let pack = Pack::parse(text).unwrap();
+        assert_eq!(
+            pack.layer_types_explicit.as_deref().unwrap(),
+            [
+                LayerKind::SlidingAttention,
+                LayerKind::SlidingAttention,
+                LayerKind::FullAttention
+            ]
+        );
+        assert_eq!(pack.full_attention_layers().unwrap(), vec![2]);
+        // The semantic record preserves the declared labels verbatim.
+        let semantic = pack.semantic().unwrap();
+        let labels: Vec<&str> = semantic
+            .get("layer_types")
+            .and_then(|l| l.as_array())
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(
+            labels,
+            ["sliding_attention", "sliding_attention", "full_attention"]
+        );
+        // Unknown kinds stay rejected.
+        assert!(Pack::parse(&text.replace("sliding_attention", "windowed")).is_err());
     }
 
     // ---- B.7: zero-centered norm ----

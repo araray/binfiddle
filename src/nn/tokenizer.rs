@@ -73,7 +73,7 @@ pub fn inspect_tokenizer_json(path: &Path) -> Result<TokenizerSummary, NnError> 
     let text = std::fs::read_to_string(path).map_err(|_| NnError::SourceMissing {
         detail: format!("cannot read {}", path.display()),
     })?;
-    let root = Json::parse_foreign(&text, ParseLimits::default())?;
+    let root = Json::parse_foreign(&text, ParseLimits::for_input_len(text.len()))?;
     let model = root.get("model").cloned().unwrap_or(Json::Null);
     let model_type = model
         .get("type")
@@ -128,7 +128,7 @@ pub fn diff_tokenizer_json(left_path: &Path, right_path: &Path) -> Result<Tokeni
         let text = std::fs::read_to_string(path).map_err(|_| NnError::SourceMissing {
             detail: format!("cannot read {}", path.display()),
         })?;
-        let root = Json::parse_foreign(&text, ParseLimits::default())?;
+        let root = Json::parse_foreign(&text, ParseLimits::for_input_len(text.len()))?;
         let summary = inspect_tokenizer_json(path)?;
         Ok((root, summary))
     };

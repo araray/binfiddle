@@ -309,9 +309,9 @@ impl EditPlan {
             })?
             .to_string();
 
-        let path = Path::new(&source.path);
-        let reader = BoundedFile::open(path)?;
-        reader.verify_length(path)?;
+        let path = catalog.resolve_path(&source.path);
+        let reader = BoundedFile::open(&path)?;
+        reader.verify_length(&path)?;
         // Fresh digest check: the recorded digest must match the file now.
         let current = reader.content_digest(budget)?;
         if current != digest {
@@ -834,8 +834,8 @@ pub fn apply_edit_plan(
         });
     }
     let source = catalog.resolve_source(&plan.source_id)?;
-    let source_path = Path::new(&source.path);
-    let reader = BoundedFile::open(source_path)?;
+    let source_path = catalog.resolve_path(&source.path);
+    let reader = BoundedFile::open(&source_path)?;
     let current_digest = reader.content_digest(budget)?;
     if current_digest != plan.source_digest {
         return Err(NnError::SourceChanged {
