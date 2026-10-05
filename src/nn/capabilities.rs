@@ -110,13 +110,16 @@ pub fn capabilities() -> Vec<Capability> {
             "tensor-content reconstruction from materialized bundles with digest verification (original-byte and executable claims are explicitly not made)",
         ),
         Capability::implemented(
+            "nn.edit",
+            "transactional fixed-size edits: preimage-recording plans, typed scalar writes through codecs (exact/nearest policies), masked sub-byte writes for Q4_0 nibbles, verification ladder (catalog + source digest + preimage), fresh-output application with preservation proof and container reparse, undo bundles bound to the exact edited revision",
+        ),
+        Capability::implemented(
             "nn.analyze",
             "bounded numerical inspection: metadata/sample/full scans with coverage records, Welford statistics, non-finite categories, overflow-safe L2 norms, declared-edge histograms, reference-error metrics with zero-denominator policies, and Q4_0 block views",
         ),
         Capability::unavailable("nn.impact", "impact analysis is not implemented yet"),
         Capability::unavailable("nn.split", "decomposition is not implemented yet"),
         Capability::unavailable("nn.quant", "quantization inspection is not implemented yet"),
-        Capability::unavailable("nn.edit", "transactional editing is not implemented yet"),
         Capability::unavailable("nn.diff", "model comparison is not implemented yet"),
         Capability::unavailable("nn.adapter", "adapter inspection is not implemented yet"),
         Capability::unavailable("nn.fingerprint", "fingerprinting is not implemented yet"),

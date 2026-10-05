@@ -607,6 +607,113 @@ enum NnCommand {
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
         report_format: String,
     },
+
+    /// Transactional fixed-size edits over catalog tensors
+    Edit {
+        #[command(subcommand)]
+        command: EditCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum EditCommand {
+    /// Plan one typed or raw-bit value change (records the preimage)
+    Set {
+        /// Saved catalog file (content-verified discovery required)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Exact original tensor name
+        #[arg(long, conflicts_with = "edit_id")]
+        tensor: Option<String>,
+
+        /// Tensor identifier (full or unique digest prefix)
+        #[arg(long = "id", id = "edit_id", conflicts_with = "tensor")]
+        target_id: Option<String>,
+
+        /// Scope for --tensor: unique source id prefix or exact path
+        #[arg(long, requires = "tensor")]
+        source: Option<String>,
+
+        /// Element coordinate (comma-separated decimal)
+        #[arg(long)]
+        index: String,
+
+        /// Requested numeric value
+        #[arg(
+            long,
+            conflicts_with = "raw_bits",
+            required = true,
+            group = "edit_value"
+        )]
+        value: Option<String>,
+
+        /// Requested raw bits (hex; nibble for sub-byte units)
+        #[arg(long = "raw-bits", conflicts_with = "value")]
+        raw_bits: Option<String>,
+
+        /// Value policy: exact_only, nearest, fixed_parameters
+        #[arg(
+            long,
+            default_value = "auto",
+            value_parser = ["auto", "exact_only", "nearest", "fixed_parameters"]
+        )]
+        policy: String,
+
+        /// Allow saturating out-of-range quantized codes
+        #[arg(long)]
+        clamp: bool,
+
+        /// Save the plan to this file
+        #[arg(long)]
+        save_plan: Option<String>,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Apply a saved edit plan to a fresh output file
+    Apply {
+        /// Saved catalog file (must match the plan)
+        #[arg(long)]
+        catalog: String,
+
+        /// Saved edit plan file
+        #[arg(long)]
+        plan: String,
+
+        /// Output file (must not exist; the original is never modified)
+        #[arg(long)]
+        out_model: String,
+
+        /// Directory for the undo bundle
+        #[arg(long)]
+        undo_bundle: Option<String>,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Reverse an applied edit against its exact edited revision
+    Undo {
+        /// Undo bundle directory (from edit apply)
+        #[arg(long)]
+        bundle: String,
+
+        /// The edited file to reverse
+        #[arg(long)]
+        target: String,
+
+        /// Output file (must not exist)
+        #[arg(long)]
+        out_model: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
 }
 
 /// Run one NN workbench command. `input` is the root `--input` value, when
@@ -1073,6 +1180,146 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 out.write_all(analyze::analysis_text(&result).as_bytes())?;
             }
             out.flush()?;
+        }
+        NnCommand::Edit { command } => {
+            use binfiddle::nn::edit;
+            use binfiddle::nn::show::{self, ShowTarget};
+            match command {
+                EditCommand::Set {
+                    catalog,
+                    tensor,
+                    target_id,
+                    source,
+                    index,
+                    value,
+                    raw_bits,
+                    policy,
+                    clamp,
+                    save_plan,
+                    report_format,
+                } => {
+                    let catalog_path = nn_path_arg(catalog.as_deref(), "edit set")?;
+                    let input_path = nn_path_arg(input, "edit set")?;
+                    let loaded = binfiddle::nn::Catalog::from_route(
+                        catalog_path,
+                        input_path,
+                        &DiscoverOptions::default(),
+                        &budget,
+                    )?;
+                    let target = match (tensor, target_id) {
+                        (Some(name), None) => ShowTarget::Name {
+                            name,
+                            source: source.as_deref(),
+                        },
+                        (None, Some(id)) => ShowTarget::Id { id },
+                        _ => {
+                            return Err(NnError::InvalidRequest {
+                                message: "nn edit set requires exactly one of --tensor or --id"
+                                    .to_string(),
+                            })
+                        }
+                    };
+                    let tensor = show::resolve_show_target(&loaded, &target)?;
+                    let coordinate = binfiddle::nn::where_cmd::parse_coordinate(index)?;
+                    let requested = match (value.as_deref(), raw_bits.as_deref()) {
+                        (Some(v), None) => edit::RequestedValue::Typed(v.to_string()),
+                        (None, Some(h)) => edit::RequestedValue::RawBits(h.to_string()),
+                        _ => {
+                            return Err(NnError::InvalidRequest {
+                                message: "exactly one of --value or --raw-bits is required"
+                                    .to_string(),
+                            })
+                        }
+                    };
+                    let layout = binfiddle::nn::codec::layout_for_encoding(&tensor.encoding);
+                    let policy = if policy == "auto" {
+                        edit::EditPolicy::default_for(layout)
+                    } else {
+                        edit::EditPolicy::parse(policy)?
+                    };
+                    let plan = edit::EditPlan::build(
+                        &loaded,
+                        tensor,
+                        &coordinate,
+                        &requested,
+                        policy,
+                        *clamp,
+                        &budget,
+                    )?;
+                    if let Some(path) = save_plan.as_deref() {
+                        plan.save(Path::new(path))?;
+                    }
+                    guard.propagate(&cancel);
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    if report_format == "json" {
+                        plan.envelope()?.write_json(&mut out)?;
+                    } else {
+                        out.write_all(plan.text().as_bytes())?;
+                    }
+                    out.flush()?;
+                }
+                EditCommand::Apply {
+                    catalog,
+                    plan,
+                    out_model,
+                    undo_bundle,
+                    report_format,
+                } => {
+                    let catalog_path = nn_path_arg(Some(catalog.as_str()), "edit apply")?;
+                    let loaded = binfiddle::nn::Catalog::from_route(
+                        catalog_path,
+                        None,
+                        &DiscoverOptions::default(),
+                        &budget,
+                    )?;
+                    let loaded_plan = edit::EditPlan::load(Path::new(plan))?;
+                    let receipt = edit::apply_edit_plan(
+                        &loaded,
+                        &loaded_plan,
+                        Path::new(out_model),
+                        undo_bundle.as_deref().map(Path::new),
+                        &budget,
+                    )?;
+                    guard.propagate(&cancel);
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    if report_format == "json" {
+                        edit::receipt_envelope(&receipt)?.write_json(&mut out)?;
+                    } else {
+                        out.write_all(edit::receipt_text(&receipt).as_bytes())?;
+                    }
+                    out.flush()?;
+                }
+                EditCommand::Undo {
+                    bundle,
+                    target,
+                    out_model,
+                    report_format,
+                } => {
+                    let target_path =
+                        nn_path_arg(Some(target.as_str()), "edit undo")?.ok_or_else(|| {
+                            NnError::InvalidRequest {
+                                message: "invalid target path".to_string(),
+                            }
+                        })?;
+                    let receipt = edit::undo_edit(
+                        Path::new(bundle),
+                        target_path,
+                        Path::new(out_model),
+                        &budget,
+                    )?;
+                    guard.propagate(&cancel);
+                    let stdout = io::stdout();
+                    let mut out = stdout.lock();
+                    if report_format == "json" {
+                        edit::receipt_envelope(&receipt)?.write_json(&mut out)?;
+                    } else {
+                        out.write_all(edit::receipt_text(&receipt).as_bytes())?;
+                    }
+                    out.flush()?;
+                }
+            }
         }
     }
 

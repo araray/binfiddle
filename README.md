@@ -577,6 +577,26 @@ binfiddle nn analyze --catalog model.nn.json --tensor w --reference ref.f32 --re
 binfiddle nn analyze --catalog model.nn.json --tensor w --blocks 4
 ```
 
+`nn edit` performs transactional fixed-size changes: a plan records the exact write unit, the observed bytes (preimage), and the computed replacement; applying re-verifies the catalog, the full source digest, and the preimage before writing a fresh output file — the original is never modified. Every byte outside the planned span is verified unchanged and the patched container must reparse. Sub-byte writes (Q4_0 nibbles) preserve the neighboring value by mask. Undo bundles reverse an edit against its exact edited revision. Edit plans require content-verified discovery (`nn discover --verify-content`).
+
+```bash
+# Plan a typed value change (policy auto: fixed_parameters for Q4_0)
+binfiddle nn edit set --catalog model.nn.json --tensor w \
+    --index 123,456 --value 0.125 --save-plan tweak.plan.json
+
+# Apply to a fresh output (original untouched), with an undo bundle
+binfiddle nn edit apply --catalog model.nn.json --plan tweak.plan.json \
+    --out-model edited.gguf --undo-bundle undo/tweak/
+
+# Reverse the edit (target must be the exact edited revision)
+binfiddle nn edit undo --bundle undo/tweak --target edited.gguf \
+    --out-model restored.gguf
+
+# Raw-bit edits for exact bit patterns (nibble for sub-byte units)
+binfiddle nn edit set --catalog model.nn.json --tensor w \
+    --index 0,0 --raw-bits a4 --save-plan raw.plan.json
+```
+
 #### Process memory — Linux experimental
 
 Read memory from the current process or any same-user process via `/proc/<pid>/mem`, list mapped memory regions, and write back to the current process with an explicit opt-in.

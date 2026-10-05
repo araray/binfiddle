@@ -10,6 +10,7 @@ pub mod capabilities;
 pub mod catalog;
 pub mod codec;
 pub mod discover;
+pub mod edit;
 pub mod error;
 pub mod format;
 pub mod id;
