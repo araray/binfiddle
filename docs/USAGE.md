@@ -1,6 +1,6 @@
 # Binfiddle User Guide
 
-*Version 0.27.0*
+*Version 0.28.0*
 
 This guide is the definitive reference for **binfiddle**, a Rust binary manipulation toolkit. It covers every command, option, I/O mode, streaming/block feature, and real-world workflow.
 
