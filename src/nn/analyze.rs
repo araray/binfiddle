@@ -473,7 +473,7 @@ pub fn analyze_tensor(
                 .to_string(),
         });
     }
-    let reader = BoundedFile::open(Path::new(&source.path))?;
+    let reader = BoundedFile::open(&catalog.resolve_path(&source.path))?;
     reader.verify_length(Path::new(&source.path))?;
 
     let findings: Vec<Finding> = Vec::new();

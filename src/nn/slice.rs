@@ -507,7 +507,7 @@ pub fn apply_plan(
                 ),
             });
         }
-        source_files.insert(source.id.clone(), PathBuf::from(&source.path));
+        source_files.insert(source.id.clone(), catalog.resolve_path(&source.path));
     }
     for (source_id, expected) in &plan.source_digests {
         let Some(path) = source_files.get(source_id) else {

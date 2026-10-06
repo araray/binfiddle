@@ -9,7 +9,7 @@
 use super::catalog::Catalog;
 use super::error::NnError;
 use super::json::Json;
-use super::packs::Pack;
+use super::packs::{self, Pack};
 use super::report::ResultEnvelope;
 
 /// One lint finding.
@@ -24,20 +24,31 @@ pub struct LintFinding {
 pub fn lint_pack(pack: &Pack) -> Vec<LintFinding> {
     let mut findings = Vec::new();
 
-    // Duplicate component templates.
-    let mut seen_components: Vec<&str> = Vec::new();
+    // Duplicate component templates. Two bindings may share a template when
+    // their layer_kinds scopes are disjoint (the dual-head-dimension pattern:
+    // one component path, different shapes per layer kind).
+    let mut seen_components: Vec<&packs::Binding> = Vec::new();
     for binding in &pack.bindings {
-        if seen_components.contains(&binding.component.as_str()) {
-            findings.push(LintFinding {
-                severity: "error",
-                code: "DUPLICATE_COMPONENT",
-                message: format!(
-                    "component template '{}' is declared by more than one binding",
-                    binding.component
-                ),
-            });
+        if let Some(prior) = seen_components
+            .iter()
+            .find(|b| b.component == binding.component)
+        {
+            let disjoint = match (&prior.layer_kinds, &binding.layer_kinds) {
+                (Some(a), Some(b)) => a.iter().all(|k| !b.contains(k)),
+                _ => false,
+            };
+            if !disjoint {
+                findings.push(LintFinding {
+                    severity: "error",
+                    code: "DUPLICATE_COMPONENT",
+                    message: format!(
+                        "component template '{}' is declared by more than one binding",
+                        binding.component
+                    ),
+                });
+            }
         }
-        seen_components.push(&binding.component);
+        seen_components.push(binding);
     }
 
     // Shape arity sanity: expressions must exist and evaluate under the
@@ -303,6 +314,45 @@ bindings:
         assert!(codes.contains(&"DUPLICATE_COMPONENT"), "{findings:?}");
         assert!(codes.contains(&"PATTERN_ALL_CAPTURE"), "{findings:?}");
         assert!(findings.iter().all(|f| f.severity != "info"));
+    }
+
+    /// Same component template twice is clean when the layer_kinds scopes
+    /// are disjoint, and an error when they overlap or are absent.
+    #[test]
+    fn lint_layer_kinds_scoped_duplicates() {
+        let scoped = r#"
+schema: binfiddle.nn.pack/v1
+id: scope.lint
+version: "1"
+config: {}
+layer_types: [full_attention, sliding_attention]
+bindings:
+  - pattern: "layers.{layer}.w"
+    component: "decoder.layers[{layer}].w"
+    kind: dense
+    shape: ["2"]
+    layer_kinds: [sliding_attention]
+  - pattern: "layers.{layer}.w"
+    component: "decoder.layers[{layer}].w"
+    kind: dense
+    shape: ["3"]
+    layer_kinds: [full_attention]
+"#;
+        let pack = Pack::parse(scoped).unwrap();
+        let findings = lint_pack(&pack);
+        assert!(
+            !findings.iter().any(|f| f.code == "DUPLICATE_COMPONENT"),
+            "{findings:?}"
+        );
+        // Overlapping scopes on one template remain an error.
+        let overlapping = scoped.replace(
+            "layer_kinds: [full_attention]",
+            "layer_kinds: [full_attention, sliding_attention]",
+        );
+        let pack = Pack::parse(&overlapping).unwrap();
+        assert!(lint_pack(&pack)
+            .iter()
+            .any(|f| f.code == "DUPLICATE_COMPONENT"));
     }
 
     #[test]

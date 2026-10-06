@@ -73,6 +73,10 @@ pub struct Catalog {
     pub tensors: Vec<CatalogTensor>,
     pub unresolved: Vec<UnresolvedMember>,
     pub coverage: CatalogCoverage,
+    /// Directory of the catalog file this was loaded from, when loaded from
+    /// a file. Runtime hint only (never part of identity): lets recorded
+    /// relative source paths resolve when commands run from another CWD.
+    pub source_base: Option<std::path::PathBuf>,
 }
 
 impl Catalog {
@@ -149,6 +153,7 @@ impl Catalog {
             sources,
             tensors,
             unresolved,
+            source_base: None,
         })
     }
 
@@ -273,7 +278,7 @@ impl Catalog {
     /// errors, never silent reinterpretation.
     pub fn load(path: &Path) -> Result<Catalog, NnError> {
         let text = std::fs::read_to_string(path).map_err(NnError::Io)?;
-        let file = Json::parse_strict(&text, ParseLimits::default())?;
+        let file = Json::parse_strict(&text, ParseLimits::for_input_len(text.len()))?;
         if file.get("schema").and_then(Json::as_str) != Some("binfiddle.nn.catalog-file/v1") {
             return Err(NnError::MalformedInput {
                 detail: "not a binfiddle catalog file".to_string(),
@@ -301,7 +306,8 @@ impl Catalog {
                 ),
             });
         }
-        let mut catalog = catalog_from_semantic(&semantic)?;
+        let mut catalog =
+            catalog_from_semantic(&semantic, path.parent().map(std::path::Path::to_path_buf))?;
         if let Some(presentation) = file.get("presentation") {
             catalog.apply_presentation(presentation)?;
         }
@@ -382,6 +388,24 @@ impl Catalog {
             .iter()
             .filter(|t| t.original_name == name && scope.is_none_or(|s| s.id == t.source_id))
             .collect())
+    }
+
+    /// Resolve a recorded source path to an openable path. Absolute paths
+    /// pass through; relative paths prefer the catalog file's own directory
+    /// (so `--catalog subdir/m.nn.json` works from any CWD) and fall back
+    /// to the recorded path as-is.
+    pub fn resolve_path(&self, recorded: &str) -> std::path::PathBuf {
+        let recorded_path = std::path::Path::new(recorded);
+        if recorded_path.is_absolute() {
+            return recorded_path.to_path_buf();
+        }
+        if let Some(base) = &self.source_base {
+            let joined = base.join(recorded_path);
+            if joined.exists() {
+                return joined;
+            }
+        }
+        recorded_path.to_path_buf()
     }
 
     /// Resolve a tensor identifier: full `tensor:<64hex>` or a unique digest
@@ -496,7 +520,10 @@ fn catalog_tensor(source_id: &str, tensor: &TensorEntry) -> Result<CatalogTensor
 }
 
 /// Rebuild an in-memory catalog from its verified semantic payload.
-fn catalog_from_semantic(semantic: &Json) -> Result<Catalog, NnError> {
+fn catalog_from_semantic(
+    semantic: &Json,
+    source_base: Option<std::path::PathBuf>,
+) -> Result<Catalog, NnError> {
     if semantic.get("schema").and_then(Json::as_str) != Some("binfiddle.nn.catalog/v1") {
         return Err(NnError::MalformedInput {
             detail: "catalog payload schema mismatch".to_string(),
@@ -644,6 +671,7 @@ fn catalog_from_semantic(semantic: &Json) -> Result<Catalog, NnError> {
         sources,
         tensors,
         unresolved,
+        source_base,
     })
 }
 

@@ -186,6 +186,23 @@ impl Default for ParseLimits {
     }
 }
 
+impl ParseLimits {
+    /// Limits for parsing a complete, already-length-bounded document.
+    ///
+    /// Every JSON node costs at least ~2 bytes of source (`{},`), so
+    /// `len / 2` covers any well-formed document of that length while the
+    /// flat default still applies to smaller inputs. Real-world assets
+    /// (tokenizer vocabularies with hundreds of thousands of entries)
+    /// legitimately exceed the flat node default; pathological expansion
+    /// from a small input remains impossible by construction.
+    pub fn for_input_len(len: usize) -> Self {
+        ParseLimits {
+            max_depth: ParseLimits::default().max_depth,
+            max_nodes: (len / 2 + 1024).max(ParseLimits::default().max_nodes),
+        }
+    }
+}
+
 struct Parser<'a> {
     bytes: &'a [u8],
     pos: usize,
@@ -566,6 +583,30 @@ mod tests {
             value.get("list").unwrap().at(2).unwrap().get("count"),
             Some(&Json::Str("2".into()))
         );
+    }
+
+    /// Regression: real-world assets (tokenizer vocabularies with hundreds of
+    /// thousands of entries) legitimately exceed the flat 1M-node default.
+    /// `for_input_len` scales the allowance with the bounded input length —
+    /// every node costs ≥ ~2 source bytes, so len/2 is the well-formed
+    /// maximum and pathological expansion from small inputs stays impossible.
+    #[test]
+    fn proportional_limits_accept_large_vocabulary_documents() {
+        // ~1.2M nodes: 600k string entries in two flat arrays.
+        let tokens: Vec<String> = (0..600_000).map(|i| format!("\"t{i}\"")).collect();
+        let tokens = tokens.join(",");
+        let text = format!("{{\"a\":[{tokens}],\"b\":[{tokens}]}}");
+        // Flat default rejects it…
+        assert!(Json::parse_strict(&text, ParseLimits::default()).is_err());
+        // …while the proportional allowance for its length accepts it.
+        let parsed = Json::parse_strict(&text, ParseLimits::for_input_len(text.len())).unwrap();
+        let count = parsed.get("a").and_then(Json::as_array).map(|a| a.len());
+        assert_eq!(count, Some(600_000));
+
+        // Small inputs keep the flat default; node bombs from tiny inputs
+        // remain impossible (len/2 of a small input cannot reach the cap).
+        let limits = ParseLimits::for_input_len(8);
+        assert_eq!(limits.max_nodes, ParseLimits::default().max_nodes);
     }
 
     #[test]
