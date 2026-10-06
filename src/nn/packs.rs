@@ -91,6 +91,9 @@ pub enum BindingKind {
     MlpUp,
     /// MLP down projection `[d, m]` (columns are intermediate channels).
     MlpDown,
+    /// Stacked MoE expert storage `[E, A, B]`: expert N is the contiguous
+    /// `[A, B]` slab at rows `[N*A, (N+1)*A)` of the flattened stack.
+    MoeExpertStack,
 }
 
 impl BindingKind {
@@ -104,6 +107,7 @@ impl BindingKind {
             BindingKind::MlpGate => "mlp_gate",
             BindingKind::MlpUp => "mlp_up",
             BindingKind::MlpDown => "mlp_down",
+            BindingKind::MoeExpertStack => "moe_expert_stack",
         }
     }
 
@@ -117,6 +121,7 @@ impl BindingKind {
             "mlp_gate" => Ok(BindingKind::MlpGate),
             "mlp_up" => Ok(BindingKind::MlpUp),
             "mlp_down" => Ok(BindingKind::MlpDown),
+            "moe_expert_stack" => Ok(BindingKind::MoeExpertStack),
             other => Err(NnError::MalformedInput {
                 detail: format!("unknown binding kind {other}"),
             }),
@@ -1232,6 +1237,12 @@ pub fn component_detail(
         }
         BindingKind::MlpDown => {
             maps.push("columns are intermediate channels (pruning coordinates)".to_string());
+        }
+        BindingKind::MoeExpertStack => {
+            maps.push(
+                "experts[N] selects one expert's contiguous slab; each expert is a stacked [A, B] block"
+                    .to_string(),
+            );
         }
         BindingKind::Dense => {}
     }

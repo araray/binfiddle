@@ -24,6 +24,30 @@ pub struct StageAssignment {
     pub weight_bytes: u64,
 }
 
+/// Placement policy for unlayered tensors (embeddings, norms, heads).
+pub enum PlacementPolicy<'a> {
+    /// Default: report them, never distribute.
+    Report,
+    /// Place every unlayered tensor in stage 0.
+    First,
+    /// Place every unlayered tensor in the last stage.
+    Last,
+    /// Explicit tensor-name -> stage map; every unlayered tensor must be
+    /// present, and every stage index must exist.
+    Manual(&'a [(String, usize)]),
+}
+
+impl PlacementPolicy<'_> {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PlacementPolicy::Report => "report",
+            PlacementPolicy::First => "first",
+            PlacementPolicy::Last => "last",
+            PlacementPolicy::Manual(_) => "manual",
+        }
+    }
+}
+
 /// A partition plan.
 pub struct PartitionPlan {
     pub stages: Vec<StageAssignment>,
@@ -33,6 +57,11 @@ pub struct PartitionPlan {
     pub unlayered_tensors: Vec<String>,
     pub total_layer_bytes: u64,
     pub total_stages: usize,
+    /// Placement policy applied to unlayered tensors (report | first |
+    /// last | manual); `report` (the default) leaves them unplaced.
+    pub unlayered_policy: &'static str,
+    /// Unlayered tensors placed per stage index (policy != report).
+    pub placements: Vec<(String, usize)>,
 }
 
 impl PartitionPlan {
@@ -43,6 +72,7 @@ impl PartitionPlan {
         catalog: &Catalog,
         recognition: &Recognition,
         stages: usize,
+        placement: PlacementPolicy<'_>,
     ) -> Result<PartitionPlan, NnError> {
         if stages == 0 {
             return Err(NnError::InvalidRequest {
@@ -140,12 +170,51 @@ impl PartitionPlan {
                 message: "empty stage group".to_string(),
             })?;
 
+        let placements = match placement {
+            PlacementPolicy::Report => Vec::new(),
+            PlacementPolicy::First => unlayered_tensors
+                .iter()
+                .map(|name| (name.clone(), 0))
+                .collect(),
+            PlacementPolicy::Last => unlayered_tensors
+                .iter()
+                .map(|name| (name.clone(), stage_count.saturating_sub(1)))
+                .collect(),
+            PlacementPolicy::Manual(map) => {
+                for name in &unlayered_tensors {
+                    if !map.iter().any(|(n, _)| n == name) {
+                        return Err(NnError::InvalidRequest {
+                            message: format!("manual placement misses unlayered tensor {name}"),
+                        });
+                    }
+                }
+                let mut placed = Vec::new();
+                for name in &unlayered_tensors {
+                    let stage = map
+                        .iter()
+                        .find(|(n, _)| n == name)
+                        .map(|(_, s)| *s)
+                        .unwrap_or(0);
+                    if stage >= stage_count {
+                        return Err(NnError::InvalidRequest {
+                            message: format!(
+                                "manual placement sends {name} to stage {stage} but the plan has {stage_count}"
+                            ),
+                        });
+                    }
+                    placed.push((name.clone(), stage));
+                }
+                placed
+            }
+        };
         Ok(PartitionPlan {
             stages,
             unlayered_bytes,
             unlayered_tensors,
             total_layer_bytes: total,
             total_stages: stage_count,
+            unlayered_policy: placement.as_str(),
+            placements,
         })
     }
 

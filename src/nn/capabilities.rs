@@ -79,7 +79,7 @@ pub fn capabilities() -> Vec<Capability> {
         ),
         Capability::implemented(
             "nn.discover",
-            "descriptor-only inventory of SafeTensors, GGUF, and ONNX files and directories; GGUF split-shard group completeness and cross-shard uniqueness checks; stdin discovery via a bounded private spool; optional --out-catalog persistence",
+            "descriptor-only inventory of SafeTensors, GGUF, ONNX, and PyTorch (.pth/.pt/.ckpt, data-only opcode reading) files and directories; GGUF split-shard and sharded-SafeTensors index checks (missing-shard findings, cross-shard uniqueness); stdin discovery via a bounded private spool; optional --out-catalog persistence",
         ),
         Capability::implemented(
             "nn.ls",
@@ -107,11 +107,11 @@ pub fn capabilities() -> Vec<Capability> {
         ),
         Capability::implemented(
             "nn.edit",
-            "transactional fixed-size edits: preimage-recording plans, typed scalar writes through codecs (exact/nearest policies), masked sub-byte writes for Q4_0 nibbles, verification ladder (catalog + source digest + preimage), fresh-output application with preservation proof and container reparse (SafeTensors, GGUF, and ONNX raw_data spans), undo bundles bound to the exact edited revision, and an MLP channel-prune structural recipe (gate/up rows + down columns with shape updates)",
+            "transactional fixed-size edits: preimage-recording plans, typed scalar writes through codecs (exact/nearest policies), masked sub-byte writes for Q4_0 nibbles, verification ladder (catalog + source digest + preimage), fresh-output application with preservation proof and container reparse (SafeTensors, GGUF, and ONNX raw_data spans), multi-write edit sessions (stage/apply/undo-all in one pass), undo bundles bound to the exact edited revision, and an MLP channel-prune structural recipe (gate/up rows + down columns with shape updates)",
         ),
         Capability::implemented(
             "nn.analyze",
-            "bounded numerical inspection: metadata/sample/full scans with coverage records, Welford statistics, non-finite categories, overflow-safe L2 norms, declared-edge histograms, reference-error metrics with zero-denominator policies, and Q4_0 block views",
+            "bounded numerical inspection: metadata/sample/full scans with coverage records, Welford statistics, non-finite categories, overflow-safe L2 norms, declared-edge histograms, reference-error metrics with zero-denominator policies, Q4_0 block views, and batch analysis over selections with robust cross-tensor outlier flags (statistical observation, not a defect verdict)",
         ),
         Capability::implemented(
             "nn.impact",
@@ -124,11 +124,11 @@ pub fn capabilities() -> Vec<Capability> {
         Capability::unavailable("nn.quant", "quantization inspection is not implemented yet"),
         Capability::implemented(
             "nn.select",
-            "tensor selection by exact name, scoped name, id, or component selector through a pack (families with single/range/list/wildcard indexers; heads[N] row-range views on fused query/gate weights)",
+            "tensor selection by exact name, scoped name, id, or component selector through a pack (families with single/range/list/wildcard indexers; heads[N] row-range views on fused query/gate weights; experts[N] contiguous slab views on stacked MoE expert storage)",
         ),
         Capability::implemented(
             "nn.diff",
-            "layered comparison of two content-verified catalogs: package member sets, descriptor changes, encoded-content equality with the repack-vs-payload distinction, optional decoded comparison with exact_bits/lenient NaN and signed-zero policies, unmatched populations visible, exact claims only — never lineage",
+            "layered comparison of two content-verified catalogs: package member sets, descriptor changes, encoded-content equality with the repack-vs-payload distinction, optional decoded comparison with exact_bits/lenient NaN and signed-zero policies, a precision audit mode (per-tensor decoded MAE/RMSE/maxAE/relative-L2 under each side's declared codec with finite-mismatch counts and worst-by-relL2 rollups), unmatched populations visible, exact claims only — never lineage",
         ),
         Capability::implemented(
             "nn.fingerprint",
@@ -148,7 +148,7 @@ pub fn capabilities() -> Vec<Capability> {
         ),
         Capability::implemented(
             "nn.partition",
-            "static execution partition planning: contiguous layer groups balanced by encoded weight bytes (optimal max-stage DP), unlayered tensors reported separately, estimates state exactly what they include and exclude — no runtime, transfer, or speedup claims",
+            "static execution partition planning: contiguous layer groups balanced by encoded weight bytes (optimal max-stage DP), unlayered tensors reported or explicitly placed (report/first/last/manual policies), estimates state exactly what they include and exclude — no runtime, transfer, or speedup claims",
         ),
         Capability::implemented(
             "nn.carve",
@@ -156,7 +156,15 @@ pub fn capabilities() -> Vec<Capability> {
         ),
         Capability::implemented(
             "nn.pack",
-            "declarative model packs: id-verified YAML manifests, name-pattern bindings with capture groups, shape expressions over configuration parameters, recognition with contradiction retention, architecture views in ls/show, static lint (duplicate components, expression evaluation, schedule arity, all-capture patterns; exit 7 on errors) and provisional scaffolding from observed catalogs (every suggestion labeled heuristic)",
+            "declarative model packs: id-verified YAML manifests, name-pattern bindings with capture groups (layer_kinds scoping for per-kind shapes), shape expressions over configuration parameters, recognition with contradiction retention, architecture views in ls/show, static lint (duplicate components, expression evaluation, schedule arity, all-capture patterns; exit 7 on errors) and provisional scaffolding from observed catalogs with optional config.json dimension extraction and inferred symbols (every suggestion labeled heuristic)",
+        ),
+        Capability::implemented(
+            "nn.shard_map",
+            "static download planning from a sharded-SafeTensors index: requested tensors or selections mapped to shard files with per-shard counts and payload bytes, planned-vs-declared coverage, and names missing from the index — a plan, never a download",
+        ),
+        Capability::implemented(
+            "nn.torch",
+            "static PyTorch checkpoint reading (.pth/.pt/.ckpt): ZIP skeleton plus a data-only pickle opcode interpreter (closed state-dict subset; REDUCE recognized only for tensor rebuilds and OrderedDict, read as data); torch.* encodings with exact storage spans; edits are refused — the tier is read-only in v1",
         ),
         Capability::unavailable("nn.replay", "runtime replay is not implemented yet"),
         Capability::unavailable("nn.capture", "runtime capture is not implemented yet"),

@@ -288,6 +288,15 @@ impl EditPlan {
         allow_clamp: bool,
         budget: &Budget,
     ) -> Result<EditPlan, NnError> {
+        // The torch descriptor tier is read-only in v1: descriptors and
+        // spans are exact, but no fresh-output writer exists for the ZIP
+        // container, so edits are refused honestly instead of half-kept.
+        if tensor.encoding.starts_with("torch.") {
+            return Err(NnError::FormatUnsupported {
+                format: "torch".to_string(),
+                reason: "the torch descriptor tier is read-only in v1 (no writer)".to_string(),
+            });
+        }
         let layout = layout_for_encoding(&tensor.encoding);
         let location = write_unit(tensor, layout, coordinate)?;
         let source = catalog.resolve_source(&tensor.source_id)?;
@@ -584,6 +593,12 @@ impl EditPlan {
                 ),
             });
         }
+        let plan = Self::from_semantic_record(&semantic)?;
+        Ok(plan)
+    }
+
+    /// Parse one plan semantic record (shared by plan files and sessions).
+    pub fn from_semantic_record(semantic: &Json) -> Result<EditPlan, NnError> {
         let coordinate = semantic
             .get("coordinate")
             .and_then(Json::as_array)
@@ -644,27 +659,27 @@ impl EditPlan {
             })
             .unwrap_or_default();
         Ok(EditPlan {
-            plan_id: embedded,
-            catalog_id: required_str(&semantic, "catalog_id")?,
-            tensor_id: required_str(&semantic, "tensor_id")?,
-            tensor_name: required_str(&semantic, "tensor_name")?,
-            encoding: required_str(&semantic, "encoding")?,
+            plan_id: compute_id(IdKind::Plan, semantic)?,
+            catalog_id: required_str(semantic, "catalog_id")?,
+            tensor_id: required_str(semantic, "tensor_id")?,
+            tensor_name: required_str(semantic, "tensor_name")?,
+            encoding: required_str(semantic, "encoding")?,
             coordinate,
             operation: match semantic.get("operation").and_then(Json::as_str) {
                 Some("set_raw_bits") => "set_raw_bits",
                 _ => "set_scalar",
             },
-            policy: EditPolicy::parse(&required_str(&semantic, "policy")?)?,
+            policy: EditPolicy::parse(&required_str(semantic, "policy")?)?,
             span,
             bit_field,
             decode_dependencies,
-            source_id: required_str(&semantic, "source_id")?,
-            source_digest: required_str(&semantic, "source_digest")?,
-            old_bytes_hex: required_str(&semantic, "old_bytes_hex")?,
-            new_bytes_hex: required_str(&semantic, "new_bytes_hex")?,
-            old_display: required_str(&semantic, "old_value")?,
-            new_display: required_str(&semantic, "new_value")?,
-            requested: required_str(&semantic, "requested")?,
+            source_id: required_str(semantic, "source_id")?,
+            source_digest: required_str(semantic, "source_digest")?,
+            old_bytes_hex: required_str(semantic, "old_bytes_hex")?,
+            new_bytes_hex: required_str(semantic, "new_bytes_hex")?,
+            old_display: required_str(semantic, "old_value")?,
+            new_display: required_str(semantic, "new_value")?,
+            requested: required_str(semantic, "requested")?,
         })
     }
 }
@@ -1022,6 +1037,433 @@ pub fn apply_edit_plan(
     Ok(receipt)
 }
 
+// ---- multi-write edit sessions (P2) ----
+
+/// A staged multi-write edit session against one catalog and one source.
+/// Each op is a full plan record (preimage captured at staging); apply
+/// patches every span in a single copy pass, and the undo bundle reverses
+/// all of them atomically against the exact edited revision.
+pub struct EditSession {
+    pub ops: Vec<EditPlan>,
+}
+
+impl EditSession {
+    /// Stage one more operation into the session (existing file or fresh).
+    /// The op's preimage is captured now by `EditPlan::build`; overlapping
+    /// write units on the same source are conflicts, refused at staging.
+    pub fn stage(
+        session_dir: &Path,
+        catalog: &Catalog,
+        plan: EditPlan,
+    ) -> Result<EditSession, NnError> {
+        // A missing file is a fresh session; a present-but-unreadable one is
+        // an error, never silently replaced.
+        let mut session = if session_dir.join("session.json").exists() {
+            Self::load(session_dir)?
+        } else {
+            EditSession { ops: Vec::new() }
+        };
+        if let Some(first) = session.ops.first() {
+            if first.catalog_id != plan.catalog_id {
+                return Err(NnError::InvalidRequest {
+                    message: format!(
+                        "session is bound to catalog {} but the new op targets {}",
+                        super::error::brief(&first.catalog_id),
+                        super::error::brief(&plan.catalog_id)
+                    ),
+                });
+            }
+            if first.source_id != plan.source_id {
+                return Err(NnError::InvalidRequest {
+                    message: "one session edits one source file; stage a separate session per shard or checkpoint"
+                        .to_string(),
+                });
+            }
+        }
+        // The source must be byte-identical to what earlier ops staged.
+        if let Some(first) = session.ops.first() {
+            let source = catalog.resolve_source(&first.source_id)?;
+            let path = catalog.resolve_path(&source.path);
+            let reader = BoundedFile::open(&path)?;
+            let digest = reader.content_digest(&super::budget::Budget::unrestricted())?;
+            if digest != first.source_digest {
+                return Err(NnError::SourceChanged {
+                    detail: "source changed since this session was staged".to_string(),
+                });
+            }
+        }
+        for existing in &session.ops {
+            let a = (existing.span.0, existing.span.0 + existing.span.1);
+            let b = (plan.span.0, plan.span.0 + plan.span.1);
+            if a.0 < b.1 && b.0 < a.1 {
+                return Err(NnError::WriteConflict {
+                    detail: format!(
+                        "op {} writes [{}, {}) which overlaps staged op {} at [{}, {})",
+                        plan.tensor_name, b.0, b.1, existing.tensor_name, a.0, a.1
+                    ),
+                });
+            }
+        }
+        session.ops.push(plan);
+        session.save(session_dir)?;
+        Ok(session)
+    }
+
+    pub fn load(session_dir: &Path) -> Result<EditSession, NnError> {
+        let path = session_dir.join("session.json");
+        let text = std::fs::read_to_string(&path).map_err(NnError::Io)?;
+        let file = Json::parse_strict(&text, ParseLimits::default())?;
+        if file.get("schema").and_then(Json::as_str) != Some("binfiddle.nn.edit-session/v1") {
+            return Err(NnError::MalformedInput {
+                detail: "not a binfiddle edit session".to_string(),
+            });
+        }
+        let ops =
+            file.get("ops")
+                .and_then(Json::as_array)
+                .ok_or_else(|| NnError::MalformedInput {
+                    detail: "edit session is missing ops".to_string(),
+                })?;
+        if ops.is_empty() {
+            return Err(NnError::MalformedInput {
+                detail: "edit session carries no operations".to_string(),
+            });
+        }
+        // Re-load each op through the plan loader semantics by reconstructing
+        // plan files is wasteful; instead parse each op via the same record
+        // reader the plan file uses.
+        let mut parsed = Vec::with_capacity(ops.len());
+        for op in ops {
+            parsed.push(EditPlan::from_semantic_record(op)?);
+        }
+        let first = &parsed[0];
+        for op in &parsed[1..] {
+            if op.catalog_id != first.catalog_id || op.source_id != first.source_id {
+                return Err(NnError::MalformedInput {
+                    detail: "session mixes catalogs or sources; refusing".to_string(),
+                });
+            }
+        }
+        Ok(EditSession { ops: parsed })
+    }
+
+    pub fn save(&self, session_dir: &Path) -> Result<(), NnError> {
+        std::fs::create_dir_all(session_dir).map_err(NnError::Io)?;
+        let ops = self
+            .ops
+            .iter()
+            .map(|op| op.semantic())
+            .collect::<Result<Vec<_>, _>>()?;
+        let file = Json::object(vec![
+            (
+                "schema",
+                Json::Str("binfiddle.nn.edit-session/v1".to_string()),
+            ),
+            ("ops", Json::Array(ops)),
+        ])?;
+        std::fs::write(
+            session_dir.join("session.json"),
+            file.to_canonical()?.as_bytes(),
+        )
+        .map_err(NnError::Io)?;
+        Ok(())
+    }
+
+    pub fn text(&self) -> String {
+        let mut out = format!("edit session ({} operations)\n", self.ops.len());
+        for (i, op) in self.ops.iter().enumerate() {
+            out.push_str(&format!("--- op {i} ---\n{}", op.text()));
+        }
+        out
+    }
+}
+
+/// Receipt for one applied session.
+pub struct SessionReceipt {
+    pub output_path: PathBuf,
+    pub output_digest: String,
+    pub ops: usize,
+    pub bytes_written: u64,
+    pub unselected_preserved: bool,
+    pub container_revalidated: bool,
+}
+
+/// Apply every staged op in one copy pass over the source.
+pub fn apply_edit_session(
+    catalog: &Catalog,
+    session: &EditSession,
+    out_path: &Path,
+    undo_bundle: Option<&Path>,
+    budget: &Budget,
+) -> Result<SessionReceipt, NnError> {
+    if session.ops.is_empty() {
+        return Err(NnError::InvalidRequest {
+            message: "the session carries no operations".to_string(),
+        });
+    }
+    if out_path.exists() {
+        return Err(NnError::InvalidRequest {
+            message: format!(
+                "output {} already exists; sessions write fresh files",
+                out_path.display()
+            ),
+        });
+    }
+    let first = &session.ops[0];
+    // Catalog binding.
+    let catalog_id = catalog.id()?;
+    if catalog_id != first.catalog_id {
+        return Err(NnError::InvalidRequest {
+            message: format!(
+                "session was built against catalog {} but applied to {}",
+                super::error::brief(&first.catalog_id),
+                super::error::brief(&catalog_id)
+            ),
+        });
+    }
+    let source = catalog.resolve_source(&first.source_id)?;
+    let source_path = catalog.resolve_path(&source.path);
+    let reader = BoundedFile::open(&source_path)?;
+    if reader.content_digest(budget)? != first.source_digest {
+        return Err(NnError::SourceChanged {
+            detail: "source changed since the session was staged".to_string(),
+        });
+    }
+    // Preimage of every op must still hold.
+    for op in &session.ops {
+        let unit_len = if op.bit_field.is_some() { 1 } else { op.span.1 };
+        let mut current = vec![0u8; unit_len as usize];
+        reader.read_exact_at_bounded(op.span.0, &mut current, budget)?;
+        if hex::encode(&current) != op.old_bytes_hex {
+            return Err(NnError::WriteConflict {
+                detail: format!(
+                    "preimage mismatch for op {} at [{}, {}): staged {}, file now has {}",
+                    op.tensor_name,
+                    op.span.0,
+                    op.span.0 + op.span.1,
+                    op.old_bytes_hex,
+                    hex::encode(&current)
+                ),
+            });
+        }
+    }
+    // Sorted, non-overlapping patches.
+    let mut patches: Vec<(u64, Vec<u8>, &EditPlan)> = Vec::with_capacity(session.ops.len());
+    for op in &session.ops {
+        let new = hex::decode(&op.new_bytes_hex).map_err(|_| NnError::MalformedInput {
+            detail: "session op carries invalid replacement hex".to_string(),
+        })?;
+        patches.push((op.span.0, new, op));
+    }
+    patches.sort_by_key(|(start, _, _)| *start);
+    for pair in patches.windows(2) {
+        let (a_start, a_bytes, _) = &pair[0];
+        let (b_start, _, _) = &pair[1];
+        if *b_start < *a_start + a_bytes.len() as u64 {
+            return Err(NnError::WriteConflict {
+                detail: "session ops overlap after load; refusing".to_string(),
+            });
+        }
+    }
+    let total = reader.length();
+    budget.justify_output_bytes(total.saturating_add(1024 * 1024));
+    let mut output = std::fs::File::create_new(out_path).map_err(NnError::Io)?;
+    let mut hasher = Sha256::new();
+    let chunk_size = 1024 * 1024u64;
+    let mut offset = 0u64;
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut bytes_written = 0u64;
+    while offset < total {
+        let take = chunk_size.min(total - offset) as usize;
+        buffer.clear();
+        buffer.resize(take, 0);
+        reader.read_exact_at_bounded(offset, &mut buffer, budget)?;
+        for (start, new, _) in &patches {
+            let end = start + new.len() as u64;
+            if offset < end && *start < offset + take as u64 {
+                let local = (start - offset) as usize;
+                buffer[local..local + new.len()].copy_from_slice(new);
+            }
+        }
+        output.write_all(&buffer).map_err(NnError::Io)?;
+        hasher.update(&buffer);
+        bytes_written += buffer.len() as u64;
+        budget.consume_output(buffer.len() as u64)?;
+        budget.checkpoint()?;
+        offset += take as u64;
+    }
+    output.flush().map_err(NnError::Io)?;
+    drop(output);
+    let output_digest = hex::encode(hasher.finalize());
+
+    // Preservation: every byte outside the union of patch spans identical.
+    let out_reader = BoundedFile::open(out_path)?;
+    let mut preserved = true;
+    let mut offset = 0u64;
+    let mut expected: Vec<u8> = Vec::new();
+    let mut actual: Vec<u8> = Vec::new();
+    'outer: while offset < total {
+        let take = chunk_size.min(total - offset) as usize;
+        expected.clear();
+        expected.resize(take, 0);
+        actual.clear();
+        actual.resize(take, 0);
+        reader.read_exact_at_bounded(offset, &mut expected, budget)?;
+        out_reader.read_exact_at_bounded(offset, &mut actual, budget)?;
+        for i in 0..take {
+            let file_offset = offset + i as u64;
+            let inside = patches.iter().any(|(start, new, _)| {
+                file_offset >= *start && file_offset < *start + new.len() as u64
+            });
+            if !inside && expected[i] != actual[i] {
+                preserved = false;
+                break 'outer;
+            }
+        }
+        offset += take as u64;
+    }
+
+    // Container revalidation against the first op's format family.
+    let format = source.format.as_deref().unwrap_or("");
+    let revalidated = revalidate_container(format, &out_reader, budget, &session.ops);
+
+    if let Some(bundle_dir) = undo_bundle {
+        std::fs::create_dir_all(bundle_dir).map_err(NnError::Io)?;
+        let patch_records = patches
+            .iter()
+            .map(|(start, _, op)| {
+                Json::object(vec![
+                    ("offset", Json::Str(start.to_string())),
+                    ("old_hex", Json::Str(op.old_bytes_hex.clone())),
+                    ("new_hex", Json::Str(op.new_bytes_hex.clone())),
+                ])
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let bundle = Json::object(vec![
+            ("schema", Json::Str("binfiddle.nn.edit-undo/v1".to_string())),
+            (
+                "plan_id",
+                Json::Str(format!("session:{}", &output_digest[..16])),
+            ),
+            ("source_path", Json::Str(source.path.clone())),
+            ("source_digest", Json::Str(first.source_digest.clone())),
+            ("edited_digest", Json::Str(output_digest.clone())),
+            ("patches", Json::Array(patch_records)),
+        ])?;
+        std::fs::write(
+            bundle_dir.join("undo.json"),
+            bundle.to_canonical()?.as_bytes(),
+        )
+        .map_err(NnError::Io)?;
+    }
+
+    Ok(SessionReceipt {
+        output_path: out_path.to_path_buf(),
+        output_digest,
+        ops: session.ops.len(),
+        bytes_written,
+        unselected_preserved: preserved,
+        container_revalidated: revalidated,
+    })
+}
+
+fn revalidate_container(
+    format: &str,
+    out_reader: &BoundedFile,
+    budget: &Budget,
+    ops: &[EditPlan],
+) -> bool {
+    let names: Vec<&str> = ops.iter().map(|o| o.tensor_name.as_str()).collect();
+    if format.starts_with("safetensors") {
+        match super::format::safetensors::inventory(out_reader, budget) {
+            Ok(inventory) => {
+                inventory.validity == super::format::Validity::Valid
+                    && names
+                        .iter()
+                        .all(|n| inventory.tensors.iter().any(|t| t.original_name == *n))
+            }
+            Err(_) => false,
+        }
+    } else if format.starts_with("gguf") {
+        match super::format::gguf::inventory(out_reader, budget) {
+            Ok(inventory) => {
+                inventory.validity == super::format::Validity::Valid
+                    && names
+                        .iter()
+                        .all(|n| inventory.tensors.iter().any(|t| t.original_name == *n))
+            }
+            Err(_) => false,
+        }
+    } else if format.starts_with("onnx") {
+        match super::format::onnx::inventory(out_reader, budget) {
+            Ok(inventory) => {
+                inventory.inventory.validity == super::format::Validity::Valid
+                    && names.iter().all(|n| {
+                        inventory
+                            .inventory
+                            .tensors
+                            .iter()
+                            .any(|t| t.original_name == *n && t.payload_length.is_some())
+                    })
+            }
+            Err(_) => false,
+        }
+    } else {
+        false
+    }
+}
+
+pub fn session_envelope(session: &EditSession) -> Result<super::report::ResultEnvelope, NnError> {
+    let ops = session
+        .ops
+        .iter()
+        .map(|op| op.semantic())
+        .collect::<Result<Vec<_>, _>>()?;
+    let semantic = Json::object(vec![
+        ("operations", Json::Str(session.ops.len().to_string())),
+        ("ops", Json::Array(ops)),
+    ])?;
+    Ok(super::report::ResultEnvelope::new("edit.session.stage").with_semantic(semantic))
+}
+
+pub fn session_receipt_text(receipt: &SessionReceipt) -> String {
+    format!(
+        "session applied\n  output:   {}\n  digest:   {}\n  ops:      {}\n  written:  {} bytes\n  preserved: {}\n  reparsed: {}\n",
+        receipt.output_path.display(),
+        &receipt.output_digest[..16.min(receipt.output_digest.len())],
+        receipt.ops,
+        receipt.bytes_written,
+        if receipt.unselected_preserved { "all bytes outside the planned spans verified identical" } else { "FAILED" },
+        if receipt.container_revalidated { "container reparse valid, spans unchanged" } else { "container reparse NOT verified" },
+    )
+}
+
+pub fn session_receipt_envelope(
+    receipt: &SessionReceipt,
+) -> Result<super::report::ResultEnvelope, NnError> {
+    let semantic = Json::object(vec![
+        (
+            "output",
+            Json::Str(receipt.output_path.display().to_string()),
+        ),
+        ("output_digest", Json::Str(receipt.output_digest.clone())),
+        ("ops", Json::Str(receipt.ops.to_string())),
+        (
+            "bytes_written",
+            Json::Str(receipt.bytes_written.to_string()),
+        ),
+        (
+            "unselected_preserved",
+            Json::Bool(receipt.unselected_preserved),
+        ),
+        (
+            "container_revalidated",
+            Json::Bool(receipt.container_revalidated),
+        ),
+    ])?;
+    Ok(super::report::ResultEnvelope::new("edit.session.apply").with_semantic(semantic))
+}
+
 pub fn receipt_text(receipt: &EditReceipt) -> String {
     format!(
         "edit applied\n  output:   {}\n  digest:   {}\n  written:  {} bytes\n  preserved: {}\n  reparsed: {}\n",
@@ -1099,36 +1541,52 @@ pub fn undo_edit(
             ),
         });
     }
-    let patch = bundle
+    // All patches (sessions stage several) reverse in one pass.
+    let patch_records: Vec<Json> = bundle
         .get("patches")
         .and_then(Json::as_array)
-        .and_then(|p| p.first())
-        .cloned()
+        .map(|a| a.to_vec())
         .ok_or_else(|| NnError::MalformedInput {
             detail: "undo bundle carries no patches".to_string(),
         })?;
-    let offset = required_str(&patch, "offset")?
-        .parse::<u64>()
-        .map_err(|_| NnError::MalformedInput {
-            detail: "bad patch offset".to_string(),
+    let mut patches: Vec<(u64, Vec<u8>, Vec<u8>, String)> = Vec::new();
+    for patch in &patch_records {
+        let offset =
+            required_str(patch, "offset")?
+                .parse::<u64>()
+                .map_err(|_| NnError::MalformedInput {
+                    detail: "bad patch offset".to_string(),
+                })?;
+        let old_hex = required_str(patch, "old_hex")?;
+        let new_hex = required_str(patch, "new_hex")?;
+        let old_bytes = hex::decode(&old_hex).map_err(|_| NnError::MalformedInput {
+            detail: "bad old hex".to_string(),
         })?;
-    let old_hex = required_str(&patch, "old_hex")?;
-    let new_hex = required_str(&patch, "new_hex")?;
-    let old_bytes = hex::decode(&old_hex).map_err(|_| NnError::MalformedInput {
-        detail: "bad old hex".to_string(),
-    })?;
-    let new_bytes = hex::decode(&new_hex).map_err(|_| NnError::MalformedInput {
-        detail: "bad new hex".to_string(),
-    })?;
-
-    // Preimage: the target must currently hold the edited bytes.
-    let mut current_unit = vec![0u8; new_bytes.len()];
-    reader.read_exact_at_bounded(offset, &mut current_unit, budget)?;
-    if hex::encode(&current_unit) != new_hex {
-        return Err(NnError::WriteConflict {
-            detail: "target no longer holds the edited bytes; refusing blind rollback".to_string(),
-        });
+        let new_bytes = hex::decode(&new_hex).map_err(|_| NnError::MalformedInput {
+            detail: "bad new hex".to_string(),
+        })?;
+        // Preimage: the target must currently hold the edited bytes.
+        let mut current_unit = vec![0u8; new_bytes.len()];
+        reader.read_exact_at_bounded(offset, &mut current_unit, budget)?;
+        if hex::encode(&current_unit) != new_hex {
+            return Err(NnError::WriteConflict {
+                detail: "target no longer holds the edited bytes; refusing blind rollback"
+                    .to_string(),
+            });
+        }
+        patches.push((offset, old_bytes, new_bytes, old_hex));
     }
+    patches.sort_by_key(|(offset, _, _, _)| *offset);
+    for pair in patches.windows(2) {
+        let (a_start, _, a_new, _) = &pair[0];
+        let (b_start, _, _, _) = &pair[1];
+        if *b_start < *a_start + a_new.len() as u64 {
+            return Err(NnError::WriteConflict {
+                detail: "undo patches overlap; bundle is malformed".to_string(),
+            });
+        }
+    }
+    let _ = &patches[0];
 
     if out_path.exists() {
         return Err(NnError::InvalidRequest {
@@ -1142,8 +1600,6 @@ pub fn undo_edit(
     // Whole-target copy with an in-place patch: the output length equals the
     // target length exactly. Justify the output budget to that bound.
     budget.justify_output_bytes(total.saturating_add(chunk_size));
-    let unit_start = offset;
-    let unit_end = offset + old_bytes.len() as u64;
     let mut offset_iter = 0u64;
     let mut buffer = Vec::new();
     while offset_iter < total {
@@ -1151,9 +1607,12 @@ pub fn undo_edit(
         buffer.clear();
         buffer.resize(take, 0);
         reader.read_exact_at_bounded(offset_iter, &mut buffer, budget)?;
-        if offset_iter < unit_end && unit_start < offset_iter + take as u64 {
-            let local_start = (unit_start - offset_iter) as usize;
-            buffer[local_start..local_start + old_bytes.len()].copy_from_slice(&old_bytes);
+        for (start, old, _, _) in &patches {
+            let end = start + old.len() as u64;
+            if offset_iter < end && *start < offset_iter + take as u64 {
+                let local_start = (start - offset_iter) as usize;
+                buffer[local_start..local_start + old.len()].copy_from_slice(old);
+            }
         }
         output.write_all(&buffer).map_err(NnError::Io)?;
         hasher.update(&buffer);
@@ -1163,11 +1622,12 @@ pub fn undo_edit(
     output.flush().map_err(NnError::Io)?;
     drop(output);
 
+    let bytes_reversed: u64 = patches.iter().map(|(_, old, _, _)| old.len() as u64).sum();
     Ok(EditReceipt {
         plan_id: required_str(&bundle, "plan_id")?,
         output_path: out_path.to_path_buf(),
         output_digest: hex::encode(hasher.finalize()),
-        bytes_written: old_bytes.len() as u64,
+        bytes_written: bytes_reversed,
         unselected_preserved: true,
         container_revalidated: false,
     })

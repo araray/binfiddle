@@ -594,6 +594,9 @@ enum NnCommand {
         /// Scope for --tensor: unique source id prefix or exact path
         #[arg(long, requires = "tensor")]
         source: Option<String>,
+        /// Analyze every tensor of a saved selection (batch mode)
+        #[arg(long)]
+        selection: Option<String>,
 
         /// Access mode: metadata (no payload reads), sample, full
         #[arg(long, default_value = "full", value_parser = ["metadata", "sample", "full"])]
@@ -653,6 +656,15 @@ enum NnCommand {
         /// Also compare decoded values of content-changed scalar tensors
         #[arg(long)]
         decoded: bool,
+
+        /// Audit decoded error metrics for every name-matched same-shape
+        /// pair (e.g. fp32 vs fp16 exports)
+        #[arg(long)]
+        precision: bool,
+
+        /// Sample stride for the precision audit (0 = every element)
+        #[arg(long, default_value_t = 0)]
+        precision_sample: u64,
 
         /// Decoded comparison policy: exact_bits, lenient
         #[arg(long, default_value = "exact_bits", value_parser = ["exact_bits", "lenient"])]
@@ -723,6 +735,16 @@ enum NnCommand {
         /// Number of stages
         #[arg(long, default_value = "2")]
         stages: usize,
+
+        /// Placement of unlayered tensors (embeddings/norms/heads):
+        /// report (default), first, last, or manual (needs --placement-file)
+        #[arg(long, default_value = "report")]
+        unlayered_policy: String,
+
+        /// JSON object file mapping tensor names to stage indices (for
+        /// --unlayered-policy manual)
+        #[arg(long)]
+        placement_file: Option<String>,
 
         /// Report format: text, json
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
@@ -883,6 +905,12 @@ enum PackCommand {
         /// Catalog file to derive patterns from
         #[arg(long)]
         catalog: String,
+
+        /// Optional config.json: known dimension keys become parameters
+        /// (heuristic-labeled); dims observed in 3+ tensors become inferred
+        /// symbols either way
+        #[arg(long)]
+        config: Option<String>,
     },
 }
 
@@ -936,8 +964,13 @@ enum EditCommand {
         clamp: bool,
 
         /// Save the plan to this file
-        #[arg(long)]
+        #[arg(long, conflicts_with = "session_out")]
         save_plan: Option<String>,
+
+        /// Stage the operation into an edit session directory instead of a
+        /// single plan file (multi-write sessions; one source per session)
+        #[arg(long = "session", id = "session_out", conflicts_with = "save_plan")]
+        session_out: Option<String>,
 
         /// Report format: text, json
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
@@ -951,8 +984,16 @@ enum EditCommand {
         catalog: String,
 
         /// Saved edit plan file
-        #[arg(long)]
-        plan: String,
+        #[arg(
+            long,
+            conflicts_with = "session_in",
+            required_unless_present = "session_in"
+        )]
+        plan: Option<String>,
+
+        /// Apply every staged operation of an edit session in one pass
+        #[arg(long = "session", id = "session_in", conflicts_with = "plan")]
+        session_in: Option<String>,
 
         /// Output file (must not exist; the original is never modified)
         #[arg(long)]
@@ -1484,6 +1525,7 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             tensor,
             target_id,
             source,
+            selection,
             mode,
             seed,
             sample_size,
@@ -1503,6 +1545,32 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 &DiscoverOptions::default(),
                 &budget,
             )?;
+            if let Some(sel_path) = selection.as_deref() {
+                if tensor.is_some() || target_id.is_some() {
+                    return Err(NnError::InvalidRequest {
+                        message: "nn analyze takes either --selection or one of --tensor/--id"
+                            .to_string(),
+                    });
+                }
+                let sel = binfiddle::nn::Selection::load(Path::new(sel_path))?;
+                let mode = match mode.as_str() {
+                    "metadata" => ScanMode::Metadata,
+                    "sample" => ScanMode::Sample,
+                    _ => ScanMode::Full,
+                };
+                let batch =
+                    analyze::analyze_selection(&loaded, &sel, mode, *seed, *sample_size, &budget)?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    batch.envelope()?.write_json(&mut out)?;
+                } else {
+                    out.write_all(batch.text().as_bytes())?;
+                }
+                out.flush()?;
+                return Ok(());
+            }
             let target = match (tensor, target_id) {
                 (Some(name), None) => ShowTarget::Name {
                     name,
@@ -1633,7 +1701,7 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                     });
                 }
             }
-            PackCommand::Scaffold { catalog } => {
+            PackCommand::Scaffold { catalog, config } => {
                 use binfiddle::nn::profile;
                 let catalog_path = nn_path_arg(Some(catalog.as_str()), "profile scaffold")?
                     .ok_or_else(|| NnError::InvalidRequest {
@@ -1645,7 +1713,9 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                     &DiscoverOptions::default(),
                     &budget,
                 )?;
-                let scaffold = profile::scaffold_pack(&loaded)?;
+                let config_text = nn_path_arg(config.as_deref(), "pack scaffold")?
+                    .and_then(|p| std::fs::read_to_string(p).ok());
+                let scaffold = profile::scaffold_pack_with_config(&loaded, config_text.as_deref())?;
                 guard.propagate(&cancel);
                 let stdout = io::stdout();
                 let mut out = stdout.lock();
@@ -1668,6 +1738,7 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                     policy,
                     clamp,
                     save_plan,
+                    session_out,
                     report_format,
                 } => {
                     let catalog_path = nn_path_arg(catalog.as_deref(), "edit set")?;
@@ -1721,6 +1792,23 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                     if let Some(path) = save_plan.as_deref() {
                         plan.save(Path::new(path))?;
                     }
+                    if let Some(dir) = session_out.as_deref() {
+                        let session = edit::EditSession::stage(Path::new(dir), &loaded, plan)?;
+                        guard.propagate(&cancel);
+                        let stdout = io::stdout();
+                        let mut out = stdout.lock();
+                        if report_format == "json" {
+                            edit::session_envelope(&session)?.write_json(&mut out)?;
+                        } else {
+                            out.write_all(session.text().as_bytes())?;
+                            out.write_all(
+                                b"
+",
+                            )?;
+                        }
+                        out.flush()?;
+                        return Ok(());
+                    }
                     guard.propagate(&cancel);
                     let stdout = io::stdout();
                     let mut out = stdout.lock();
@@ -1734,6 +1822,7 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 EditCommand::Apply {
                     catalog,
                     plan,
+                    session_in,
                     out_model,
                     undo_bundle,
                     report_format,
@@ -1745,7 +1834,29 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                         &DiscoverOptions::default(),
                         &budget,
                     )?;
-                    let loaded_plan = edit::EditPlan::load(Path::new(plan))?;
+                    if let Some(dir) = session_in.as_deref() {
+                        let session = edit::EditSession::load(Path::new(dir))?;
+                        let receipt = edit::apply_edit_session(
+                            &loaded,
+                            &session,
+                            Path::new(out_model),
+                            undo_bundle.as_deref().map(Path::new),
+                            &budget,
+                        )?;
+                        guard.propagate(&cancel);
+                        let stdout = io::stdout();
+                        let mut out = stdout.lock();
+                        if report_format == "json" {
+                            edit::session_receipt_envelope(&receipt)?.write_json(&mut out)?;
+                        } else {
+                            out.write_all(edit::session_receipt_text(&receipt).as_bytes())?;
+                        }
+                        out.flush()?;
+                        return Ok(());
+                    }
+                    let loaded_plan = edit::EditPlan::load(Path::new(
+                        plan.as_deref().expect("checked: plan when no session"),
+                    ))?;
                     let receipt = edit::apply_edit_plan(
                         &loaded,
                         &loaded_plan,
@@ -1833,6 +1944,8 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             left,
             right,
             decoded,
+            precision,
+            precision_sample,
             policy,
             report_format,
         } => {
@@ -1860,6 +1973,24 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 &budget,
             )?;
             let policy = DecodePolicy::parse(policy)?;
+            if *precision {
+                let audit = compare::precision_audit(
+                    &left_catalog,
+                    &right_catalog,
+                    *precision_sample,
+                    &budget,
+                )?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    audit.envelope()?.write_json(&mut out)?;
+                } else {
+                    out.write_all(audit.text().as_bytes())?;
+                }
+                out.flush()?;
+                return Ok(());
+            }
             let report = compare::DiffReport::compare(
                 &left_catalog,
                 &right_catalog,
@@ -1983,6 +2114,8 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             catalog,
             pack,
             stages,
+            unlayered_policy,
+            placement_file,
             report_format,
         } => {
             use binfiddle::nn::partition;
@@ -2000,7 +2133,56 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             )?;
             let loaded_pack = binfiddle::nn::packs::Pack::load(Path::new(pack))?;
             let recognition = binfiddle::nn::packs::Recognition::recognize(&loaded_pack, &loaded)?;
-            let plan = partition::PartitionPlan::plan(&loaded, &recognition, *stages)?;
+            let manual_map: Vec<(String, usize)> = match unlayered_policy.as_str() {
+                "report" => Vec::new(),
+                "first" => Vec::new(),
+                "last" => Vec::new(),
+                "manual" => {
+                    let file =
+                        placement_file
+                            .as_deref()
+                            .ok_or_else(|| NnError::InvalidRequest {
+                                message: "--unlayered-policy manual requires --placement-file"
+                                    .to_string(),
+                            })?;
+                    let text = std::fs::read_to_string(file).map_err(NnError::Io)?;
+                    let parsed = binfiddle::nn::json::Json::parse_foreign(
+                        &text,
+                        binfiddle::nn::json::ParseLimits::for_input_len(text.len()),
+                    )?;
+                    let binfiddle::nn::json::Json::Object(members) = parsed else {
+                        return Err(NnError::InvalidRequest {
+                            message: "placement file must be an object of name -> stage"
+                                .to_string(),
+                        });
+                    };
+                    let mut map: Vec<(String, usize)> = Vec::new();
+                    for (name, stage) in members {
+                        let stage =
+                            stage
+                                .as_number_u64()
+                                .ok_or_else(|| NnError::InvalidRequest {
+                                    message: format!("placement for {name} must be a stage index"),
+                                })? as usize;
+                        map.push((name.clone(), stage));
+                    }
+                    map
+                }
+                other => {
+                    return Err(NnError::InvalidRequest {
+                        message: format!(
+                            "unknown --unlayered-policy {other} (report|first|last|manual)"
+                        ),
+                    })
+                }
+            };
+            let policy = match unlayered_policy.as_str() {
+                "report" => partition::PlacementPolicy::Report,
+                "first" => partition::PlacementPolicy::First,
+                "last" => partition::PlacementPolicy::Last,
+                _ => partition::PlacementPolicy::Manual(&manual_map),
+            };
+            let plan = partition::PartitionPlan::plan(&loaded, &recognition, *stages, policy)?;
             guard.propagate(&cancel);
             let stdout = io::stdout();
             let mut out = stdout.lock();

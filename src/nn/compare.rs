@@ -544,6 +544,228 @@ fn payload_digest(
 }
 
 /// Decoded comparison of two aligned tensors through their scalar codecs.
+/// Per-tensor precision audit row: decoded error metrics between two
+/// same-shape tensors under their own declared codecs (e.g. fp32 vs fp16
+/// exports of the same model).
+pub struct PrecisionRow {
+    pub name: String,
+    pub left_encoding: String,
+    pub right_encoding: String,
+    pub compared: u64,
+    pub finite_mismatches: u64,
+    pub mae: Option<f64>,
+    pub rmse: Option<f64>,
+    pub max_ae: Option<f64>,
+    pub relative_l2: Option<f64>,
+}
+
+pub struct PrecisionAudit {
+    pub rows: Vec<PrecisionRow>,
+    /// Worst tensors by relative L2, descending, bounded list.
+    pub worst: Vec<String>,
+}
+
+impl PrecisionAudit {
+    pub fn text(&self) -> String {
+        let mut out = String::from("precision audit (decoded error metrics)\n");
+        out.push_str(
+            "  name                                                        compared      MAE       RMSE     maxAE    rel-L2  encodings\n",
+        );
+        for row in &self.rows {
+            let fmt = |v: Option<f64>| {
+                v.map(|x| format!("{x:.3e}"))
+                    .unwrap_or_else(|| "-".to_string())
+            };
+            let name = if row.name.len() > 56 {
+                format!("…{}", &row.name[row.name.len() - 55..])
+            } else {
+                row.name.clone()
+            };
+            out.push_str(&format!(
+                "  {:58} {:>9} {:>9} {:>9} {:>9} {:>9}  {} -> {}\n",
+                name,
+                row.compared,
+                fmt(row.mae),
+                fmt(row.rmse),
+                fmt(row.max_ae),
+                fmt(row.relative_l2),
+                row.left_encoding,
+                row.right_encoding
+            ));
+        }
+        if !self.worst.is_empty() {
+            out.push_str("  worst by relative L2:\n");
+            for name in &self.worst {
+                out.push_str(&format!("    {name}\n"));
+            }
+        }
+        out.push_str(
+            "  claims: decoded-value error metrics under each side's declared codec; error size is NOT behavioral impact\n",
+        );
+        out
+    }
+
+    pub fn envelope(&self) -> Result<super::report::ResultEnvelope, NnError> {
+        let rows = self
+            .rows
+            .iter()
+            .map(|r| {
+                let opt = |v: Option<f64>| match v {
+                    Some(x) => Json::Float(x),
+                    None => Json::Null,
+                };
+                Json::object(vec![
+                    ("name", Json::Str(r.name.clone())),
+                    ("left_encoding", Json::Str(r.left_encoding.clone())),
+                    ("right_encoding", Json::Str(r.right_encoding.clone())),
+                    ("compared", Json::Str(r.compared.to_string())),
+                    (
+                        "finite_mismatches",
+                        Json::Str(r.finite_mismatches.to_string()),
+                    ),
+                    ("mae", opt(r.mae)),
+                    ("rmse", opt(r.rmse)),
+                    ("max_ae", opt(r.max_ae)),
+                    ("relative_l2", opt(r.relative_l2)),
+                ])
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let semantic = Json::object(vec![
+            ("tensors", Json::Str(self.rows.len().to_string())),
+            ("rows", Json::Array(rows)),
+            (
+                "worst",
+                Json::Array(self.worst.iter().cloned().map(Json::Str).collect()),
+            ),
+        ])?;
+        Ok(super::report::ResultEnvelope::new("diff.precision").with_semantic(semantic))
+    }
+}
+
+fn metrics_over(pairs: &[(f64, f64)]) -> (u64, Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
+    let mut finite_mismatches = 0u64;
+    let mut abs_sum = 0.0f64;
+    let mut sq_sum = 0.0f64;
+    let mut max_ae = 0.0f64;
+    let mut left_sq = 0.0f64;
+    let mut n = 0u64;
+    for (l, r) in pairs {
+        if l.is_finite() != r.is_finite() {
+            finite_mismatches += 1;
+            continue;
+        }
+        if !l.is_finite() {
+            // Both non-finite: equal-class mismatch counted by class.
+            continue;
+        }
+        let e = (l - r).abs();
+        abs_sum += e;
+        sq_sum += e * e;
+        max_ae = max_ae.max(e);
+        left_sq += l * l;
+        n += 1;
+    }
+    if n == 0 {
+        return (finite_mismatches, None, None, None, None);
+    }
+    let mae = abs_sum / n as f64;
+    let rmse = (sq_sum / n as f64).sqrt();
+    let rel = if left_sq > 0.0 {
+        Some((sq_sum / left_sq).sqrt())
+    } else {
+        None
+    };
+    (finite_mismatches, Some(mae), Some(rmse), Some(max_ae), rel)
+}
+
+/// Audit every name-matched, same-shape tensor pair for decoded error.
+/// Chunked element decoding keeps memory bounded on huge tensors; the
+/// sample limit (0 = everything) states its own coverage per row.
+pub fn precision_audit(
+    left: &Catalog,
+    right: &Catalog,
+    sample_limit: u64,
+    budget: &Budget,
+) -> Result<PrecisionAudit, NnError> {
+    let mut rows = Vec::new();
+    for lt in &left.tensors {
+        let Some(rt) = right
+            .tensors
+            .iter()
+            .find(|t| t.original_name == lt.original_name)
+        else {
+            continue;
+        };
+        if rt.shape != lt.shape {
+            continue;
+        }
+        let (left_codec, right_codec) = match (
+            layout_for_encoding(&lt.encoding),
+            layout_for_encoding(&rt.encoding),
+        ) {
+            (TensorLayout::Scalar(a), TensorLayout::Scalar(b)) => (a, b),
+            _ => continue,
+        };
+        let left_source = left.resolve_source(&lt.source_id)?;
+        let right_source = right.resolve_source(&rt.source_id)?;
+        let left_reader = BoundedFile::open(&left.resolve_path(&left_source.path))?;
+        let right_reader = BoundedFile::open(&right.resolve_path(&right_source.path))?;
+        let lw = left_codec.width() as usize;
+        let rw = right_codec.width() as usize;
+        let total = lt.element_count;
+        let stride = if sample_limit > 0 && total > sample_limit {
+            total.div_ceil(sample_limit)
+        } else {
+            1
+        };
+        let mut pairs: Vec<(f64, f64)> = Vec::new();
+        let mut lbuf = vec![0u8; lw];
+        let mut rbuf = vec![0u8; rw];
+        let mut i = 0u64;
+        while i < total {
+            left_reader.read_exact_at_bounded(
+                lt.payload_start + i * lw as u64,
+                &mut lbuf,
+                budget,
+            )?;
+            right_reader.read_exact_at_bounded(
+                rt.payload_start + i * rw as u64,
+                &mut rbuf,
+                budget,
+            )?;
+            let lv = decode_to_f64(left_codec, &lbuf)?;
+            let rv = decode_to_f64(right_codec, &rbuf)?;
+            pairs.push((lv, rv));
+            i += stride;
+            budget.checkpoint()?;
+        }
+        let (finite_mismatches, mae, rmse, max_ae, rel) = metrics_over(&pairs);
+        rows.push(PrecisionRow {
+            name: lt.original_name.clone(),
+            left_encoding: lt.encoding.clone(),
+            right_encoding: rt.encoding.clone(),
+            compared: pairs.len() as u64,
+            finite_mismatches,
+            mae,
+            rmse,
+            max_ae,
+            relative_l2: rel,
+        });
+    }
+    if rows.is_empty() {
+        return Err(NnError::InvalidRequest {
+            message: "no name-matched same-shape tensor pairs with qualified codecs".to_string(),
+        });
+    }
+    let mut worst: Vec<(f64, String)> = rows
+        .iter()
+        .filter_map(|r| r.relative_l2.map(|v| (v, r.name.clone())))
+        .collect();
+    worst.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let worst = worst.into_iter().take(5).map(|(_, n)| n).collect();
+    Ok(PrecisionAudit { rows, worst })
+}
+
 fn compare_decoded_tensor(
     left: &Catalog,
     lt: &CatalogTensor,

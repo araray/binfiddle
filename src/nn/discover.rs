@@ -379,7 +379,16 @@ fn inventory_file(path: &Path, options: &DiscoverOptions, parent: &Budget) -> So
     // GGUF identifies by magic; SafeTensors and ONNX identify structurally
     // (ONNX is protobuf with a ModelProto/graph; the attempt is cheap and
     // fails fast on non-protobuf bytes).
-    let parse_result = if has_gguf_magic(&file, &budget) {
+    let name_lower = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let is_torch = name_lower.ends_with(".pth")
+        || name_lower.ends_with(".pt")
+        || name_lower.ends_with(".ckpt");
+    let parse_result = if is_torch {
+        format::torch::inventory(&file, &budget).map(Some)
+    } else if has_gguf_magic(&file, &budget) {
         format::gguf::inventory(&file, &budget).map(Some)
     } else {
         match format::safetensors::inventory(&file, &budget) {
@@ -613,13 +622,118 @@ fn check_safetensors_index(root: &Path, sources: &mut [SourceReport]) -> Vec<Str
                 sample.join(", ")
             ),
         );
+        // The full finding is stated once; every other present shard carries
+        // the code and a pointer, so a 50-shard subset is not 50 copies of
+        // the same paragraph.
+        let mut stated = false;
         for report in sources.iter_mut() {
             if referenced.contains(&file_name(&report.path)) {
-                report.notes.push(format!("[{}] {}", finding.0, finding.1));
+                if !stated {
+                    report.notes.push(format!("[{}] {}", finding.0, finding.1));
+                    stated = true;
+                } else {
+                    report.notes.push(format!(
+                        "[SAFETENSORS_SHARD_INDEX_INCOMPLETE] (same as above; {} of {} declared shards absent)",
+                        missing.len(),
+                        referenced.len()
+                    ));
+                }
             }
         }
     }
     missing
+}
+
+/// Cross-check present shards against the index claims: tensor names the
+/// index assigns to a present shard must be observed in it, and names
+/// must never repeat across shards (GGUF parity).
+fn check_safetensors_index_consistency(root: &Path, sources: &mut [SourceReport]) {
+    let index_path = root.join("model.safetensors.index.json");
+    let Ok(text) = std::fs::read_to_string(&index_path) else {
+        return;
+    };
+    let Ok(parsed) = Json::parse_foreign(&text, ParseLimits::for_input_len(text.len())) else {
+        return;
+    };
+    let Some(Json::Object(members)) = parsed.get("weight_map") else {
+        return;
+    };
+    use std::collections::BTreeMap;
+    let mut assigned: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (tensor, shard) in members {
+        if let Some(s) = shard.as_str() {
+            assigned
+                .entry(s.to_string())
+                .or_default()
+                .push(tensor.clone());
+        }
+    }
+    let mut findings: Vec<(String, String)> = Vec::new();
+    for report in sources.iter() {
+        let Some(name) = std::path::Path::new(&report.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+        else {
+            continue;
+        };
+        let Some(expected) = assigned.get(&name) else {
+            continue;
+        };
+        let Some(inventory) = &report.inventory else {
+            continue;
+        };
+        let observed: std::collections::BTreeSet<&str> = inventory
+            .tensors
+            .iter()
+            .map(|t| t.original_name.as_str())
+            .collect();
+        let absent: Vec<&str> = expected
+            .iter()
+            .map(|e| e.as_str())
+            .filter(|e| !observed.contains(e))
+            .take(3)
+            .collect();
+        if !absent.is_empty() {
+            findings.push((
+                "SAFETENSORS_INDEX_CONSISTENCY".to_string(),
+                format!(
+                    "{name}: index assigns tensors the shard does not contain ({}, ...)",
+                    absent.join(", ")
+                ),
+            ));
+        }
+    }
+    let mut seen: std::collections::BTreeMap<&str, &str> = std::collections::BTreeMap::new();
+    let mut duplicates: Vec<String> = Vec::new();
+    for report in sources.iter() {
+        let Some(inventory) = &report.inventory else {
+            continue;
+        };
+        let shard = report.path.rsplit('/').next().unwrap_or(&report.path);
+        for tensor in &inventory.tensors {
+            if let Some(first) = seen.insert(tensor.original_name.as_str(), shard) {
+                duplicates.push(format!(
+                    "{} (shards {first} and {shard})",
+                    tensor.original_name
+                ));
+            }
+        }
+    }
+    if !duplicates.is_empty() {
+        findings.push((
+            "SAFETENSORS_SHARD_DUPLICATE_TENSOR".to_string(),
+            format!(
+                "index package repeats tensor names: {}",
+                duplicates.join(", ")
+            ),
+        ));
+    }
+    // Findings attach once at report level (first source's notes).
+    if let Some(first) = sources.first_mut() {
+        for (code, message) in findings {
+            first.notes.push(format!("[{code}] {message}"));
+        }
+    }
 }
 
 fn classify_asset(name: &str) -> &'static str {
@@ -779,7 +893,12 @@ pub fn discover(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let lower = name.to_ascii_lowercase();
-        if lower.ends_with(".safetensors") || lower.ends_with(".gguf") {
+        if lower.ends_with(".safetensors")
+            || lower.ends_with(".gguf")
+            || lower.ends_with(".pth")
+            || lower.ends_with(".pt")
+            || lower.ends_with(".ckpt")
+        {
             let mut report = inventory_file(path, options, budget);
             annotate_shard_group(&mut report, &name);
             sources.push(report);
@@ -801,6 +920,7 @@ pub fn discover(
     // Sharded-SafeTensors index: a model.safetensors.index.json declares
     // the full shard set; absent shards make coverage incomplete.
     let missing_shards = check_safetensors_index(root, &mut sources);
+    check_safetensors_index_consistency(root, &mut sources);
 
     Ok(DiscoverReport {
         root_kind: "directory",
