@@ -1011,3 +1011,17 @@ Stated plainly, once, so no command has to whisper it:
   executes.
 - **Budgets are limits, not promises.** Every operation runs under bounded
   memory/IO/output budgets; nothing here is a performance guarantee.
+
+## What v0.29 adds
+
+| Feature | Command | What it does |
+|---|---|---|
+| PyTorch descriptor tier | `nn discover` (automatic) | `.pth`/`.pt`/`.ckpt` files inventory through a data-only pickle opcode interpreter (548 tensors out of the real Kokoro checkpoint); `torch.*` encodings with exact storage spans; edits are refused (read-only v1) |
+| Multi-write edit sessions | `nn edit set --session DIR` / `nn edit apply --session DIR` | Stage many operations (staging-time conflict and digest checks), apply them all in one copy pass, undo them atomically |
+| Stacked-expert views | `experts[N]` selector | One expert of an `[E, A, B]` MoE stack as a contiguous slab with an exact byte span (works on real 512-expert gate_up stacks) |
+| Shard download planning | `nn shard-map --index model.safetensors.index.json` (+ `--catalog`/`--selection`/`--tensor`) | Which shards hold what you selected, with byte accounting — a plan, never a download |
+| Batch analysis | `nn analyze --selection s.json` | One uniform mode over every tensor of a selection with robust outlier flags (STAT_OUTLIER; statistical, not a defect verdict) |
+| Precision audit | `nn diff --left a --right b --precision` (+ `--precision-sample N`) | Per-tensor decoded MAE/RMSE/maxAE/relative-L2 under each side's own codec (fp32 vs fp16 exports, quantized variants) |
+| Config-aware scaffolding | `nn pack scaffold --catalog c --config config.json` | Dimension keys from the config become parameters; dims seen in 3+ tensors become inferred symbols; shapes reference symbols |
+| Sharded-package findings | `nn discover` (automatic) | Missing SafeTensors shards (per the index) are visible findings and fail `--require-complete`; index-vs-shard consistency and duplicate-name checks; deduplicated reporting |
+| Partition placement | `nn partition --unlayered-policy report` or `first` or `last` or `manual` | Unlayered tensors (embeddings/norms/heads) can be placed explicitly; the default still never silently distributes them |

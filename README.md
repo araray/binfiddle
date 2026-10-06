@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.90%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.28.0 | Cross-platform (Windows/Linux/macOS) | x86_64 / Arm64 Support | Linux process-memory features*
+*Version 0.29.0 | Cross-platform (Windows/Linux/macOS) | x86_64 / Arm64 Support | Linux process-memory features*
 
 Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, hashing, checksum verification, and custom exploration of binary data across a variety of formats.
 
