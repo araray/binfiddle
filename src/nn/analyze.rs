@@ -64,10 +64,24 @@ pub struct StreamingStats {
     max: Option<(f64, Vec<u64>)>,
     min_ties: u64,
     max_ties: u64,
-    constant: Option<f64>,
+    /// Tri-state constancy tracker. A plain `Option<f64>` cannot distinguish
+    /// "no observations yet" from "proven non-constant", which would let a
+    /// varying sequence re-seed as constant after every differing value.
+    constant: Constancy,
     /// Scaled sum of squares: sum of (x * 2^-scale)².
     l2_scale: i32,
     l2_sum: f64,
+}
+
+/// Constancy of the observed finite population.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Constancy {
+    /// No finite value observed yet.
+    Empty,
+    /// Every observed finite value has been this value.
+    Constant(f64),
+    /// At least two distinct finite values observed.
+    Varies,
 }
 
 impl Default for StreamingStats {
@@ -86,7 +100,7 @@ impl Default for StreamingStats {
             max: None,
             min_ties: 0,
             max_ties: 0,
-            constant: None,
+            constant: Constancy::Empty,
             l2_scale: 0,
             l2_sum: 0.0,
         }
@@ -133,9 +147,9 @@ impl StreamingStats {
         self.abs_sum += value.abs();
         // Constant-population tracking.
         self.constant = match self.constant {
-            None => Some(value),
-            Some(c) if c == value => Some(c),
-            Some(_) => None,
+            Constancy::Empty => Constancy::Constant(value),
+            Constancy::Constant(c) if c == value => Constancy::Constant(c),
+            _ => Constancy::Varies,
         };
         // Min/max with a deterministic first-occurrence tie rule.
         match &self.min {
@@ -216,7 +230,10 @@ impl StreamingStats {
             max: self.max.clone(),
             min_ties: self.min_ties,
             max_ties: self.max_ties,
-            constant: self.constant,
+            constant: match self.constant {
+                Constancy::Constant(c) => Some(c),
+                _ => None,
+            },
         }
     }
 }
@@ -1399,6 +1416,41 @@ mod tests {
         assert_eq!(summary.max_ties, 2);
         assert_eq!(summary.min.as_ref().unwrap().1, vec![1]);
         assert_eq!(summary.min_ties, 1);
+    }
+
+    /// A varying sequence must never be reported constant, no matter where
+    /// its equal-adjacent pairs fall (regression: the old Option-based
+    /// tracker re-seeded Some(value) after every differing value, so
+    /// [1, 2, 3] and any sequence ending in an equal pair read as constant).
+    #[test]
+    fn varying_populations_are_never_constant() {
+        for values in [
+            vec![1.0, 2.0, 3.0],
+            vec![1.0, 2.0, 2.0],
+            vec![1.0, 1.0, 2.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![-1.0, -1.0, -1.0, 0.5],
+        ] {
+            let mut stats = StreamingStats::default();
+            feed(&mut stats, &values);
+            let summary = stats.summary();
+            assert!(
+                summary.constant.is_none(),
+                "{values:?} must not be reported constant"
+            );
+        }
+    }
+
+    #[test]
+    fn uniform_populations_are_constant() {
+        let mut stats = StreamingStats::default();
+        feed(&mut stats, &[0.25, 0.25, 0.25]);
+        assert_eq!(stats.summary().constant, Some(0.25));
+
+        // Non-finite values do not participate in the finite-constancy claim.
+        let mut with_nan = StreamingStats::default();
+        feed(&mut with_nan, &[0.25, f64::NAN, 0.25]);
+        assert_eq!(with_nan.summary().constant, Some(0.25));
     }
 
     /// Reference vector: x = [0,2], y = [1,0] → MAE 1.5, RMSE √2.5,

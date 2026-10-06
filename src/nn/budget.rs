@@ -12,6 +12,7 @@
 
 use super::cancel::CancellationToken;
 use super::error::NnError;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -57,11 +58,17 @@ struct Accounts {
 }
 
 /// A budget handle. Cheap to clone; clones share the same account table and
-/// the same caps snapshot.
+/// the same caps snapshot. The effective `output_bytes` ceiling additionally
+/// honors a monotonic justified floor (see [`Budget::justify_output_bytes`]).
 #[derive(Clone)]
 pub struct Budget {
     accounts: Arc<Mutex<Accounts>>,
     caps: BudgetCaps,
+    /// Monotonic floor for the effective output cap: exact-output operations
+    /// (whole-model copies with in-place patches, materialized bundles) raise
+    /// it to their provable output bound so real-world model sizes are not
+    /// rejected by the generic default. It can only grow, never shrink.
+    output_floor: Arc<AtomicU64>,
     deadline: Option<Instant>,
     cancel: CancellationToken,
 }
@@ -83,24 +90,78 @@ impl Budget {
         Budget {
             accounts: Arc::new(Mutex::new(Accounts::default())),
             caps,
+            output_floor: Arc::new(AtomicU64::new(0)),
             deadline: deadline.map(|d| Instant::now() + d),
             cancel,
         }
     }
 
     /// Create a root budget with default caps and no deadline or cancellation.
-    pub fn unrestricted() -> Self {
+    pub fn with_default_caps() -> Self {
         Budget::new(BudgetCaps::default(), None, CancellationToken::new())
+    }
+
+    /// Create a root budget with no caps (every limit at its maximum). For
+    /// tests and internal paths that impose their own bounds; command entry
+    /// points use [`Budget::with_default_caps`] so generic runaway output is
+    /// still bounded by default.
+    pub fn unrestricted() -> Self {
+        Budget::new(
+            BudgetCaps {
+                metadata_bytes: u64::MAX,
+                decode_bytes: u64::MAX,
+                source_bytes_read: u64::MAX,
+                generated_objects: u64::MAX,
+                expression_steps: u64::MAX,
+                output_bytes: u64::MAX,
+                workers: std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1),
+                open_handles: usize::MAX,
+            },
+            None,
+            CancellationToken::new(),
+        )
+    }
+
+    /// Raise the effective `output_bytes` ceiling to at least `bound`.
+    ///
+    /// Callers must pass a provable upper bound on the bytes they will emit
+    /// (for example, the exact length of a whole-source copy). The floor is
+    /// monotonic across clones and threads; it can never lower a configured
+    /// cap.
+    pub fn justify_output_bytes(&self, bound: u64) {
+        let mut current = self.output_floor.load(Ordering::Relaxed);
+        while bound > current {
+            match self.output_floor.compare_exchange_weak(
+                current,
+                bound,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    /// Effective output ceiling: the configured cap or the justified floor,
+    /// whichever is larger.
+    fn effective_output_cap(&self) -> u64 {
+        self.caps
+            .output_bytes
+            .max(self.output_floor.load(Ordering::Relaxed))
     }
 
     /// Spawn a child budget. The child receives its own caps (which the caller
     /// is expected to derive from the parent's remaining allowance) but shares
-    /// the parent's account table, so total consumption across the tree stays
-    /// within the root ceilings.
+    /// the parent's account table and justified output floor, so total
+    /// consumption across the tree stays within the root ceilings.
     pub fn child(&self, caps: BudgetCaps, deadline: Option<Duration>) -> Budget {
         Budget {
             accounts: Arc::clone(&self.accounts),
             caps,
+            output_floor: Arc::clone(&self.output_floor),
             deadline: deadline.map(|d| Instant::now() + d),
             cancel: self.cancel.clone(),
         }
@@ -139,7 +200,9 @@ impl Budget {
             return Err(NnError::BudgetExceeded {
                 resource,
                 limit: cap,
-                requested: amount,
+                // Report the cumulative requirement, not just this call's
+                // slice, so the message states what the operation needs.
+                requested: total,
             });
         }
         Ok(())
@@ -179,7 +242,7 @@ impl Budget {
         let mut accounts = self.lock_accounts()?;
         self.charge(
             "output_bytes",
-            self.caps.output_bytes,
+            self.effective_output_cap(),
             accounts.output_bytes,
             bytes,
         )?;
@@ -372,6 +435,46 @@ mod tests {
         assert!(err.to_string().contains("metadata_bytes"));
         // The failed charge must not be partially applied.
         assert_eq!(budget.consumed().metadata_bytes, 60);
+    }
+
+    /// Regression: the error must state the cumulative requirement, not the
+    /// size of the failing slice (a 1 MiB chunk over a 256 MiB cap used to
+    /// print "requested 1048576, available 268435456" — contradictory).
+    #[test]
+    fn budget_errors_report_cumulative_requirements() {
+        let budget = Budget::new(tight_caps(), None, CancellationToken::new());
+        budget.consume_output(60).unwrap();
+        let err = budget.consume_output(41).unwrap_err();
+        match err {
+            NnError::BudgetExceeded {
+                resource,
+                limit,
+                requested,
+            } => {
+                assert_eq!(resource, "output_bytes");
+                assert_eq!(limit, 100);
+                assert_eq!(requested, 101, "60 already used + 41 requested");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    /// Exact-output operations (whole-model copies) justify their output cap
+    /// with a provable bound; the floor is monotonic and shared across clones
+    /// but can never lower the configured cap.
+    #[test]
+    fn justified_output_floor_raises_and_shares_monotonically() {
+        let budget = Budget::new(tight_caps(), None, CancellationToken::new());
+        let clone = budget.clone();
+        // Raise through the clone; the original sees the floor.
+        clone.justify_output_bytes(500);
+        budget.consume_output(100).unwrap(); // exactly the configured cap
+        budget.consume_output(400).unwrap(); // only allowed by the floor
+        assert!(budget.consume_output(1).is_err(), "500 floor reached");
+
+        // A smaller justification must not lower the floor.
+        budget.justify_output_bytes(10);
+        assert!(budget.consume_output(1).is_err());
     }
 
     #[test]

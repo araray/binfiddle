@@ -879,10 +879,15 @@ pub fn apply_edit_plan(
     }
 
     // Copy the source to the output, patching the write unit in flight.
+    // The output length equals the source length exactly (the patch is
+    // in-place over a fixed-size unit), so justify the output budget to that
+    // provable bound — otherwise models larger than the generic default cap
+    // could never be edited.
     let mut output = std::fs::File::create_new(out_path).map_err(NnError::Io)?;
     let mut hasher = Sha256::new();
     let chunk_size = 1024 * 1024u64;
     let total = reader.length();
+    budget.justify_output_bytes(total.saturating_add(chunk_size));
     let mut offset = 0u64;
     let unit_start = plan.span.0;
     let unit_end = plan.span.0 + unit_len;
@@ -1134,6 +1139,9 @@ pub fn undo_edit(
     let mut hasher = Sha256::new();
     let chunk_size = 1024 * 1024u64;
     let total = reader.length();
+    // Whole-target copy with an in-place patch: the output length equals the
+    // target length exactly. Justify the output budget to that bound.
+    budget.justify_output_bytes(total.saturating_add(chunk_size));
     let unit_start = offset;
     let unit_end = offset + old_bytes.len() as u64;
     let mut offset_iter = 0u64;

@@ -1020,7 +1020,7 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
 
     let cancel = CancellationToken::new();
     let guard = SignalGuard::install()?;
-    let budget = Budget::unrestricted();
+    let budget = Budget::with_default_caps();
     budget.checkpoint()?;
     guard.propagate(&cancel);
 

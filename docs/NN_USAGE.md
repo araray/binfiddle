@@ -7,7 +7,8 @@ code, and never modifies an input file — all outputs are fresh files.
 
 > For the classic byte-level commands (`read`, `write`, `search`, …) see
 > [USAGE.md](USAGE.md). A one-page cheat sheet lives in
-> [NN_QUICK_REFERENCE.md](NN_QUICK_REFERENCE.md).
+> [NN_QUICK_REFERENCE.md](NN_QUICK_REFERENCE.md). For a complete real-model
+> walkthrough, see the deep dive: [NN_DEEPDIVE_KOKORO.md](NN_DEEPDIVE_KOKORO.md).
 
 **Contents**
 
