@@ -87,11 +87,32 @@ pub fn resolve_selector(
         });
     }
 
-    // Split a virtual `heads[N]` tail.
+    // Split a virtual `heads[N]` (fused query/gate) or `experts[N]`
+    // (stacked MoE expert slabs) tail.
     let mut head_tail: Option<u64> = None;
+    let mut expert_tail: Option<u64> = None;
     let mut effective = selector.clone();
     if let Some(last) = selector.segments.last() {
-        if last.name == "heads" {
+        if last.name == "experts" {
+            match last.index {
+                Some(IndexSpec::Single(n)) => {
+                    expert_tail = Some(n);
+                    effective.segments.pop();
+                }
+                Some(IndexSpec::All) | None => {
+                    return Err(NnError::InvalidRequest {
+                        message: "experts requires one explicit index (experts[3]); the component itself already selects every expert"
+                            .to_string(),
+                    })
+                }
+                Some(_) => {
+                    return Err(NnError::InvalidRequest {
+                        message: "experts accepts a single index; ranges and lists are not supported"
+                            .to_string(),
+                    })
+                }
+            }
+        } else if last.name == "heads" {
             match last.index {
                 Some(IndexSpec::Single(h)) => {
                     head_tail = Some(h);
@@ -151,9 +172,15 @@ pub fn resolve_selector(
                 ),
             })?;
 
-        let view = match head_tail {
-            None => None,
-            Some(head) => Some(head_view(component, pack, tensor, head)?),
+        let view = match (head_tail, expert_tail) {
+            (None, None) => None,
+            (Some(head), None) => Some(head_view(component, pack, tensor, head)?),
+            (None, Some(n)) => Some(expert_view(component, tensor, n)?),
+            (Some(_), Some(_)) => {
+                return Err(NnError::InvalidRequest {
+                    message: "heads and experts cannot combine in one selector".to_string(),
+                })
+            }
         };
         for (i, tensor_id) in component.tensor_ids.iter().enumerate() {
             targets.push(ComponentTarget {
@@ -306,6 +333,65 @@ fn head_view(
     })
 }
 
+/// The stacked-expert slab view: expert N of an `[E, A, B]` stack is the
+/// contiguous `[A, B]` block at rows `[N*A, (N+1)*A)` of the flattened
+/// storage — true for gate_up-style and down-style stacks alike.
+fn expert_view(
+    component: &super::packs::RecognizedComponent,
+    tensor: &CatalogTensor,
+    expert: u64,
+) -> Result<ComponentView, NnError> {
+    if component.kind != BindingKind::MoeExpertStack {
+        return Err(NnError::InvalidRequest {
+            message: format!(
+                "experts[...] applies to moe_expert_stack components; {} is {}",
+                component.path,
+                component.kind.as_str()
+            ),
+        });
+    }
+    if tensor.shape.len() != 3 {
+        return Err(NnError::InvalidRequest {
+            message: format!(
+                "expert stacks are 3-axis [E, A, B]; {} has shape {:?}",
+                tensor.original_name, tensor.shape
+            ),
+        });
+    }
+    let (experts, rows_per, inner) = (tensor.shape[0], tensor.shape[1], tensor.shape[2]);
+    if expert >= experts {
+        return Err(NnError::InvalidRequest {
+            message: format!(
+                "expert index {expert} is out of range (stack holds {experts} experts)"
+            ),
+        });
+    }
+    let layout = layout_for_encoding(&tensor.encoding);
+    let TensorLayout::Scalar(codec) = layout else {
+        return Err(NnError::CodecUnsupported {
+            codec: tensor.encoding.clone(),
+            operation: "expert slab view".to_string(),
+            reason: "expert views require a scalar-encoded stack".to_string(),
+        });
+    };
+    let width = codec.width();
+    let row_bytes = inner.checked_mul(width).ok_or_else(overflow)?;
+    let start = expert.checked_mul(rows_per).ok_or_else(overflow)?;
+    let span = (
+        start.checked_mul(row_bytes).ok_or_else(overflow)?,
+        rows_per.checked_mul(row_bytes).ok_or_else(overflow)?,
+    );
+    Ok(ComponentView {
+        logical: format!(
+            "expert {expert} of {experts}: rows [{}, {}) of the stacked expert weight (each expert is a contiguous [{rows_per}, {inner}] block)",
+            start,
+            start + rows_per
+        ),
+        span,
+        rows: (start, start + rows_per),
+    })
+}
+
 fn overflow() -> NnError {
     NnError::MalformedInput {
         detail: "view span arithmetic overflow".to_string(),
@@ -327,5 +413,61 @@ mod tests {
         assert_eq!(segments[3].name, "query_gate");
         assert!(parse_component_path("decoder.layers[3:5]").is_err());
         assert!(parse_component_path("decoder.layers[*]").is_err());
+    }
+
+    /// Expert slab geometry: expert N of `[E, A, B]` is rows `[N·A, (N+1)·A)`
+    /// — contiguous for both stack orientations. Checked against the real
+    /// Qwen gate_up geometry: expert 17 of [512, 1280, 2560] bf16.
+    #[test]
+    fn expert_slab_geometry_reference_values() {
+        let component = super::super::packs::RecognizedComponent {
+            path: "m.experts.gate_up".to_string(),
+            kind: BindingKind::MoeExpertStack,
+            tensor_names: vec!["experts.gate_up_proj".to_string()],
+            tensor_ids: vec!["t".to_string()],
+            captures: [("$layer".to_string(), 3u64)].into_iter().collect(),
+        };
+        let tensor = CatalogTensor {
+            id: "t".to_string(),
+            semantic: crate::nn::json::Json::Null,
+            source_id: "s".to_string(),
+            original_name: "experts.gate_up_proj".to_string(),
+            encoding: "safetensors.BF16".to_string(),
+            decode_supported: true,
+            shape: vec![512, 1280, 2560],
+            element_count: 512 * 1280 * 2560,
+            payload_start: 1_000_000,
+            payload_length: Some(512 * 1280 * 2560 * 2),
+            extent: crate::nn::format::Extent::Exact,
+        };
+        let view = expert_view(&component, &tensor, 17).unwrap();
+        // rows [17*1280, 18*1280) = [21760, 23040); bytes: 1280 rows × 2560 × 2.
+        assert_eq!(view.rows, (17 * 1280, 18 * 1280));
+        assert_eq!(view.span, (21760 * 2560 * 2, 1280 * 2560 * 2));
+        assert!(view.logical.contains("expert 17 of 512"));
+
+        // Out-of-range expert is an error, never a guess.
+        assert!(expert_view(&component, &tensor, 512).is_err());
+
+        // experts[...] on a non-stack component is refused.
+        let dense = super::super::packs::RecognizedComponent {
+            path: "m.gate".to_string(),
+            kind: BindingKind::Dense,
+            tensor_names: vec!["gate".to_string()],
+            tensor_ids: vec!["t".to_string()],
+            captures: Default::default(),
+        };
+        assert!(expert_view(&dense, &tensor, 0).is_err());
+
+        // Down-style stacks `[E, d, m]` are the same contiguous geometry.
+        let down = CatalogTensor {
+            shape: vec![512, 2560, 640],
+            element_count: 512 * 2560 * 640,
+            payload_length: Some(512 * 2560 * 640 * 2),
+            ..tensor
+        };
+        let view = expert_view(&component, &down, 5).unwrap();
+        assert_eq!(view.rows, (5 * 2560, 6 * 2560));
+        assert_eq!(view.span, (5 * 2560 * 640 * 2, 2560 * 640 * 2));
     }
 }

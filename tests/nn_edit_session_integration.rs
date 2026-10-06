@@ -28,7 +28,7 @@ fn write_model(dir: &Path) {
     data.extend_from_slice(&(header.len() as u64).to_le_bytes());
     data.extend_from_slice(header.as_bytes());
     for i in 0..20u32 {
-        data.extend_from_slice(&f32::from(i as f32 / 4.0).to_le_bytes());
+        data.extend_from_slice(&(i as f32 / 4.0).to_le_bytes());
     }
     fs::write(dir.join("m.safetensors"), data).unwrap();
 }
@@ -215,7 +215,7 @@ fn sessions_refuse_overlapping_and_foreign_sources() {
     // A tampered session file is never silently replaced.
     let mut tampered = fs::read_to_string(session.join("session.json")).unwrap();
     tampered.push(' ');
-    fs::write(session.join("session.json"), format!("{{broken")).unwrap();
+    fs::write(session.join("session.json"), "{broken").unwrap();
     let (code, _, err) = run_in(
         dir.path(),
         &[
