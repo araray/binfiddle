@@ -936,8 +936,13 @@ enum EditCommand {
         clamp: bool,
 
         /// Save the plan to this file
-        #[arg(long)]
+        #[arg(long, conflicts_with = "session_out")]
         save_plan: Option<String>,
+
+        /// Stage the operation into an edit session directory instead of a
+        /// single plan file (multi-write sessions; one source per session)
+        #[arg(long = "session", id = "session_out", conflicts_with = "save_plan")]
+        session_out: Option<String>,
 
         /// Report format: text, json
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
@@ -951,8 +956,16 @@ enum EditCommand {
         catalog: String,
 
         /// Saved edit plan file
-        #[arg(long)]
-        plan: String,
+        #[arg(
+            long,
+            conflicts_with = "session_in",
+            required_unless_present = "session_in"
+        )]
+        plan: Option<String>,
+
+        /// Apply every staged operation of an edit session in one pass
+        #[arg(long = "session", id = "session_in", conflicts_with = "plan")]
+        session_in: Option<String>,
 
         /// Output file (must not exist; the original is never modified)
         #[arg(long)]
@@ -1668,6 +1681,7 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                     policy,
                     clamp,
                     save_plan,
+                    session_out,
                     report_format,
                 } => {
                     let catalog_path = nn_path_arg(catalog.as_deref(), "edit set")?;
@@ -1721,6 +1735,23 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                     if let Some(path) = save_plan.as_deref() {
                         plan.save(Path::new(path))?;
                     }
+                    if let Some(dir) = session_out.as_deref() {
+                        let session = edit::EditSession::stage(Path::new(dir), &loaded, plan)?;
+                        guard.propagate(&cancel);
+                        let stdout = io::stdout();
+                        let mut out = stdout.lock();
+                        if report_format == "json" {
+                            edit::session_envelope(&session)?.write_json(&mut out)?;
+                        } else {
+                            out.write_all(session.text().as_bytes())?;
+                            out.write_all(
+                                b"
+",
+                            )?;
+                        }
+                        out.flush()?;
+                        return Ok(());
+                    }
                     guard.propagate(&cancel);
                     let stdout = io::stdout();
                     let mut out = stdout.lock();
@@ -1734,6 +1765,7 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 EditCommand::Apply {
                     catalog,
                     plan,
+                    session_in,
                     out_model,
                     undo_bundle,
                     report_format,
@@ -1745,7 +1777,29 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                         &DiscoverOptions::default(),
                         &budget,
                     )?;
-                    let loaded_plan = edit::EditPlan::load(Path::new(plan))?;
+                    if let Some(dir) = session_in.as_deref() {
+                        let session = edit::EditSession::load(Path::new(dir))?;
+                        let receipt = edit::apply_edit_session(
+                            &loaded,
+                            &session,
+                            Path::new(out_model),
+                            undo_bundle.as_deref().map(Path::new),
+                            &budget,
+                        )?;
+                        guard.propagate(&cancel);
+                        let stdout = io::stdout();
+                        let mut out = stdout.lock();
+                        if report_format == "json" {
+                            edit::session_receipt_envelope(&receipt)?.write_json(&mut out)?;
+                        } else {
+                            out.write_all(edit::session_receipt_text(&receipt).as_bytes())?;
+                        }
+                        out.flush()?;
+                        return Ok(());
+                    }
+                    let loaded_plan = edit::EditPlan::load(Path::new(
+                        plan.as_deref().expect("checked: plan when no session"),
+                    ))?;
                     let receipt = edit::apply_edit_plan(
                         &loaded,
                         &loaded_plan,
