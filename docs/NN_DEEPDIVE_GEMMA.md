@@ -1,16 +1,14 @@
 # Deep Dive: Dissecting Gemma-4 E4B with the `nn` Workbench
 
-A second real-model walkthrough — the mirror image of the
-[Kokoro deep dive](NN_DEEPDIVE_KOKORO.md). Kokoro was an ONNX export beside an
+A real-model walkthrough — the mirror image of the
+[Kokoro deep dive](NN_DEEPDIVE_KOKORO.md). Kokoro is an ONNX export beside an
 unreadable pickle; **google/gemma-4-E4B-it** is a native SafeTensors release:
 one 15.99 GB `model.safetensors`, a real 262k-vocabulary tokenizer, and a
-multimodal architecture (text + vision + audio) that stresses packs, selectors,
-splitting, and transactional editing at a scale no fixture can reach.
+multimodal architecture (text + vision + audio) that exercises packs,
+selectors, splitting, and transactional editing at a scale no fixture can
+reach.
 
-Every output below is a real capture. And exactly as with the first deep dive,
-the real artifact immediately found things to fix — three improvements to the
-engine shipped alongside this document (see
-[What the dive changed](#what-the-dive-changed-in-the-engine)).
+Every output below is a real capture.
 
 ## The subject
 
@@ -53,13 +51,11 @@ every side file classified. Validation is clean:
   behavior: behavior_not_evaluated
 ```
 
-The tokenizer is a real sentencepiece-family asset — and inspecting it is the
-first thing this dive changed in the engine: the initial run failed with
-`node count exceeds limit`, because the strict JSON parser's flat 1M-node
-guard could not admit a 262k-entry vocabulary (≈4.5M JSON nodes). Node
-allowances now scale with the bounded input length — a well-formed document
-cannot exceed `len/2` nodes, so real assets parse while small-input expansion
-bombs stay impossible:
+The tokenizer is a real sentencepiece-family asset. Note how large real
+vocabularies parse: JSON node allowances scale with the bounded input
+length — a 262k-entry vocabulary is ≈4.5M JSON nodes, far beyond any flat
+guard, yet a well-formed document cannot exceed `len/2` nodes, so real
+assets parse while small-input expansion bombs stay impossible:
 
 ```bash
 binfiddle nn tokenizer inspect --package gemma-4-E4B-it/
@@ -132,8 +128,7 @@ analyze model.language_model.layers.5.input_layernorm.weight (safetensors.BF16)
 ## Part 3 — A pack for a real architecture
 
 The pack vocabulary is deliberately closed — unknown binding kinds are
-rejected, not guessed (the first draft of this dive's pack used
-`attention_q` and was told so). Authoring against `config.json`:
+rejected, not guessed. Authoring against `config.json`:
 
 ```yaml
 schema: binfiddle.nn.pack/v1
@@ -161,13 +156,12 @@ bindings:
   ...
 ```
 
-The story inside that YAML is the dive's second engine change. The first pack
-draft assumed one head dimension for all 42 layers; recognition refused to
-pretend that was true — the seven **full-attention layers** (5, 11, 17, 23,
-29, 35, 41) have genuinely larger projections (`q [4096×2560]` vs
-`[2048×2560]`), and they surfaced as visible contradictions instead of
-bindings. Real Gemma generations all share this dual head-dimension scheme,
-so the pack schema grew what the architecture needs: a third layer kind
+The reason for the doubled bindings above is the Gemma dual head-dimension
+scheme: a pack that assumed one head dimension for all 42 layers would see
+the seven **full-attention layers** (5, 11, 17, 23, 29, 35, 41) surface as
+visible contradictions instead of bindings — their projections are genuinely
+larger (`q [4096×2560]` vs `[2048×2560]`). Recognition never pretends
+otherwise. The pack schema expresses this directly: a third layer kind
 (`sliding_attention`, never mislabeled as linear attention) and
 `layer_kinds:` binding scoping — one component path, different expected
 shapes per layer kind. With it:
@@ -274,28 +268,22 @@ tensor bytes is a repack. The layers never blur: content change, repack, and
 descriptor change are three different statements, and two of them appear here
 for the price of one two-byte edit.
 
-## What the dive changed in the engine
+## Engine features this walkthrough exercises
 
-Real artifacts are the best test suite. This dive shipped three changes:
-
-1. **Proportional JSON node limits.** A flat 1M-node parser limit rejected
-   every real tokenizer vocabulary. `ParseLimits::for_input_len` scales the
-   allowance with the (budget-bounded) input length; expansion bombs from
-   small inputs remain impossible by construction.
+1. **Proportional JSON node limits.** Parser node allowances scale with the
+   (budget-bounded) input length, so real tokenizer vocabularies parse while
+   expansion bombs from small inputs remain impossible by construction.
 2. **`sliding_attention` as a first-class layer kind**, plus
    **`layer_kinds:` binding scoping** for architectures whose shapes differ
-   per layer kind (the Gemma dual head-dimension scheme). The lint rule
-   learned that same-template bindings are clean when their kind scopes are
-   disjoint. Pack ids are unchanged for packs that do not use the new
-   vocabulary.
+   per layer kind (the Gemma dual head-dimension scheme). Same-template
+   bindings with disjoint kind scopes lint cleanly.
 3. **Catalog-relative source paths.** Catalogs record paths as discovered;
-   running a command from a different working directory no longer breaks
-   source resolution (the catalog's own directory is preferred for relative
-   paths, with the old behavior as fallback).
+   relative paths resolve against the catalog's own directory first, so
+   commands work from any working directory.
 
-Plus the reminder that matters most: when the first pack draft was wrong
-about the model, the engine said so — contradictions stayed visible until the
-pack told the truth.
+And the behavior that matters most: when a pack is wrong about the model,
+the engine says so — contradictions stay visible until the pack tells the
+truth.
 
 ## Reproducing
 

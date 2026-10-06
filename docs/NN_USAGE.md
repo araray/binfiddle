@@ -142,12 +142,19 @@ binfiddle nn capabilities --report-format json
 ### `nn discover`
 
 Inventory supported model artifacts — descriptor-only, no payload reads.
-Recognizes SafeTensors, GGUF v2/v3, and ONNX (protobuf, descriptor tier);
-scans package directories (unknown files stay visible, classified as assets
-or opaque); GGUF split-shard groups (`name-00001-of-00002.gguf`) get
-completeness and cross-shard uniqueness checks. On ONNX: initializers with
-`raw_data` get exact spans, external-data tensors stay visible with unresolved
-extents, packed protobuf fields are reported as non-contiguous storage.
+Recognizes SafeTensors, GGUF v2/v3, ONNX (protobuf, descriptor tier), and
+PyTorch `.pth`/`.pt`/`.ckpt` (ZIP container + a data-only pickle opcode
+reader: tensor names, shapes, dtypes, and exact storage spans without
+executing a single opcode — the tier is read-only, and `nn edit` refuses
+`torch.*` tensors); scans package directories (unknown files stay visible,
+classified as assets or opaque); GGUF split-shard groups
+(`name-00001-of-00002.gguf`) get completeness and cross-shard uniqueness
+checks, and sharded-SafeTensors packages get the same discipline from
+`model.safetensors.index.json` (missing shards are visible findings and
+fail `--require-complete`; index-vs-shard consistency and duplicate tensor
+names across shards are checked). On ONNX: initializers with `raw_data` get
+exact spans, external-data tensors stay visible with unresolved extents,
+packed protobuf fields are reported as non-contiguous storage.
 
 With `-i -` the input is read from stdin and spooled to a bounded private
 temporary file whose digest becomes a content-verified identity.
@@ -419,12 +426,16 @@ binfiddle nn split --catalog model.nn.json --pack demo.pack.yaml \
 
 ### `nn analyze`
 
-Numerical inspection of one tensor with honest coverage. `metadata` reads no
-payload bytes; `sample` examines a seeded deterministic selection; `full`
-scans everything within its budget. Statistics: Welford mean/variance
-(population and sample named separately), min/max with coordinates and tie
-counts, non-finite value category counts, an overflow-safe L2 norm, optional
-histograms, optional reference-error metrics, and quantization-block views.
+Numerical inspection of one tensor — or every tensor of a selection — with
+honest coverage. `metadata` reads no payload bytes; `sample` examines a
+seeded deterministic selection; `full` scans everything within its budget.
+Statistics: Welford mean/variance (population and sample named separately),
+min/max with coordinates and tie counts, non-finite value category counts,
+an overflow-safe L2 norm, optional histograms, optional reference-error
+metrics, and quantization-block views. With `--selection`, one uniform mode
+runs over every tensor of a saved selection in a single table with robust
+cross-tensor outlier flags (median/MAD, |z| ≥ 4 → `STAT_OUTLIER` — a
+statistical observation, never a defect verdict).
 
 | Option | Values | Default | Description |
 |---|---|---|---|
@@ -432,6 +443,7 @@ histograms, optional reference-error metrics, and quantization-block views.
 | `--tensor` | name | — | Exact tensor name |
 | `--id` | id | — | Tensor identifier (full or unique prefix) |
 | `--source` | id/path | — | Scope for `--tensor` |
+| `--selection` | path | — | Analyze every tensor of a saved selection (batch mode; exclusive with `--tensor`/`--id`) |
 | `--mode` | `metadata`, `sample`, `full` | `full` | Access mode |
 | `--seed` | integer | `17` | Seed for deterministic sampling |
 | `--sample-size` | elements | `10000` | Sample size (sample mode) |
@@ -449,6 +461,10 @@ binfiddle nn analyze --catalog model.nn.json --tensor w --mode metadata
 binfiddle nn analyze --catalog model.nn.json --tensor w \
     --reference ref.f32 --reference-width 4
 binfiddle nn analyze --catalog gguf.nn.json --tensor q4w --blocks 2
+
+# Batch: every gate projection in one table, outliers flagged
+binfiddle nn analyze --catalog model.nn.json --selection gates.sel.json \
+    --mode sample --sample-size 2000
 ```
 
 The reference comparison reports MAE / RMSE / maxAE / relative L2 with
@@ -494,6 +510,7 @@ edited revision. All edit commands require content-verified discovery
 | `--policy` | `auto`, `exact_only`, `nearest`, `fixed_parameters` | `auto` | Value policy |
 | `--clamp` | flag | off | Allow saturating out-of-range quantized codes |
 | `--save-plan` | path | — | Save the plan to this file |
+| `--session` | dir | — | Stage the operation into a multi-write session instead |
 | `--report-format` | `text`, `json` | `text` | Output format |
 
 ```bash
@@ -514,12 +531,35 @@ binfiddle nn edit set --catalog gguf.nn.json --tensor q4w \
     --index 0,3 --raw-bits 07 --save-plan q4raw.plan.json
 ```
 
+#### Multi-write edit sessions
+
+Many planned values, one copy pass. `edit set --session DIR` stages each
+operation (preimage captured at staging, overlapping write units refused
+at staging time, source digest re-verified between stagings); `edit apply
+--session DIR` patches every staged span in a single pass over the source
+and writes an undo bundle that reverses all of them atomically. One
+session binds one catalog and one source file — stage a session per shard
+or checkpoint.
+
+```bash
+for spec in "w 0,0 101" "w 3,3 202" "v 1,1 303"; do
+    set -- $spec
+    binfiddle nn edit set --catalog m.nn.json --tensor "$1" \
+        --index "$2" --value "$3" --session sess/
+done
+binfiddle nn edit apply --catalog m.nn.json --session sess/ \
+    --out-model edited.safetensors --undo-bundle undo/
+binfiddle nn edit undo --bundle undo/ --target edited.safetensors \
+    --out-model restored.safetensors   # byte-identical to the original
+```
+
 #### `nn edit apply`
 
 | Option | Description |
 |---|---|
 | `--catalog` | Saved catalog (must match the plan) — required |
-| `--plan` | Saved edit plan — required |
+| `--plan` | Saved edit plan (exclusive with `--session`) |
+| `--session` | Apply every staged operation of an edit session in one pass |
 | `--out-model` | Fresh output file (must not exist) — required |
 | `--undo-bundle` | Directory for the undo bundle |
 | `--report-format` | `text` or `json` |
@@ -607,10 +647,16 @@ binfiddle nn pack lint --pack demo.pack.yaml
 
 Derive a provisional pack draft from an observed catalog. Every suggestion is
 heuristic-labeled; drafts lint cleanly but are starting points, never trusted
-profiles. Output goes to stdout — review, rename, and save it yourself.
+profiles. With `--config config.json`, known dimension keys from the model
+configuration become parameters (heuristic-labeled), and any dimension
+observed in three or more tensors becomes an inferred symbol — shape
+expressions then reference symbols instead of literals. Output goes to
+stdout — review, rename, and save it yourself.
 
 ```bash
 binfiddle nn pack scaffold --catalog model.nn.json > draft.pack.yaml
+binfiddle nn pack scaffold --catalog model.nn.json --config config.json \
+    > draft.pack.yaml
 ```
 
 ### `nn diff`
@@ -621,17 +667,28 @@ equality by payload digest, and the **repack distinction** — identical bytes
 at different offsets is a repack, not a content change. Missing tensors stay
 visible as unmatched; a missing tensor is never a zero tensor.
 
+`--precision` switches to a **precision audit**: for every name-matched,
+same-shape tensor pair, both sides are decoded under their own declared
+codecs (fp32 vs fp16 exports, quantized variants) and the table reports
+per-tensor MAE / RMSE / maxAE / relative-L2 with finite-mismatch counts and
+a worst-by-relative-L2 rollup. Error size is never a behavioral claim.
+
 | Option | Values | Default | Description |
 |---|---|---|---|
 | `--left` | path | — | Left catalog — required |
 | `--right` | path | — | Right catalog — required |
 | `--decoded` | flag | off | Also compare decoded values of content-changed scalar tensors |
 | `--policy` | `exact_bits`, `lenient` | `exact_bits` | Decoded comparison policy (NaN/signed-zero handling) |
+| `--precision` | flag | off | Precision audit: per-tensor decoded error metrics |
+| `--precision-sample` | elements | `0` | Sample stride for the audit (0 = every element) |
 | `--report-format` | `text`, `json` | `text` | Output format |
 
 ```bash
 binfiddle nn diff --left v1.nn.json --right v2.nn.json
 binfiddle nn diff --left v1.nn.json --right v2.nn.json --decoded --policy exact_bits
+
+# What did fp16 conversion cost, per tensor?
+binfiddle nn diff --left fp32.nn.json --right fp16.nn.json --precision
 ```
 
 Real output excerpt:
@@ -685,12 +742,18 @@ silently distributed.
 | `--catalog` | Saved catalog — required |
 | `--pack` | Model pack with layered components — required |
 | `--stages` | Number of stages (default 2) |
+| `--unlayered-policy` | `report` (default), `first`, `last`, or `manual` placement of unlayered tensors |
+| `--placement-file` | JSON object of tensor name → stage (for `manual`) |
 | `--report-format` | `text` or `json` |
 
 ```bash
 binfiddle nn partition --catalog model.nn.json --pack demo.pack.yaml --stages 2
 # → stage 0: layers [0] (3 tensors, 288 weight bytes)
 #   unlayered: 1 tensors, 16 bytes (embeddings/norms/heads; never silently distributed)
+
+# Place them explicitly instead of reporting only
+binfiddle nn partition --catalog model.nn.json --pack demo.pack.yaml \
+    --stages 4 --unlayered-policy manual --placement-file places.json
 ```
 
 ### `nn carve`
@@ -725,6 +788,34 @@ Structural artifact validation with precise per-source verdicts:
 binfiddle -i model-dir/ nn validate
 # → ./demo.safetensors: structurally_valid_for_reader
 #   note: all structural checks passed for this reader
+```
+
+### `nn shard-map`
+
+Static download planning from a sharded-SafeTensors index: which shard
+files hold the tensors you care about, with per-shard counts and payload
+bytes, planned-versus-declared coverage, and any requested names the index
+does not know. Works from explicit names, a saved selection (resolved
+through a catalog for byte accounting), or the whole package. **A plan,
+never a download** — there is no network access anywhere in binfiddle.
+
+| Option | Description |
+|---|---|
+| `--index` | Path to `model.safetensors.index.json` — required |
+| `--catalog` | Saved catalog (resolves selections; adds byte accounting) |
+| `--selection` | Saved selection file naming the tensors of interest (needs `--catalog`) |
+| `--tensor` | Exact tensor names to plan for (repeatable; omit for everything) |
+| `--report-format` | `text` or `json` |
+
+```bash
+binfiddle nn shard-map --index model.safetensors.index.json \
+    --tensor model.layers.3.self_attn.q_norm.weight
+# → model-00082-of-00131.safetensors: 1 tensors, …
+
+# A selection with byte accounting against a partial catalog
+binfiddle nn shard-map --index model.safetensors.index.json \
+    --catalog q.nn.json --selection experts.sel.json
+# → planned payload 3355443200 of 359999963128 declared bytes (0.9%)
 ```
 
 ### `nn adapter`
@@ -819,6 +910,7 @@ decoder.layers[1,3,5].mlp              explicit list (unique indices)
 decoder.layers[*].mlp                  wildcard (whole family)
 decoder.layers                         shorter path → whole subtree
 decoder.layers[3].attention.query_gate.heads[1]   virtual head family
+decoder.layers[19].mlp.experts.gate_up.experts[17]   virtual expert family
 ```
 
 - Indices are non-negative decimals; ranges are `[start:end)` with `end > start`;
@@ -826,6 +918,10 @@ decoder.layers[3].attention.query_gate.heads[1]   virtual head family
 - `heads[N]` exists only on query/gate (fused projection) components and
   selects the exact stored rows of one head. Slicing such a selection extracts
   those bytes with a `logical_view` statement in the bundle manifest.
+- `experts[N]` exists only on `moe_expert_stack` components (`[E, A, B]`
+  stacked MoE storage, fused gate_up and down-projection stacks alike) and
+  selects one expert's contiguous `[A, B]` slab with an exact byte span.
+  Single indices only; the two virtual families cannot combine.
 - Out-of-range indices, empty selections, and family/kind mismatches are
   errors — never silent guesses.
 
@@ -918,11 +1014,13 @@ binfiddle nn ls --catalog model.nn.json --view architecture --pack draft.pack.ya
 ```
 
 Recognition keeps contradictions visible: a tensor whose name matched but
-whose shape disagreed is reported as a finding, not hidden. Component kinds
-understood by recipes and views include `mlp_gate`, `mlp_up`, `mlp_down`,
-attention projections (including fused `query_gate` with the `heads[…]`
-family), grouped linear-attention projections, and zero-centered
-normalization.
+whose shape disagreed is reported as a finding, not hidden. Bindings may be
+scoped by declared attention kind (`layer_kinds:`) for architectures whose
+shapes differ per layer kind. Component kinds understood by recipes and
+views include `mlp_gate`, `mlp_up`, `mlp_down`, `moe_expert_stack` (with
+the `experts[…]` family), attention projections (including fused
+`query_gate` with the `heads[…]` family), grouped linear-attention
+projections, and zero-centered normalization.
 
 ## Howtos
 
@@ -1012,7 +1110,7 @@ Stated plainly, once, so no command has to whisper it:
 - **Budgets are limits, not promises.** Every operation runs under bounded
   memory/IO/output budgets; nothing here is a performance guarantee.
 
-## What v0.29 adds
+## Version highlights — v0.29
 
 | Feature | Command | What it does |
 |---|---|---|
