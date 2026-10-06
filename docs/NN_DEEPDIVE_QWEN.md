@@ -5,9 +5,8 @@ pickle boundary; [Gemma-4 E4B](NN_DEEPDIVE_GEMMA.md) — 16 GB SafeTensors and
 model packs). This one is the homecoming: **Qwen/Qwen3.8-Flash-Next** is a
 Qwen3-Next-family architecture — the lineage the workbench's most specialized
 machinery (fused query-gate head views, grouped linear-attention projections,
-zero-centered norms, interval schedules) was designed around. It is also the
-first dive against a **131-shard, 360 GB release** — which immediately
-hardened two engine gaps and fixed one real bug.
+zero-centered norms, interval schedules) was designed around. It is also a
+**131-shard, 360 GB release** — the sharded-package discipline at full scale.
 
 Every output below is a real capture from the actual artifacts.
 
@@ -27,18 +26,18 @@ attention heads of 256, 2 KV heads, GatedDeltaNet-style linear attention
 `gate_up` stacks, hyper-connections, an n-gram indexer, and an MTP layer.
 
 Nobody needs 360 GB on disk to dissect that honestly: the index maps every
-tensor to its shard, so this dive works from a **curated 9-shard subset
-(19.3 GB)** — the visual tower, one complete linear-attention layer, one
-complete full-attention layer with its MoE block, the embeddings, and the
-output head. Which brings us to the first engine change.
+tensor to its shard, so this walkthrough works from a **curated 9-shard
+subset (19.3 GB)** — the visual tower, one complete linear-attention layer,
+one complete full-attention layer with its MoE block, the embeddings, and
+the output head. `nn shard-map` plans exactly such a subset; Part 1 shows
+what the engine says about it.
 
 ## Part 1 — A partial package must say so
 
-The split-GGUF machinery has always verified shard-group completeness. SafeTensors
-packages carry the same information in `model.safetensors.index.json` — and the
-workbench used to ignore it: a directory with 9 of 131 shards discovered
-"cleanly," silently reduced. That gap is now closed (found by this dive,
-shipped with it):
+The split-GGUF machinery verifies shard-group completeness. Sharded
+SafeTensors packages carry the same information in
+`model.safetensors.index.json`, and it is honored the same way: a directory
+with 9 of 131 shards never discovers "cleanly" as if silently reduced.
 
 ```bash
 binfiddle -i Qwen3.8-Flash-Next/ nn discover | grep -E "sharded|coverage"
@@ -56,19 +55,16 @@ note: [SAFETENSORS_SHARD_INDEX_INCOMPLETE] model.safetensors.index.json declares
 131 shards; 122 absent from this directory (model-00002-of-00131.safetensors, …)
 ```
 
-And the finding has teeth — `--require-complete` now rejects partial
-downloads with exit 8 instead of passing vacuously.
+And the finding has teeth — `--require-complete` rejects partial downloads
+with exit 8 instead of passing vacuously.
 
-Reading the index at all required one more honesty fix: real indexes carry
-`"total_size": 359999963128.0` — a **fractional JSON number**, which the
-foreign parser rejected on the documented belief that no artifact format
-uses them. The real world disagreed. Foreign documents now parse fractional,
-exponent, and negative numbers into a dedicated `Float` value that
-**cannot enter the wire subset** (canonicalization refuses it exactly like
-integers — the number-free discipline is unchanged), and one more real bug
-fell out: `nn validate --catalog` used to validate the catalog file itself
-(as an "unsupported feature"); it now freshly inventories **the sources the
-catalog records**:
+Two more behaviors this package exercises. Real indexes carry
+`"total_size": 359999963128.0` — a **fractional JSON number** — which the
+foreign parser reads into a dedicated `Float` value that **cannot enter the
+wire subset** (canonicalization refuses it exactly like integers; the
+number-free discipline is unchanged). And `nn validate --catalog` freshly
+inventories **the sources the catalog records** (paths resolved against the
+catalog's own directory), not the catalog file itself:
 
 ```bash
 binfiddle nn validate --catalog q.nn.json | head -3
@@ -160,8 +156,8 @@ architecture view (pack qwen4exp.flash)
 ```
 
 — which matches `config.json` exactly, without being told a single layer
-index. The `layer_kinds:` scoping (born in the Gemma dive) carries the
-hybrid's two different tensor *sets* per layer kind.
+index. The `layer_kinds:` scoping carries the hybrid's two different tensor
+*sets* per layer kind.
 
 ### The fused query-gate, carved by head
 
@@ -221,23 +217,20 @@ the 425 tensors that live on the other eight shards are **unmatched** —
 visible as absent, never silently treated as zeros or dropped from the
 account. A missing tensor is a missing tensor.
 
-## What the dive changed in the engine
+## Engine features this walkthrough exercises
 
 1. **Sharded-SafeTensors index awareness.** `model.safetensors.index.json`
    is honored like split-GGUF groups: absent referenced shards produce
    `SAFETENSORS_SHARD_INDEX_INCOMPLETE` findings on present shards, appear
    in the report note and envelope coverage, and make `--require-complete`
-   fail (exit 8). Partial downloads are no longer silently reduced.
-2. **Foreign JSON floats.** Real indexes write `total_size` as
-   `359999963128.0`; the foreign parser rejected fractional numbers on a
-   falsified belief. They now parse into a `Float` value that
-   canonicalization still refuses — the wire subset remains number-free.
-3. **`nn validate --catalog` validated the wrong thing.** It ran a fresh
-   inventory over the catalog file itself (reported "unsupported_feature"
-   on the JSON); it now freshly inventories the sources the catalog
-   records, resolving their paths against the catalog's directory.
+   fail (exit 8).
+2. **Foreign JSON floats.** Index `total_size` values like
+   `359999963128.0` parse into a `Float` value that canonicalization
+   still refuses — the wire subset remains number-free.
+3. **`nn validate --catalog` inventories the recorded sources** — freshly,
+   with paths resolved against the catalog's directory.
 
-Plus the standing lesson, sharper than ever: the catalog of a partial
+And the standing rule, at its sharpest here: the catalog of a partial
 package refuses to know tensors that live on absent shards
 (`no tensor named …layers.0.mlp.gate.weight`) — the honest answer, not a
 guess.

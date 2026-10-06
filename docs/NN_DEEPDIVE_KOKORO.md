@@ -47,10 +47,18 @@ coverage: 0 of 0 sources parsed, 0 problematic, 0 symlinks skipped
 ```
 
 Everything is visible and classified — and zero model sources were parsed,
-because **`.pth` is a pickle and the workbench never unpickles**. Executing
-deserialization code found inside a downloaded file is exactly the attack
-surface a static tool must not have. The cost is honest: the checkpoint stays
-*opaque*.
+because **`.pth` is a pickle and the workbench never executes pickle**.
+Executing deserialization code found inside a downloaded file is exactly the
+attack surface a static tool must not have.
+
+> **Since v0.29:** `.pth`/`.pt`/`.ckpt` checkpoints inventory natively
+> through a **data-only pickle opcode reader** (see
+> [NN_USAGE.md](NN_USAGE.md) — PyTorch descriptor tier). The stream is read
+> as pure data — strings, integers, containers; `REDUCE` is recognized for
+> tensor rebuild functions and *read as data*, never called. This very
+> checkpoint inventories as 548 tensors with exact storage spans, and every
+> voice pack as its single style vector. The boundary below is unchanged:
+> nothing executes, ever.
 
 Validation draws the same line, loudly:
 
@@ -72,7 +80,9 @@ valid."
 ## Part 2 — The pickle boundary: opaque does not mean unmeasurable
 
 Classic binfiddle never left. A PyTorch checkpoint is a ZIP archive, and ZIP
-is a *format* — measurable without executing anything.
+is a *format* — measurable without executing anything. This is also how the
+descriptor tier above works underneath; here it is by hand, with the classic
+byte-level tools.
 
 ```bash
 binfiddle -i kokoro-v1_0.pth search "504b0304" --all --count
@@ -315,14 +325,6 @@ cmp onnx/model.onnx model-restored.onnx && echo identical
 identical
 ```
 
-> **Found in the field:** the first `edit apply` on this 311 MiB file failed
-> with a self-contradictory budget error — the engine's generic 256 MiB
-> output cap rejected a whole-model copy whose exact size it already knew,
-> and the error printed the chunk size instead of the requirement. Deep
-> dives on real artifacts are how the workbench gets hardened; both defects
-> are fixed (exact-output operations now justify their provable output
-> bound; budget errors report the cumulative requirement).
-
 What does a planned edit touch? Impact keeps dependencies and influence
 separate:
 
@@ -416,7 +418,8 @@ Kokoro's phoneme vocabulary uses a custom model type; the tool reports
 Every step bounded itself, out loud:
 
 - The `.pth` was **measured, never executed** — structure, names, counts,
-  digest; no deserialization, ever.
+  digest; the pickle stream is read as data, and no deserialization code
+  ever runs.
 - Validation of an unreadable package **failed loudly** instead of passing
   vacuously.
 - The ONNX was inventoried at the **descriptor tier**; nothing ran.
@@ -424,8 +427,8 @@ Every step bounded itself, out loud:
 - Diff separated **content change from repack from descriptor change**;
   fingerprints asserted **byte-level relationships only** — never lineage.
 - Editing was **transactional**: preimage-verified, fresh outputs, verified
-  undo — and the deep dive's real-world size hardened the engine's budget
-  accounting.
+  undo — with output budgets justified by each operation's provable output
+  bound, so models larger than any flat cap still edit cleanly.
 
 That is the whole philosophy in one model: *say what you prove, prove what
 you say, and stop there.*

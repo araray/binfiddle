@@ -22,6 +22,7 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 - [Architecture](#architecture)
 - [Contributing](#contributing)
 - [Roadmap](#roadmap)
+- [Documentation & references](#documentation--references)
 - [License](#license)
 
 ## Features
@@ -45,7 +46,7 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 | **Chain** | Pipe multiple binfiddle commands together without shell escaping |
 | **Process Memory** | Read/write memory from any same-user process via `/proc/<pid>/mem` (Linux) |
 | **Struct** | Parse binary data using YAML templates for structure definitions |
-| **NN Workbench** | Inspect, address, extract, edit, and compare neural-network artifacts (SafeTensors/GGUF/ONNX) — static, offline, no model execution |
+| **NN Workbench** | Inspect, address, extract, edit, and compare neural-network artifacts (SafeTensors/GGUF/ONNX/PyTorch) — static, offline, no model execution |
 | **Progress Bars** | Opt-in throughput/ETA feedback for long-running commands |
 
 ### Key Differentiators
@@ -481,20 +482,19 @@ binfiddle --silent -i data.bin -o out.bin chain \
 #### `nn` — Neural-network artifact workbench (early access)
 
 A static workbench for neural-network artifact files — SafeTensors, GGUF,
-ONNX — and the directories that package them. It inventories, addresses,
-extracts, edits, analyzes, and compares model artifacts **without executing
-model code, without Python or ML frameworks, without network access, and
-without modifying inputs** (all outputs are fresh files). Every report ends
-with a `claims:` line stating exactly what it proves — and what it does not.
+ONNX, and PyTorch checkpoints (`.pth`/`.pt`/`.ckpt`, read as pure data) —
+and the directories that package them, including sharded releases with a
+`model.safetensors.index.json`. It inventories, addresses, extracts,
+edits, analyzes, and compares model artifacts **without executing model
+code, without Python or ML frameworks, without network access, and
+without modifying inputs** (all outputs are fresh files). Every report
+ends with a `claims:` line stating exactly what it proves — and what it
+does not.
 
-Full guides: [docs/NN_USAGE.md](docs/NN_USAGE.md) (every command and option),
-[docs/NN_QUICK_REFERENCE.md](docs/NN_QUICK_REFERENCE.md) (one-page card),
-and real-model walkthroughs: [docs/NN_DEEPDIVE_KOKORO.md](docs/NN_DEEPDIVE_KOKORO.md)
-(Kokoro-82M — pickle boundary, ONNX tier, precision family),
-[docs/NN_DEEPDIVE_GEMMA.md](docs/NN_DEEPDIVE_GEMMA.md) (Gemma-4 E4B — 16 GB
-SafeTensors, model packs, transactional editing at scale), and
-[docs/NN_DEEPDIVE_QWEN.md](docs/NN_DEEPDIVE_QWEN.md) (Qwen3.8-Flash-Next —
-131-shard package, hybrid attention, fused head views).
+Full guides: [docs/NN_USAGE.md](docs/NN_USAGE.md) (every command and
+option), [docs/NN_QUICK_REFERENCE.md](docs/NN_QUICK_REFERENCE.md) (one-page
+card), and the real-model deep dives — see
+[Documentation & references](#documentation--references).
 
 ```bash
 # Honest self-description of this build's capabilities
@@ -505,14 +505,19 @@ binfiddle nn capabilities
 
 `nn discover` inventories model artifacts descriptor-only (no payload reads):
 SafeTensors, GGUF v2/v3 (including split-shard groups with completeness and
-cross-shard uniqueness checks), ONNX at the descriptor tier (exact spans for
-`raw_data` initializers; external data and packed fields stay visible and
-honestly labeled), plus package directories where unknown files are kept
+cross-shard uniqueness checks), sharded-SafeTensors packages (missing shards
+per the index are visible findings that fail `--require-complete`), ONNX at
+the descriptor tier (exact spans for `raw_data` initializers; external data
+and packed fields stay visible and honestly labeled), and PyTorch
+`.pth`/`.pt`/`.ckpt` checkpoints through a data-only pickle opcode reader
+(read-only tier), plus package directories where unknown files are kept
 visible as classified assets. Stdin (`-i -`) is spooled to a bounded private
 temp file with its own content-verified identity. `nn ls` / `nn show` /
 `nn select` browse and resolve tensors from a saved catalog; identities are
 content-addressed, so a saved selection never silently rematches different
 bytes (`--rebind` rebinds explicitly and reports additions/removals).
+`nn shard-map` plans which shards of a large release to download for a
+selection — statically, from the index alone.
 
 ```bash
 binfiddle -i model-dir/ nn discover --verify-content --out-catalog m.nn.json
@@ -564,13 +569,16 @@ Numerical inspection with honest coverage modes (`metadata` reads no payload,
 Welford statistics, min/max with coordinates and ties, non-finite category
 counts, overflow-safe L2 norm, histograms, reference-error metrics
 (MAE/RMSE/maxAE with explicit zero-denominator policies), and quantization
-block views through the reference decoder.
+block views through the reference decoder. `--selection` runs one uniform
+mode over every tensor of a selection in a single table with robust
+cross-tensor outlier flags.
 
 ```bash
 binfiddle nn analyze --catalog m.nn.json --tensor w
 binfiddle nn analyze --catalog m.nn.json --tensor w --mode sample --seed 17 --sample-size 4096
 binfiddle nn analyze --catalog m.nn.json --tensor w --reference ref.f32
 binfiddle nn analyze --catalog m.nn.json --tensor q4w --blocks 4
+binfiddle nn analyze --catalog m.nn.json --selection gates.sel.json --mode sample
 ```
 
 ##### Mutation — `edit set`, `edit apply`, `edit undo`, `edit prune`
@@ -580,9 +588,11 @@ preimage bytes, and the replacement; apply re-verifies catalog + source digest
 + preimage, writes a **fresh** output (originals never modified), verifies
 every byte outside the span unchanged, and revalidates the container.
 Sub-byte (Q4_0 nibble) writes preserve the neighbor by mask. Undo bundles
-reverse an edit against its exact edited revision. `edit prune` removes MLP
-channels structurally (gate/up rows, down columns) into a fresh SafeTensors
-file. Negative values need `--value=-0.5` syntax.
+reverse an edit against its exact edited revision. **Multi-write sessions**
+stage any number of operations (staging-time conflict checks) and apply them
+all in one copy pass — one model copy serves many edits. `edit prune` removes
+MLP channels structurally (gate/up rows, down columns) into a fresh
+SafeTensors file. Negative values need `--value=-0.5` syntax.
 
 ```bash
 binfiddle nn edit set --catalog m.nn.json --tensor w --index 0,0 --value 9 \
@@ -591,6 +601,12 @@ binfiddle nn edit apply --catalog m.nn.json --plan e.plan.json \
     --out-model edited.safetensors --undo-bundle undo/e
 binfiddle nn edit undo --bundle undo/e --target edited.safetensors \
     --out-model restored.safetensors     # byte-identical to the original
+
+# Many edits, one copy pass
+binfiddle nn edit set --catalog m.nn.json --tensor w --index 0,0 --value 101 --session sess/
+binfiddle nn edit set --catalog m.nn.json --tensor w --index 3,3 --value 202 --session sess/
+binfiddle nn edit apply --catalog m.nn.json --session sess/ \
+    --out-model edited.safetensors --undo-bundle undo/
 binfiddle nn edit prune --catalog m.nn.json --pack p.yaml --channels 0 \
     --out-model pruned.safetensors
 ```
@@ -599,13 +615,15 @@ binfiddle nn edit prune --catalog m.nn.json --pack p.yaml --channels 0 \
 
 Layered diff that never confuses content changes with repacks (same bytes,
 different offsets), descriptor changes, or package membership; a missing
-tensor is never a zero tensor. Exact fingerprints are content-identity
-records — evidence, never lineage claims. With `--compare`, an experimental
-evidence graph adds exact-payload, structural, and sampled-block similarity
-edges (method/threshold/score recorded; unsampled bytes never certified).
-Adapter inspection inventories LoRA factor pairs at the descriptor level;
-tokenizer commands inspect assets and diff vocabularies without ever
-rendering templates.
+tensor is never a zero tensor. `--precision` audits decoded error metrics
+(per-tensor MAE/RMSE/maxAE/relative-L2 under each side's own codec) for
+fp32-vs-fp16 and quantized-variant families. Exact fingerprints are
+content-identity records — evidence, never lineage claims. With `--compare`,
+an experimental evidence graph adds exact-payload, structural, and
+sampled-block similarity edges (method/threshold/score recorded; unsampled
+bytes never certified). Adapter inspection inventories LoRA factor pairs at
+the descriptor level; tokenizer commands inspect assets and diff
+vocabularies without ever rendering templates.
 
 ```bash
 binfiddle nn diff --left v1.nn.json --right v2.nn.json --decoded --policy exact_bits
@@ -1051,7 +1069,47 @@ cargo check --target aarch64-unknown-linux-gnu
 | 7 | Live process memory | ✅ Complete |
 | 8 | Large files, hashing, streaming, progress | ✅ Complete |
 | 9 | NN artifact workbench (`nn`) | ✅ Complete (early access; runtime replay intentionally out of scope) |
-| 10 | Advanced analysis & intelligence | 🔲 Planned |
+| 10 | NN hardening: PyTorch tier, edit sessions, MoE expert views, shard planning, precision audit | ✅ Complete (v0.29.0) |
+| 11 | Advanced analysis & intelligence | 🔲 Planned |
+
+## Documentation & references
+
+### Classic toolkit
+
+- [docs/USAGE.md](docs/USAGE.md) — the full user guide (every command,
+  streaming, troubleshooting, cookbook)
+- [docs/context.md](docs/context.md) — binfiddle in the command-line
+  ecosystem (vs. xxd, radare2, model tooling)
+- This README's [Command Reference](#command-reference) — syntax, options,
+  and examples for every classic command
+
+### NN workbench (`nn`)
+
+- [docs/NN_USAGE.md](docs/NN_USAGE.md) — the complete manual: concepts
+  (catalogs, selections, plans, bundles, packs, envelopes), every command
+  with full option tables, selector grammar, exit codes, JSON envelope
+  reference, pack authoring, howtos, boundaries
+- [docs/NN_QUICK_REFERENCE.md](docs/NN_QUICK_REFERENCE.md) — one-page
+  cheat sheet: pipeline map, command table, selector grammar, exit codes
+
+### Real-model deep dives
+
+Complete walkthroughs of public model releases, every output a real
+capture — the fastest way to see the workbench in action on real weights:
+
+- [Dissecting Kokoro-82M](docs/NN_DEEPDIVE_KOKORO.md) — the pickle
+  boundary (a PyTorch checkpoint measured as a ZIP), the ONNX descriptor
+  tier, statistics that find real structure, transactional editing, and
+  an fp32/fp16/q8 precision comparison
+- [Dissecting Gemma-4 E4B](docs/NN_DEEPDIVE_GEMMA.md) — a 16 GB
+  SafeTensors release: the E4B per-layer embedding slab, addressing at
+  offset 14.6 billion, a model pack for a dual-head-dimension
+  architecture, and a two-byte transactional edit verified against the
+  whole file
+- [Dissecting Qwen3.8-Flash-Next](docs/NN_DEEPDIVE_QWEN.md) — a
+  131-shard, 360 GB release dissected from a curated 9-shard subset:
+  sharded-package findings, hybrid linear/full anatomy, fused head views
+  carved from real tensors, and stacked MoE experts
 
 ## License
 

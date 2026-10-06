@@ -1132,14 +1132,14 @@ line stating exactly what it proves and what it does not.
 
 | Family | Commands | What for |
 |---|---|---|
-| Discovery | `nn discover`, `nn ls`, `nn show`, `nn select`, `nn capabilities` | Inventory a file or package; save an id-verified catalog; browse tensors; resolve selections |
+| Discovery | `nn discover`, `nn ls`, `nn show`, `nn select`, `nn capabilities` | Inventory a file or package (SafeTensors, GGUF, ONNX, PyTorch); save an id-verified catalog; browse tensors; resolve selections |
 | Addressing | `nn where`, `nn locate`, `nn impact` | Element → file bytes (bit-exact for packed encodings), offset → owner, span → dependencies/influence |
-| Extraction | `nn slice`, `nn split`, `nn assemble` | Bundles of selected tensors or per-layer splits, with named reassembly guarantees |
-| Inspection | `nn analyze` | Statistics, distributions, quantization blocks, reference errors — with honest coverage |
-| Mutation | `nn edit set/apply/undo/prune` | Transactional edits: preimage-verified plans, fresh outputs, exact-revision undo |
-| Comparison | `nn diff`, `nn fingerprint`, `nn adapter inspect`, `nn tokenizer inspect/diff` | Layered diffs, content fingerprints, evidence graphs, adapter/tokenizer inspection |
-| Packages | `nn pack verify/lint/scaffold`, `nn partition`, `nn split` | Declarative model packs, layer planning (static byte estimates only) |
-| Validation & research | `nn validate`, `nn carve`, `nn research align` | Structural verdicts, embedded-container recovery, exact permutation experiments |
+| Extraction | `nn slice`, `nn split`, `nn assemble` | Bundles of selected tensors, components, head/expert views, or per-layer splits, with named reassembly guarantees |
+| Inspection | `nn analyze` | Statistics, distributions, quantization blocks, reference errors — one tensor or a whole selection, with honest coverage |
+| Mutation | `nn edit set/apply/undo/prune` | Transactional edits: preimage-verified plans, multi-write sessions, fresh outputs, exact-revision undo |
+| Comparison | `nn diff`, `nn fingerprint`, `nn adapter inspect`, `nn tokenizer inspect/diff` | Layered diffs, precision audits, content fingerprints, evidence graphs, adapter/tokenizer inspection |
+| Packages | `nn pack verify/lint/scaffold`, `nn partition`, `nn split` | Declarative model packs (config-aware scaffolding), layer planning with placement policies |
+| Validation & research | `nn validate`, `nn shard-map`, `nn carve`, `nn research align` | Structural verdicts, static shard-download planning, embedded-container recovery, exact permutation experiments |
 
 ### First contact
 
