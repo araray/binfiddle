@@ -736,6 +736,16 @@ enum NnCommand {
         #[arg(long, default_value = "2")]
         stages: usize,
 
+        /// Placement of unlayered tensors (embeddings/norms/heads):
+        /// report (default), first, last, or manual (needs --placement-file)
+        #[arg(long, default_value = "report")]
+        unlayered_policy: String,
+
+        /// JSON object file mapping tensor names to stage indices (for
+        /// --unlayered-policy manual)
+        #[arg(long)]
+        placement_file: Option<String>,
+
         /// Report format: text, json
         #[arg(long, default_value = "text", value_parser = ["text", "json"])]
         report_format: String,
@@ -895,6 +905,12 @@ enum PackCommand {
         /// Catalog file to derive patterns from
         #[arg(long)]
         catalog: String,
+
+        /// Optional config.json: known dimension keys become parameters
+        /// (heuristic-labeled); dims observed in 3+ tensors become inferred
+        /// symbols either way
+        #[arg(long)]
+        config: Option<String>,
     },
 }
 
@@ -1685,7 +1701,7 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                     });
                 }
             }
-            PackCommand::Scaffold { catalog } => {
+            PackCommand::Scaffold { catalog, config } => {
                 use binfiddle::nn::profile;
                 let catalog_path = nn_path_arg(Some(catalog.as_str()), "profile scaffold")?
                     .ok_or_else(|| NnError::InvalidRequest {
@@ -1697,7 +1713,9 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                     &DiscoverOptions::default(),
                     &budget,
                 )?;
-                let scaffold = profile::scaffold_pack(&loaded)?;
+                let config_text = nn_path_arg(config.as_deref(), "pack scaffold")?
+                    .and_then(|p| std::fs::read_to_string(p).ok());
+                let scaffold = profile::scaffold_pack_with_config(&loaded, config_text.as_deref())?;
                 guard.propagate(&cancel);
                 let stdout = io::stdout();
                 let mut out = stdout.lock();
@@ -2096,6 +2114,8 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             catalog,
             pack,
             stages,
+            unlayered_policy,
+            placement_file,
             report_format,
         } => {
             use binfiddle::nn::partition;
@@ -2113,7 +2133,56 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             )?;
             let loaded_pack = binfiddle::nn::packs::Pack::load(Path::new(pack))?;
             let recognition = binfiddle::nn::packs::Recognition::recognize(&loaded_pack, &loaded)?;
-            let plan = partition::PartitionPlan::plan(&loaded, &recognition, *stages)?;
+            let manual_map: Vec<(String, usize)> = match unlayered_policy.as_str() {
+                "report" => Vec::new(),
+                "first" => Vec::new(),
+                "last" => Vec::new(),
+                "manual" => {
+                    let file =
+                        placement_file
+                            .as_deref()
+                            .ok_or_else(|| NnError::InvalidRequest {
+                                message: "--unlayered-policy manual requires --placement-file"
+                                    .to_string(),
+                            })?;
+                    let text = std::fs::read_to_string(file).map_err(NnError::Io)?;
+                    let parsed = binfiddle::nn::json::Json::parse_foreign(
+                        &text,
+                        binfiddle::nn::json::ParseLimits::for_input_len(text.len()),
+                    )?;
+                    let binfiddle::nn::json::Json::Object(members) = parsed else {
+                        return Err(NnError::InvalidRequest {
+                            message: "placement file must be an object of name -> stage"
+                                .to_string(),
+                        });
+                    };
+                    let mut map: Vec<(String, usize)> = Vec::new();
+                    for (name, stage) in members {
+                        let stage =
+                            stage
+                                .as_number_u64()
+                                .ok_or_else(|| NnError::InvalidRequest {
+                                    message: format!("placement for {name} must be a stage index"),
+                                })? as usize;
+                        map.push((name.clone(), stage));
+                    }
+                    map
+                }
+                other => {
+                    return Err(NnError::InvalidRequest {
+                        message: format!(
+                            "unknown --unlayered-policy {other} (report|first|last|manual)"
+                        ),
+                    })
+                }
+            };
+            let policy = match unlayered_policy.as_str() {
+                "report" => partition::PlacementPolicy::Report,
+                "first" => partition::PlacementPolicy::First,
+                "last" => partition::PlacementPolicy::Last,
+                _ => partition::PlacementPolicy::Manual(&manual_map),
+            };
+            let plan = partition::PartitionPlan::plan(&loaded, &recognition, *stages, policy)?;
             guard.propagate(&cancel);
             let stdout = io::stdout();
             let mut out = stdout.lock();

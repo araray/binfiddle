@@ -8,7 +8,7 @@
 
 use super::catalog::Catalog;
 use super::error::NnError;
-use super::json::Json;
+use super::json::{Json, ParseLimits};
 use super::packs::{self, Pack};
 use super::report::ResultEnvelope;
 
@@ -155,6 +155,155 @@ fn lint_no_schedule_warning() -> LintFinding {
 /// Scaffold a provisional pack from an observed catalog: group tensor names
 /// by their numeric segments, propose pattern templates, and label every
 /// suggestion heuristic.
+/// Extract dimension parameters from a model config.json (foreign JSON;
+/// integers and floats both parse). Only numeric leaves under well-known
+/// naming conventions become parameters, labeled heuristic.
+fn config_dimensions(text: &str) -> Vec<(String, u64)> {
+    let Ok(parsed) = Json::parse_foreign(text, ParseLimits::for_input_len(text.len())) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, u64)> = Vec::new();
+    fn walk(prefix: &str, value: &Json, out: &mut Vec<(String, u64)>) {
+        match value {
+            Json::Object(members) => {
+                for (k, v) in members {
+                    let key = if prefix.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{prefix}_{k}")
+                    };
+                    walk(&key, v, out);
+                }
+            }
+            Json::Number(digits) => {
+                if let Ok(v) = digits.parse::<u64>() {
+                    out.push((prefix.to_string(), v));
+                }
+            }
+            Json::Float(value) if value.is_finite() && *value >= 0.0 => {
+                let v = *value as u64;
+                if v as f64 == *value {
+                    out.push((prefix.to_string(), v));
+                }
+            }
+            _ => {}
+        }
+    }
+    walk("", &parsed, &mut out);
+    out.retain(|(name, _)| {
+        let n = name.as_str();
+        n.contains("size")
+            || n.contains("dim")
+            || n.contains("heads")
+            || n.contains("layers")
+            || n.contains("vocab")
+            || n.contains("experts")
+            || n.contains("channels")
+    });
+    out
+}
+
+/// Scaffold with config awareness: numeric parameters from a config.json
+/// plus symbol inference from the catalog itself (any dim appearing in 3+
+/// tensors becomes a named parameter, and scaffold shapes reference the
+/// symbol instead of the literal).
+pub fn scaffold_pack_with_config(
+    catalog: &Catalog,
+    config_text: Option<&str>,
+) -> Result<String, NnError> {
+    use std::collections::BTreeMap;
+    // Dimension frequency across tensor shapes.
+    let mut dim_counts: BTreeMap<u64, usize> = BTreeMap::new();
+    for tensor in &catalog.tensors {
+        for dim in &tensor.shape {
+            *dim_counts.entry(*dim).or_insert(0) += 1;
+        }
+    }
+    // Config dims take naming precedence; inferred symbols fill the rest.
+    let mut params: Vec<(String, u64)> = Vec::new();
+    let mut heuristic: Vec<String> = Vec::new();
+    if let Some(text) = config_text {
+        for (name, value) in config_dimensions(text) {
+            if !params.iter().any(|(n, _)| *n == name) && value > 1 {
+                heuristic.push(name.clone());
+                params.push((name, value));
+            }
+        }
+    }
+    let mut inferred: Vec<(String, u64)> = Vec::new();
+    for (dim, count) in &dim_counts {
+        if *count >= 3 && *dim > 1 && !params.iter().any(|(_, v)| v == dim) {
+            inferred.push((format!("dim_{dim}"), *dim));
+        }
+    }
+    params.extend(inferred);
+    let base = scaffold_pack(catalog)?;
+    if params.is_empty() {
+        return Ok(base);
+    }
+    // Rewrite literal dims in shape expressions into symbols, and inject
+    // the config block after `config:` (or add one).
+    let mut out = base;
+    for (name, value) in &params {
+        // Whole-axis rewrites only: replace bare number literals.
+        let literal = format!("\"{value}\"");
+        let symbol = format!("\"{name}\"");
+        out = out.replace(&literal, &symbol);
+    }
+    let config_block = format!(
+        "config:
+{}
+",
+        params
+            .iter()
+            .map(|(n, v)| {
+                if heuristic.contains(n) {
+                    format!(
+                        "  {n}: {v}  # heuristic: from config.json
+"
+                    )
+                } else {
+                    format!(
+                        "  {n}: {v}  # inferred: observed in >=3 tensors
+"
+                    )
+                }
+            })
+            .collect::<String>()
+    );
+    if let Some(pos) = out.find("config:") {
+        // Replace from after `config:` up to the next top-level key line.
+        let after = &out[pos + "config:".len()..];
+        let next_key = after
+            .find(char::is_alphabetic)
+            .map(|i| {
+                after[i..]
+                    .find('\n')
+                    .map(|j| i + j + 1)
+                    .unwrap_or(after.len())
+            })
+            .unwrap_or(after.len());
+        let end = pos + "config:".len() + next_key;
+        out = format!(
+            "{}{}{}",
+            &out[..pos],
+            config_block.trim_end_matches('\n'),
+            &out[end..]
+        );
+    } else {
+        // Insert after the description/schema header: before first binding.
+        if let Some(pos) = out.find("bindings:") {
+            out = format!(
+                "{}{}\n\n{}",
+                &out[..pos],
+                config_block.trim_end(),
+                &out[pos..]
+            );
+        }
+    }
+    Ok(out)
+}
+
 pub fn scaffold_pack(catalog: &Catalog) -> Result<String, NnError> {
     // Group by the name with numeric runs replaced by {layer}.
     use std::collections::BTreeMap;
