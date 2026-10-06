@@ -30,6 +30,7 @@ pub mod report;
 pub mod research;
 pub mod selection;
 pub mod selector;
+pub mod shard_map;
 pub mod show;
 pub mod slice;
 pub mod source;

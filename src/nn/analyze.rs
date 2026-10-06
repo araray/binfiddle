@@ -978,6 +978,216 @@ fn format_number(v: f64) -> String {
 }
 
 /// Build the analysis envelope.
+/// One row of a batch (selection) analysis.
+pub struct BatchRow {
+    pub name: String,
+    pub examined: u64,
+    pub eligible: u64,
+    pub mean: Option<f64>,
+    pub population_variance: Option<f64>,
+    pub l2_norm: Option<f64>,
+    pub nonfinite: u64,
+    pub outliers: bool,
+}
+
+/// Result of analyzing every tensor of a selection in one uniform mode,
+/// with robust cross-tensor outlier flags (median/MAD, |z| >= 4 on the
+/// population variance and the mean separately). Statistical statements
+/// only — never semantic claims.
+pub struct BatchAnalysis {
+    pub mode: ScanMode,
+    pub rows: Vec<BatchRow>,
+}
+
+impl BatchAnalysis {
+    pub fn text(&self) -> String {
+        let mut out = format!(
+            "batch analysis ({} tensors, mode {})
+",
+            self.rows.len(),
+            self.mode.as_str()
+        );
+        out.push_str("  name                                                     examined       mean         p-var       L2
+");
+        for row in &self.rows {
+            let fmt = |v: Option<f64>| {
+                v.map(|x| format!("{x:.6}"))
+                    .unwrap_or_else(|| "-".to_string())
+            };
+            let flag = if row.outliers { "  STAT_OUTLIER" } else { "" };
+            out.push_str(&format!(
+                "  {:54} {:>9}  {:>12} {:>12} {:>10}{}
+",
+                truncate_name(&row.name, 54),
+                row.examined,
+                fmt(row.mean),
+                fmt(row.population_variance),
+                fmt(row.l2_norm),
+                flag
+            ));
+        }
+        let flagged = self.rows.iter().filter(|r| r.outliers).count();
+        if flagged > 0 {
+            out.push_str(&format!(
+                "  {flagged} of {} tensors deviate from the family by robust z >= 4 (median/MAD); statistical observation, not a defect verdict
+",
+                self.rows.len()
+            ));
+        }
+        out.push_str("  claims: per-tensor statistics under one uniform mode; no behavioral or semantic claims
+");
+        out
+    }
+
+    pub fn envelope(&self) -> Result<super::report::ResultEnvelope, NnError> {
+        let rows = self
+            .rows
+            .iter()
+            .map(|r| {
+                Json::object(vec![
+                    ("name", Json::Str(r.name.clone())),
+                    ("examined", Json::Str(r.examined.to_string())),
+                    ("eligible", Json::Str(r.eligible.to_string())),
+                    (
+                        "mean",
+                        match r.mean {
+                            Some(v) => Json::Float(v),
+                            None => Json::Null,
+                        },
+                    ),
+                    (
+                        "population_variance",
+                        match r.population_variance {
+                            Some(v) => Json::Float(v),
+                            None => Json::Null,
+                        },
+                    ),
+                    (
+                        "l2_norm",
+                        match r.l2_norm {
+                            Some(v) => Json::Float(v),
+                            None => Json::Null,
+                        },
+                    ),
+                    ("nonfinite", Json::Str(r.nonfinite.to_string())),
+                    ("stat_outlier", Json::Bool(r.outliers)),
+                ])
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let semantic = Json::object(vec![
+            ("mode", Json::Str(self.mode.as_str().to_string())),
+            ("tensors", Json::Str(self.rows.len().to_string())),
+            ("rows", Json::Array(rows)),
+        ])?;
+        Ok(super::report::ResultEnvelope::new("analyze.selection").with_semantic(semantic))
+    }
+}
+
+fn truncate_name(name: &str, width: usize) -> String {
+    if name.len() <= width {
+        name.to_string()
+    } else {
+        format!("…{}", &name[name.len() - width + 1..])
+    }
+}
+
+fn robust_outliers(values: &[f64]) -> Vec<bool> {
+    if values.len() < 4 {
+        return vec![false; values.len()];
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = sorted[sorted.len() / 2];
+    let mut deviations: Vec<f64> = values.iter().map(|v| (v - median).abs()).collect();
+    deviations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mad = deviations[deviations.len() / 2];
+    values
+        .iter()
+        .map(|v| {
+            if mad > 0.0 {
+                ((v - median) / (1.4826 * mad)).abs() >= 4.0
+            } else {
+                false
+            }
+        })
+        .collect()
+}
+
+/// Analyze every tensor of a selection under one uniform mode. Metadata
+/// mode is refused (no observations to compare); mixed modes would make
+/// the table dishonest, so the mode is one for the whole batch.
+pub fn analyze_selection(
+    catalog: &Catalog,
+    selection: &super::selection::Selection,
+    mode: ScanMode,
+    seed: u64,
+    sample_size: u64,
+    budget: &Budget,
+) -> Result<BatchAnalysis, NnError> {
+    if mode == ScanMode::Metadata {
+        return Err(NnError::InvalidRequest {
+            message: "batch analysis needs observations; use sample or full mode".to_string(),
+        });
+    }
+    if selection.target_ids.is_empty() {
+        return Err(NnError::InvalidRequest {
+            message: "the selection is empty; nothing to analyze".to_string(),
+        });
+    }
+    let mut rows: Vec<BatchRow> = Vec::with_capacity(selection.target_ids.len());
+    for target_id in &selection.target_ids {
+        let tensor = catalog
+            .tensors
+            .iter()
+            .find(|t| t.id == *target_id)
+            .ok_or_else(|| NnError::SourceMissing {
+                detail: format!(
+                    "selection references tensor {} missing from the catalog",
+                    super::error::brief(target_id)
+                ),
+            })?;
+        let result = analyze_tensor(
+            catalog,
+            tensor,
+            mode,
+            seed,
+            sample_size,
+            0,
+            0,
+            None,
+            4,
+            budget,
+        )?;
+        budget.checkpoint()?;
+        let nonfinite = result
+            .stats
+            .as_ref()
+            .map(|s| s.nan_count + s.pos_inf + s.neg_inf)
+            .unwrap_or(0);
+        rows.push(BatchRow {
+            name: tensor.original_name.clone(),
+            examined: result.coverage.examined_elements,
+            eligible: result.coverage.eligible_elements,
+            mean: result.stats.as_ref().and_then(|s| s.mean),
+            population_variance: result.stats.as_ref().and_then(|s| s.population_variance),
+            l2_norm: result.stats.as_ref().and_then(|s| s.l2_norm),
+            nonfinite,
+            outliers: false,
+        });
+    }
+    // Robust outlier flags over the two most comparable statistics.
+    let variances: Vec<f64> = rows.iter().filter_map(|r| r.population_variance).collect();
+    let var_flags = robust_outliers(&variances);
+    let mut var_index = 0;
+    for row in rows.iter_mut() {
+        if row.population_variance.is_some() {
+            row.outliers = var_flags[var_index];
+            var_index += 1;
+        }
+    }
+    Ok(BatchAnalysis { mode, rows })
+}
+
 pub fn analysis_envelope(
     catalog: &Catalog,
     result: &AnalysisResult,

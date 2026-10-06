@@ -594,6 +594,9 @@ enum NnCommand {
         /// Scope for --tensor: unique source id prefix or exact path
         #[arg(long, requires = "tensor")]
         source: Option<String>,
+        /// Analyze every tensor of a saved selection (batch mode)
+        #[arg(long)]
+        selection: Option<String>,
 
         /// Access mode: metadata (no payload reads), sample, full
         #[arg(long, default_value = "full", value_parser = ["metadata", "sample", "full"])]
@@ -653,6 +656,15 @@ enum NnCommand {
         /// Also compare decoded values of content-changed scalar tensors
         #[arg(long)]
         decoded: bool,
+
+        /// Audit decoded error metrics for every name-matched same-shape
+        /// pair (e.g. fp32 vs fp16 exports)
+        #[arg(long)]
+        precision: bool,
+
+        /// Sample stride for the precision audit (0 = every element)
+        #[arg(long, default_value_t = 0)]
+        precision_sample: u64,
 
         /// Decoded comparison policy: exact_bits, lenient
         #[arg(long, default_value = "exact_bits", value_parser = ["exact_bits", "lenient"])]
@@ -1497,6 +1509,7 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             tensor,
             target_id,
             source,
+            selection,
             mode,
             seed,
             sample_size,
@@ -1516,6 +1529,32 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 &DiscoverOptions::default(),
                 &budget,
             )?;
+            if let Some(sel_path) = selection.as_deref() {
+                if tensor.is_some() || target_id.is_some() {
+                    return Err(NnError::InvalidRequest {
+                        message: "nn analyze takes either --selection or one of --tensor/--id"
+                            .to_string(),
+                    });
+                }
+                let sel = binfiddle::nn::Selection::load(Path::new(sel_path))?;
+                let mode = match mode.as_str() {
+                    "metadata" => ScanMode::Metadata,
+                    "sample" => ScanMode::Sample,
+                    _ => ScanMode::Full,
+                };
+                let batch =
+                    analyze::analyze_selection(&loaded, &sel, mode, *seed, *sample_size, &budget)?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    batch.envelope()?.write_json(&mut out)?;
+                } else {
+                    out.write_all(batch.text().as_bytes())?;
+                }
+                out.flush()?;
+                return Ok(());
+            }
             let target = match (tensor, target_id) {
                 (Some(name), None) => ShowTarget::Name {
                     name,
@@ -1887,6 +1926,8 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
             left,
             right,
             decoded,
+            precision,
+            precision_sample,
             policy,
             report_format,
         } => {
@@ -1914,6 +1955,24 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 &budget,
             )?;
             let policy = DecodePolicy::parse(policy)?;
+            if *precision {
+                let audit = compare::precision_audit(
+                    &left_catalog,
+                    &right_catalog,
+                    *precision_sample,
+                    &budget,
+                )?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    audit.envelope()?.write_json(&mut out)?;
+                } else {
+                    out.write_all(audit.text().as_bytes())?;
+                }
+                out.flush()?;
+                return Ok(());
+            }
             let report = compare::DiffReport::compare(
                 &left_catalog,
                 &right_catalog,
