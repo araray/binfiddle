@@ -288,6 +288,15 @@ impl EditPlan {
         allow_clamp: bool,
         budget: &Budget,
     ) -> Result<EditPlan, NnError> {
+        // The torch descriptor tier is read-only in v1: descriptors and
+        // spans are exact, but no fresh-output writer exists for the ZIP
+        // container, so edits are refused honestly instead of half-kept.
+        if tensor.encoding.starts_with("torch.") {
+            return Err(NnError::FormatUnsupported {
+                format: "torch".to_string(),
+                reason: "the torch descriptor tier is read-only in v1 (no writer)".to_string(),
+            });
+        }
         let layout = layout_for_encoding(&tensor.encoding);
         let location = write_unit(tensor, layout, coordinate)?;
         let source = catalog.resolve_source(&tensor.source_id)?;

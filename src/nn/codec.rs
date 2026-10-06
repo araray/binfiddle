@@ -201,6 +201,18 @@ pub fn layout_for_encoding(encoding: &str) -> TensorLayout {
         "onnx.int8" => TensorLayout::Scalar(ScalarCodec::I8),
         "onnx.uint8" => TensorLayout::Scalar(ScalarCodec::U8),
         "onnx.bool" => TensorLayout::Scalar(ScalarCodec::Bool),
+        // Torch storage types with exact codec counterparts (read tier;
+        // the torch descriptor tier is read-only — edits are refused).
+        "torch.float64" => TensorLayout::Scalar(ScalarCodec::F64),
+        "torch.float32" => TensorLayout::Scalar(ScalarCodec::F32),
+        "torch.float16" => TensorLayout::Scalar(ScalarCodec::F16),
+        "torch.bfloat16" => TensorLayout::Scalar(ScalarCodec::Bf16),
+        "torch.int64" => TensorLayout::Scalar(ScalarCodec::I64),
+        "torch.int32" => TensorLayout::Scalar(ScalarCodec::I32),
+        "torch.int16" => TensorLayout::Scalar(ScalarCodec::I16),
+        "torch.int8" => TensorLayout::Scalar(ScalarCodec::I8),
+        "torch.uint8" => TensorLayout::Scalar(ScalarCodec::U8),
+        "torch.bool" => TensorLayout::Scalar(ScalarCodec::Bool),
         "ggml.q4_0" => TensorLayout::Q4_0,
         _ => TensorLayout::Unknown,
     }

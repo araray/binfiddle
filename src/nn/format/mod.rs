@@ -8,6 +8,7 @@
 pub mod gguf;
 pub mod onnx;
 pub mod safetensors;
+pub mod torch;
 
 use crate::nn::error::NnError;
 
@@ -172,6 +173,21 @@ pub fn encoding_decode_supported(encoding_id: &str) -> bool {
     }
     if let Some(name) = encoding_id.strip_prefix("ggml.") {
         return matches!(name, "f32" | "f16");
+    }
+    if let Some(name) = encoding_id.strip_prefix("torch.") {
+        return matches!(
+            name,
+            "float32"
+                | "float16"
+                | "float64"
+                | "bfloat16"
+                | "uint8"
+                | "int8"
+                | "int16"
+                | "int32"
+                | "int64"
+                | "bool"
+        );
     }
     if let Some(name) = encoding_id.strip_prefix("onnx.") {
         return matches!(

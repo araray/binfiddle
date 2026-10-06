@@ -379,7 +379,16 @@ fn inventory_file(path: &Path, options: &DiscoverOptions, parent: &Budget) -> So
     // GGUF identifies by magic; SafeTensors and ONNX identify structurally
     // (ONNX is protobuf with a ModelProto/graph; the attempt is cheap and
     // fails fast on non-protobuf bytes).
-    let parse_result = if has_gguf_magic(&file, &budget) {
+    let name_lower = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let is_torch = name_lower.ends_with(".pth")
+        || name_lower.ends_with(".pt")
+        || name_lower.ends_with(".ckpt");
+    let parse_result = if is_torch {
+        format::torch::inventory(&file, &budget).map(Some)
+    } else if has_gguf_magic(&file, &budget) {
         format::gguf::inventory(&file, &budget).map(Some)
     } else {
         match format::safetensors::inventory(&file, &budget) {
@@ -779,7 +788,12 @@ pub fn discover(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let lower = name.to_ascii_lowercase();
-        if lower.ends_with(".safetensors") || lower.ends_with(".gguf") {
+        if lower.ends_with(".safetensors")
+            || lower.ends_with(".gguf")
+            || lower.ends_with(".pth")
+            || lower.ends_with(".pt")
+            || lower.ends_with(".ckpt")
+        {
             let mut report = inventory_file(path, options, budget);
             annotate_shard_group(&mut report, &name);
             sources.push(report);
