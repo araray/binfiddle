@@ -9,9 +9,11 @@ code, and never modifies an input file — all outputs are fresh files.
 > [USAGE.md](USAGE.md). A one-page cheat sheet lives in
 > [NN_QUICK_REFERENCE.md](NN_QUICK_REFERENCE.md). For complete real-model
 > walkthroughs, see the deep dives:
-> [NN_DEEPDIVE_KOKORO.md](NN_DEEPDIVE_KOKORO.md) (ONNX export, pickle boundary)
-> and [NN_DEEPDIVE_GEMMA.md](NN_DEEPDIVE_GEMMA.md) (16 GB SafeTensors, model packs,
-> transactional editing at scale).
+> [NN_DEEPDIVE_KOKORO.md](NN_DEEPDIVE_KOKORO.md) (ONNX export, pickle boundary),
+> [NN_DEEPDIVE_GEMMA.md](NN_DEEPDIVE_GEMMA.md) (16 GB SafeTensors, model packs,
+> transactional editing at scale), and
+> [NN_DEEPDIVE_QWEN.md](NN_DEEPDIVE_QWEN.md) (131-shard package, hybrid
+> attention, fused head views).
 
 **Contents**
 

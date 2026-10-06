@@ -56,6 +56,47 @@ impl ValidationReport {
         budget: &super::budget::Budget,
     ) -> Result<ValidationReport, NnError> {
         let report = discover::discover(root, &DiscoverOptions::default(), budget)?;
+        Ok(Self::from_discovery(root.to_path_buf(), &report))
+    }
+
+    /// Validate the sources recorded in a saved catalog. Validation speaks
+    /// about the files as they are now: each recorded source is freshly
+    /// inventoried (recorded paths resolve against the catalog's own
+    /// directory first).
+    pub fn validate_catalog(
+        catalog_path: &Path,
+        budget: &super::budget::Budget,
+    ) -> Result<ValidationReport, NnError> {
+        let catalog = super::catalog::Catalog::load(catalog_path)?;
+        let mut sources = Vec::new();
+        for src in &catalog.sources {
+            if src.path.is_empty() {
+                sources.push(SourceVerdict {
+                    path: src.path.clone(),
+                    verdict: Verdict::Incomplete,
+                    findings: Vec::new(),
+                    note: "catalog source has no stored locator path".to_string(),
+                });
+                continue;
+            }
+            let path = catalog.resolve_path(&src.path);
+            let report = discover::discover(&path, &DiscoverOptions::default(), budget)?;
+            let mut one = Self::from_discovery(path.clone(), &report);
+            sources.append(&mut one.sources);
+            budget.checkpoint()?;
+        }
+        let all_valid = !sources.is_empty()
+            && sources
+                .iter()
+                .all(|s| s.verdict == Verdict::StructurallyValidForReader);
+        Ok(ValidationReport {
+            root: catalog_path.to_path_buf(),
+            sources,
+            all_valid,
+        })
+    }
+
+    fn from_discovery(root: PathBuf, report: &discover::DiscoverReport) -> ValidationReport {
         let mut sources = Vec::new();
         let mut all_valid = true;
         for source in &report.sources {
@@ -162,11 +203,11 @@ impl ValidationReport {
         if sources.is_empty() {
             all_valid = false;
         }
-        Ok(ValidationReport {
-            root: root.to_path_buf(),
+        ValidationReport {
+            root,
             sources,
             all_valid,
-        })
+        }
     }
 
     pub fn envelope(&self) -> Result<ResultEnvelope, NnError> {
@@ -313,5 +354,30 @@ mod tests {
         let report = ValidationReport::validate(&inner, &budget()).unwrap();
         assert!(report.sources.is_empty());
         assert!(!report.all_valid);
+    }
+
+    /// Regression: `--catalog` must validate the sources RECORDED in the
+    /// catalog, not run a fresh inventory over the catalog file itself
+    /// (which reported the catalog JSON as an unsupported feature).
+    #[test]
+    fn catalog_route_validates_recorded_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let header = r#"{"w":{"dtype":"U8","shape":[1],"data_offsets":[0,1]}}"#;
+        let mut data = Vec::new();
+        data.extend_from_slice(&(header.len() as u64).to_le_bytes());
+        data.extend_from_slice(header.as_bytes());
+        data.push(7);
+        std::fs::write(dir.path().join("m.safetensors"), data).unwrap();
+        let report =
+            discover::discover(dir.path(), &DiscoverOptions::default(), &budget()).unwrap();
+        let catalog = super::super::catalog::Catalog::from_discovery(&report).unwrap();
+        let catalog_path = dir.path().join("m.nn.json");
+        catalog.save(&catalog_path).unwrap();
+
+        let vr = ValidationReport::validate_catalog(&catalog_path, &budget()).unwrap();
+        assert_eq!(vr.sources.len(), 1);
+        assert_eq!(vr.sources[0].verdict, Verdict::StructurallyValidForReader);
+        assert!(vr.sources[0].path.ends_with("m.safetensors"));
+        assert!(vr.all_valid);
     }
 }
