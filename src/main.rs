@@ -802,6 +802,31 @@ enum NnCommand {
         report_format: String,
     },
 
+    /// Plan which shards to download for a selection (static, no network)
+    ShardMap {
+        /// Path to model.safetensors.index.json
+        #[arg(long)]
+        index: String,
+
+        /// Saved catalog (resolves selections to tensor names; adds byte
+        /// accounting)
+        #[arg(long)]
+        catalog: Option<String>,
+
+        /// Saved selection file naming the tensors of interest
+        #[arg(long, requires = "catalog")]
+        selection: Option<String>,
+
+        /// Exact tensor names to plan for (repeatable; omit for the whole
+        /// package)
+        #[arg(long = "tensor")]
+        tensors: Vec<String>,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
     /// Adapter checkpoint operations
     Adapter {
         #[command(subcommand)]
@@ -2420,6 +2445,37 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                     detail: "one or more sources failed structural validation".to_string(),
                 });
             }
+        }
+        NnCommand::ShardMap {
+            index,
+            catalog,
+            selection,
+            tensors,
+            report_format,
+        } => {
+            let loaded = catalog
+                .as_ref()
+                .map(|path| binfiddle::nn::Catalog::load(Path::new(path)))
+                .transpose()?;
+            let sel = selection
+                .as_ref()
+                .map(|path| binfiddle::nn::Selection::load(Path::new(path)))
+                .transpose()?;
+            let report = binfiddle::nn::shard_map::shard_map(
+                Path::new(index),
+                tensors,
+                loaded.as_ref(),
+                sel.as_ref(),
+            )?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                report.envelope()?.write_json(&mut out)?;
+            } else {
+                out.write_all(report.text().as_bytes())?;
+            }
+            out.flush()?;
         }
     }
 
