@@ -7,13 +7,14 @@
 //! honest bounded extents for compressed ones. Object arrays are never
 //! unpickled; structured dtypes stay visible as unsupported descriptors.
 
-use super::zip::{parse_zip, ZipEntry};
+use super::zip::{parse_zip, read_at, ZipEntry};
 use super::{
     encoding_decode_supported, Extent, Finding, FormatInventory, Severity, TensorEntry, Validity,
 };
 use crate::nn::budget::Budget;
 use crate::nn::error::NnError;
 use crate::nn::source::BoundedFile;
+use std::path::Path;
 
 const NPY_MAGIC: [u8; 6] = [0x93, b'N', b'U', b'M', b'P', b'Y'];
 
@@ -482,6 +483,173 @@ fn finding_code_suffix(finding: &Finding) -> String {
         .strip_prefix("NPY_")
         .unwrap_or(&finding.code)
         .to_string()
+}
+
+// ---- bounded array access (analyze/derive tier) ----
+
+/// Byte-range access to one NumPy array, wherever it physically lives.
+///
+/// - `.npy` files and STORED npz members: direct file reads at exact
+///   file-qualified offsets.
+/// - DEFLATE npz members: the member is decompressed once, whole, under
+///   explicit budgets (compressed read + decompressed produced, with a
+///   cap); ranges are then served from the in-memory buffer at logical
+///   (decompressed) coordinates. The buffer is never presented as file
+///   offsets — callers address it by array-relative byte offsets.
+pub enum ArrayReader {
+    File(BoundedFile, u64),
+    Deflated(std::rc::Rc<Vec<u8>>, u64),
+}
+
+impl ArrayReader {
+    /// Open the reader for one catalog tensor of numpy encoding. The
+    /// `header_len` is the NPY header length inside the member payload.
+    pub fn open(
+        path: &Path,
+        tensor: &crate::nn::catalog::CatalogTensor,
+        budget: &Budget,
+    ) -> Result<ArrayReader, NnError> {
+        let lower = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match lower.as_str() {
+            "npy" => {
+                let file = BoundedFile::open(path)?;
+                // Find the header length by parsing the prefix at offset 0.
+                let header =
+                    parse_npy_header(&file, 0, budget)?.ok_or_else(|| NnError::MalformedInput {
+                        detail: "npy: magic mismatch".to_string(),
+                    })?;
+                Ok(ArrayReader::File(file, header.header_len))
+            }
+            "npz" => {
+                let file = BoundedFile::open(path)?;
+                let entries = parse_zip(&file, budget)?;
+                let name = format!("{}.npy", tensor.original_name);
+                let entry = entries.iter().find(|e| e.name == name).ok_or_else(|| {
+                    NnError::SourceMissing {
+                        detail: format!("npz member {name} not found"),
+                    }
+                })?;
+                match entry.compression {
+                    0 => {
+                        let header = parse_npy_header(&file, entry.data_offset, budget)?
+                            .ok_or_else(|| NnError::MalformedInput {
+                                detail: format!("npz member {name} lacks NPY magic"),
+                            })?;
+                        Ok(ArrayReader::File(
+                            file,
+                            entry.data_offset + header.header_len,
+                        ))
+                    }
+                    8 => {
+                        let (payload, _complete) = deflate_full(&file, entry, budget)?;
+                        let header = parse_npy_header_bytes(&payload)?.ok_or_else(|| {
+                            NnError::MalformedInput {
+                                detail: format!("npz member {name} lacks NPY magic"),
+                            }
+                        })?;
+                        Ok(ArrayReader::Deflated(
+                            std::rc::Rc::new(payload),
+                            header.header_len,
+                        ))
+                    }
+                    other => Err(NnError::FormatUnsupported {
+                        format: "numpy-archive".to_string(),
+                        reason: format!("member {name} uses compression method {other}"),
+                    }),
+                }
+            }
+            _ => Err(NnError::InvalidRequest {
+                message: format!("not a NumPy container: {}", path.display()),
+            }),
+        }
+    }
+
+    /// Read `buf.len()` array-payload bytes starting at array-relative
+    /// offset `at`. All bytes are budget-charged.
+    pub fn read_range(&self, at: u64, buf: &mut [u8], budget: &Budget) -> Result<(), NnError> {
+        budget.consume_source_read(buf.len() as u64)?;
+        self.read_unchecked(at, buf)
+    }
+
+    /// Array-relative read without a budget charge — for callers that
+    /// charge the same bytes themselves (the analyze scan loops).
+    pub fn read_unchecked(&self, at: u64, buf: &mut [u8]) -> Result<(), NnError> {
+        match self {
+            ArrayReader::File(file, base) => file.read_exact_at(base + at, buf),
+            ArrayReader::Deflated(payload, base) => {
+                let start = base + at;
+                let end = start + buf.len() as u64;
+                if end > payload.len() as u64 {
+                    return Err(NnError::MalformedInput {
+                        detail: format!(
+                            "array range [{start}, {end}) exceeds the decompressed member"
+                        ),
+                    });
+                }
+                buf.copy_from_slice(&payload[start as usize..end as usize]);
+                Ok(())
+            }
+        }
+    }
+
+    /// Whole-array payload (header excluded), budget-charged.
+    pub fn read_all(&self, len: u64, budget: &Budget) -> Result<Vec<u8>, NnError> {
+        let mut out = vec![0u8; len as usize];
+        self.read_range(0, &mut out, budget)?;
+        Ok(out)
+    }
+}
+
+/// Full bounded decompression of one member (no prefix cap).
+fn deflate_full(
+    file: &BoundedFile,
+    entry: &ZipEntry,
+    budget: &Budget,
+) -> Result<(Vec<u8>, bool), NnError> {
+    use std::io::Read as _;
+    const COMPRESSED_CAP: u64 = 1024 * 1024 * 1024;
+    const DECOMPRESSED_CAP: u64 = 4 * 1024 * 1024 * 1024;
+    if entry.stored_size > COMPRESSED_CAP {
+        return Err(NnError::BudgetExceeded {
+            resource: "metadata_bytes",
+            limit: COMPRESSED_CAP,
+            requested: entry.stored_size,
+        });
+    }
+    let compressed = read_at(file, entry.data_offset, entry.stored_size as usize, budget)?;
+    budget.consume_metadata(entry.stored_size)?;
+    let mut decoder = flate2::read::DeflateDecoder::new(&compressed[..]);
+    let mut out = Vec::with_capacity(entry.uncompressed_size.min(DECOMPRESSED_CAP) as usize);
+    let mut chunk = [0u8; 65536];
+    let mut produced: u64 = 0;
+    loop {
+        match decoder.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                out.extend_from_slice(&chunk[..n]);
+                produced += n as u64;
+                budget.consume_metadata(n as u64)?;
+                if produced > DECOMPRESSED_CAP {
+                    return Err(NnError::BudgetExceeded {
+                        resource: "metadata_bytes",
+                        limit: DECOMPRESSED_CAP,
+                        requested: produced,
+                    });
+                }
+            }
+            Err(err) => {
+                return Err(NnError::MalformedInput {
+                    detail: format!("npz: member {} failed to decompress: {err}", entry.name),
+                })
+            }
+        }
+    }
+    let complete = produced == entry.uncompressed_size;
+    Ok((out, complete))
 }
 
 #[cfg(test)]

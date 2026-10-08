@@ -475,6 +475,40 @@ pub fn analyze_tensor(
     }
     let reader = BoundedFile::open(&catalog.resolve_path(&source.path))?;
     reader.verify_length(Path::new(&source.path))?;
+    // NumPy tensors read element bytes through the bounded ArrayReader
+    // (direct file reads for .npy/STORED members; whole-member bounded
+    // decompression for DEFLATE npz members). Everything else reads the
+    // source file at payload offsets.
+    let array_reader = if tensor.encoding.starts_with("numpy.") {
+        Some(crate::nn::format::npy::ArrayReader::open(
+            &catalog.resolve_path(&source.path),
+            tensor,
+            budget,
+        )?)
+    } else {
+        None
+    };
+
+    // ArrayReader resolves exact array-relative extents (decompressed
+    // coordinates for DEFLATE members) at open time; the catalog keeps the
+    // archive-coordinate truth and the scan states the resolution.
+    let mut extent_note: Option<String> = None;
+    if tensor.payload_length.is_none() {
+        let numpy = tensor.encoding.starts_with("numpy.");
+        if numpy {
+            extent_note = Some(
+                "catalog extent is archive-bounded; this scan resolved exact                  array-relative (decompressed) coordinates through the capture reader"
+                    .to_string(),
+            );
+        } else {
+            return Err(NnError::InvalidRequest {
+                message: format!(
+                    "tensor {} has only a bounded extent; numerical analysis requires exact extents",
+                    tensor.original_name
+                ),
+            });
+        }
+    }
 
     let findings: Vec<Finding> = Vec::new();
     let notes: Vec<String> = Vec::new();
@@ -503,6 +537,9 @@ pub fn analyze_tensor(
         findings,
         notes,
     };
+    if let Some(note) = extent_note {
+        result.notes.push(note);
+    }
     match mode {
         ScanMode::Metadata => {
             result.notes.push(
@@ -514,18 +551,11 @@ pub fn analyze_tensor(
         ScanMode::Sample | ScanMode::Full => {}
     }
 
-    if tensor.payload_length.is_none() {
-        return Err(NnError::InvalidRequest {
-            message: format!(
-                "tensor {} has only a bounded extent; numerical analysis requires exact extents",
-                tensor.original_name
-            ),
-        });
-    }
-
+    // Bounded file extents still refuse — except NumPy captures, where the
     match layout {
         TensorLayout::Scalar(codec) => {
             analyze_scalar(
+                array_reader.as_ref(),
                 &reader,
                 tensor,
                 codec,
@@ -607,6 +637,7 @@ pub fn analyze_tensor(
 
 #[allow(clippy::too_many_arguments)]
 fn analyze_scalar(
+    array: Option<&crate::nn::format::npy::ArrayReader>,
     reader: &BoundedFile,
     tensor: &CatalogTensor,
     codec: ScalarCodec,
@@ -644,10 +675,13 @@ fn analyze_scalar(
                 let take = ((buffer.len() as u64) / width).min(remaining) as usize;
                 let byte_len = take * width as usize;
                 budget.consume_source_read(byte_len as u64)?;
-                reader.read_exact_at(
-                    tensor.payload_start + linear * width,
-                    &mut buffer[..byte_len],
-                )?;
+                match array {
+                    Some(a) => a.read_unchecked(linear * width, &mut buffer[..byte_len])?,
+                    None => reader.read_exact_at(
+                        tensor.payload_start + linear * width,
+                        &mut buffer[..byte_len],
+                    )?,
+                }
                 result.coverage.fetched_bytes += byte_len as u64;
                 for i in 0..take {
                     let bytes = &buffer[i * width as usize..(i + 1) * width as usize];
@@ -696,10 +730,13 @@ fn analyze_scalar(
             let mut element = [0u8; 16];
             for index in indices {
                 budget.consume_source_read(width)?;
-                reader.read_exact_at(
-                    tensor.payload_start + index * width,
-                    &mut element[..width as usize],
-                )?;
+                match array {
+                    Some(a) => a.read_unchecked(index * width, &mut element[..width as usize])?,
+                    None => reader.read_exact_at(
+                        tensor.payload_start + index * width,
+                        &mut element[..width as usize],
+                    )?,
+                }
                 result.coverage.fetched_bytes += width;
                 let value = match codec.decode(&element[..width as usize])?.value {
                     ScalarValue::Float(f) => f,

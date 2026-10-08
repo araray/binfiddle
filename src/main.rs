@@ -807,6 +807,38 @@ enum NnCommand {
         report_format: String,
     },
 
+    /// Evaluate a data-only derived numerical view over catalog tensors
+    Derive {
+        /// Saved catalog naming the input tensors
+        #[arg(long)]
+        catalog: String,
+
+        /// Expression over tensor names (e.g. "post - expected_post" or
+        /// "log(p) - log(2 - p)"); operators + - * / and log/exp/sqrt/abs
+        #[arg(long)]
+        expression: String,
+
+        /// Fresh output .npy file (must not exist)
+        #[arg(long)]
+        out_npy: String,
+
+        /// Provenance sidecar JSON (must not exist)
+        #[arg(long)]
+        out_sidecar: String,
+
+        /// Write float32 instead of float64
+        #[arg(long)]
+        f32_output: bool,
+
+        /// Write NaN at domain violations instead of refusing
+        #[arg(long)]
+        allow_domain_violations: bool,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
     /// Plan which shards to download for a selection (static, no network)
     ShardMap {
         /// Path to model.safetensors.index.json
@@ -2450,6 +2482,48 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                     detail: "one or more sources failed structural validation".to_string(),
                 });
             }
+        }
+        NnCommand::Derive {
+            catalog,
+            expression,
+            out_npy,
+            out_sidecar,
+            f32_output,
+            allow_domain_violations,
+            report_format,
+        } => {
+            let catalog_path = nn_path_arg(Some(catalog.as_str()), "derive")?;
+            let loaded = binfiddle::nn::Catalog::from_route(
+                catalog_path,
+                None,
+                &DiscoverOptions::default(),
+                &budget,
+            )?;
+            let out_npy_path = Path::new(out_npy);
+            let out_sidecar_path = Path::new(out_sidecar);
+            if out_npy_path.exists() || out_sidecar_path.exists() {
+                return Err(NnError::InvalidRequest {
+                    message: "derive writes fresh output files only".to_string(),
+                });
+            }
+            let receipt = binfiddle::nn::derive::derive(
+                &loaded,
+                expression,
+                out_npy_path,
+                out_sidecar_path,
+                *f32_output,
+                *allow_domain_violations,
+                &budget,
+            )?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                binfiddle::nn::derive::derive_envelope(&receipt)?.write_json(&mut out)?;
+            } else {
+                out.write_all(binfiddle::nn::derive::derive_text(&receipt).as_bytes())?;
+            }
+            out.flush()?;
         }
         NnCommand::ShardMap {
             index,

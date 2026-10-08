@@ -44,6 +44,7 @@ edit set --session ─→ staged ops ─→ apply --session (one pass) ─→ un
 | `nn partition` | Layer groups per stage (static byte estimate; `--unlayered-policy`) |
 | `nn carve` | Find embedded containers in a raw file (`--target`) |
 | `nn validate` | Per-source structural verdicts (exit 7 on defects) |
+| `nn derive` | Data-only derived views over capture arrays (`--expression`, provenance sidecar, explicit domain policy) |
 | `nn shard-map` | Which shards hold your selection (`--index`, `--tensor`/`--selection`) — a plan, not a download |
 | `nn adapter inspect` | LoRA factor pairs (descriptor-level) |
 | `nn tokenizer inspect / diff` | Tokenizer assets / vocabulary diff |
@@ -69,6 +70,7 @@ binfiddle nn edit apply --catalog m.nn.json --session sess/ --out-model out.bin 
 binfiddle nn diff --left v1.nn.json --right v2.nn.json
 binfiddle nn diff --left fp32.nn.json --right fp16.nn.json --precision
 binfiddle nn fingerprint --catalog v1.nn.json --compare v2.nn.json
+binfiddle nn derive --catalog cap.nn.json --expression 'post - expected_post' --out-npy e.npy --out-sidecar e.json
 binfiddle nn shard-map --index model.safetensors.index.json --tensor lm_head.weight
 ```
 
