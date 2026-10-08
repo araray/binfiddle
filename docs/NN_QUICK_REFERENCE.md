@@ -23,7 +23,7 @@ edit set --session ─→ staged ops ─→ apply --session (one pass) ─→ un
 | Command | One-liner |
 |---|---|
 | `nn capabilities` | What this build implements (honest self-report) |
-| `nn discover` | Inventory SafeTensors/GGUF/ONNX/PyTorch + dirs (`--verify-content`, `--require-complete`, `--out-catalog`) |
+| `nn discover` | Inventory SafeTensors/GGUF/ONNX/PyTorch/NumPy + dirs (`--verify-content`, `--require-complete`, `--out-catalog`) |
 | `nn ls` | List tensors/sources/components (`--view`, `--encoding`, `--name-regex`, `--sort`, `--limit/--offset`) |
 | `nn show` | One tensor's record (`--tensor` / `--id` / `--component`, `--explain`) |
 | `nn select` | Resolve + save a selection (`--tensor`, `--id`, `--select` expr, `--rebind`) |

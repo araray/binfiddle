@@ -201,6 +201,16 @@ pub fn layout_for_encoding(encoding: &str) -> TensorLayout {
         "onnx.int8" => TensorLayout::Scalar(ScalarCodec::I8),
         "onnx.uint8" => TensorLayout::Scalar(ScalarCodec::U8),
         "onnx.bool" => TensorLayout::Scalar(ScalarCodec::Bool),
+        // NumPy dtypes with exact little-endian codec counterparts.
+        "numpy.float64" => TensorLayout::Scalar(ScalarCodec::F64),
+        "numpy.float32" => TensorLayout::Scalar(ScalarCodec::F32),
+        "numpy.float16" => TensorLayout::Scalar(ScalarCodec::F16),
+        "numpy.int64" => TensorLayout::Scalar(ScalarCodec::I64),
+        "numpy.int32" => TensorLayout::Scalar(ScalarCodec::I32),
+        "numpy.int16" => TensorLayout::Scalar(ScalarCodec::I16),
+        "numpy.int8" => TensorLayout::Scalar(ScalarCodec::I8),
+        "numpy.uint8" => TensorLayout::Scalar(ScalarCodec::U8),
+        "numpy.bool" => TensorLayout::Scalar(ScalarCodec::Bool),
         // Torch storage types with exact codec counterparts (read tier;
         // the torch descriptor tier is read-only — edits are refused).
         "torch.float64" => TensorLayout::Scalar(ScalarCodec::F64),

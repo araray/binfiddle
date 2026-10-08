@@ -1,0 +1,171 @@
+# NVIDIA CUBIN ELF 64-bit Header
+# Family: CUDA binary (CUBIN) — ELF64 container produced by nvcc / NVCC IR
+# toolchain for GPU code objects.
+#
+# This template is the CUDA-aware companion to elf64_header.yaml. CUBINs
+# are ELF64 objects with NVIDIA-specific conventions that the generic
+# template flags (its e_version == 1 assertion fails on CUBINs, which
+# carry a CUDA-specific version field). This template documents the
+# observed conventions instead of asserting the generic ELF ones.
+#
+# Conventions recorded from real CUDA CUBINs (little-endian ELF64):
+#   e_ident OSABI       = 51 (0x33, CUDA-specific; not a SYSV value)
+#   e_ident ABI version = observed 7 (no public stability claim)
+#   e_machine           = 190 (EM_CUDA)
+#   e_version           = observed 126 (0x7e; CUDA-specific, NOT ELF's 1)
+#
+# These are recorded as observed conventions, not asserted as NVIDIA ABI
+# facts: unknown values are preserved and reported as-is. Parsing a CUBIN
+# with this template launches no kernel and makes no claim about the
+# code's behavior.
+
+name: NVIDIA CUBIN ELF 64-bit Header
+description: |
+  ELF64 header fields for NVIDIA CUDA CUBIN code objects, with the
+  CUDA-specific e_ident/e_machine/e_version conventions documented
+  rather than asserted. Values outside the observed conventions are
+  preserved without failing the parse.
+endian: little
+
+fields:
+  - name: e_ident_magic
+    offset: 0x00
+    size: 4
+    type: hex_string
+    description: "ELF magic number: 0x7F followed by 'ELF' in ASCII"
+    assert: "7f454c46"
+
+  - name: e_ident_class
+    offset: 0x04
+    size: 1
+    type: u8
+    description: "File class (CUBINs are 64-bit)"
+    enum:
+      1: "ELFCLASS32 (32-bit objects)"
+      2: "ELFCLASS64 (64-bit objects)"
+
+  - name: e_ident_data
+    offset: 0x05
+    size: 1
+    type: u8
+    description: "Data encoding"
+    enum:
+      1: "ELFDATA2LSB (Little-endian)"
+      2: "ELFDATA2MSB (Big-endian)"
+
+  - name: e_ident_version
+    offset: 0x06
+    size: 1
+    type: u8
+    description: "ELF identification version"
+    assert: "01"
+
+  - name: e_ident_osabi
+    offset: 0x07
+    size: 1
+    type: u8
+    description: "OS/ABI identification (CUDA CUBINs carry 51, a CUDA-specific value)"
+    enum:
+      0: "ELFOSABI_NONE / SYSV (UNIX System V ABI)"
+      3: "ELFOSABI_LINUX (Linux with glibc)"
+      51: "CUDA CUBIN convention (observed on nvcc-produced code objects)"
+
+  - name: e_ident_abiversion
+    offset: 0x08
+    size: 1
+    type: u8
+    description: "ABI version (CUDA-specific; observed value 7 on current toolchains — recorded, not asserted)"
+
+  - name: e_ident_pad
+    offset: 0x09
+    size: 7
+    type: hex_string
+    description: "Padding bytes (reserved)"
+
+  - name: e_type
+    offset: 0x10
+    size: 2
+    type: u16
+    description: "Object file type"
+    enum:
+      1: "ET_REL (relocatable object — CUDA CUBINs commonly use this)"
+      2: "ET_EXEC (executable — observed on fatbin-extracted CUBINs)"
+      3: "ET_DYN (shared object)"
+
+  - name: e_machine
+    offset: 0x12
+    size: 2
+    type: u16
+    description: "Target architecture (CUBINs use the NVIDIA CUDA machine)"
+    enum:
+      190: "EM_CUDA (NVIDIA CUDA architecture)"
+
+  - name: e_version
+    offset: 0x14
+    size: 4
+    type: u32
+    description: "Object file version — CUDA CUBINs carry a CUDA-specific value (observed 126 = 0x7e) instead of generic ELF's 1; recorded, not asserted"
+
+  - name: e_entry
+    offset: 0x18
+    size: 8
+    type: u64
+    description: "Entry point virtual address (GPU code; a file-internal reference, not a CPU address)"
+    display: hex
+
+  - name: e_phoff
+    offset: 0x20
+    size: 8
+    type: u64
+    description: "Program header table file offset"
+    display: hex
+
+  - name: e_shoff
+    offset: 0x28
+    size: 8
+    type: u64
+    description: "Section header table file offset"
+    display: hex
+
+  - name: e_flags
+    offset: 0x30
+    size: 4
+    type: u32
+    description: "Processor-specific flags (CUDA arch/sm identity is recorded here by the toolchain; interpretation is toolchain-specific)"
+    display: hex
+
+  - name: e_ehsize
+    offset: 0x34
+    size: 2
+    type: u16
+    description: "ELF header size in bytes (64 for ELF64)"
+
+  - name: e_phentsize
+    offset: 0x36
+    size: 2
+    type: u16
+    description: "Program header table entry size"
+
+  - name: e_phnum
+    offset: 0x38
+    size: 2
+    type: u16
+    description: "Program header table entry count"
+
+  - name: e_shentsize
+    offset: 0x3A
+    size: 2
+    type: u16
+    description: "Section header table entry size"
+
+  - name: e_shnum
+    offset: 0x3C
+    size: 2
+    type: u16
+    description: "Section header table entry count"
+
+  - name: e_shstrndx
+    offset: 0x3E
+    size: 2
+    type: u16
+    description: "Section header string table index"

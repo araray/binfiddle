@@ -8,128 +8,13 @@
 //! executed. Opcodes outside the subset surface as findings, never as
 //! silent interpretation.
 
+use super::zip::{parse_zip, read_at, u16_at, u32_at, u64_at, ZipEntry};
 use super::{
     encoding_decode_supported, Extent, Finding, FormatInventory, Severity, TensorEntry, Validity,
 };
 use crate::nn::budget::Budget;
 use crate::nn::error::NnError;
 use crate::nn::source::BoundedFile;
-
-const EOCD_MAGIC: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
-const CD_ENTRY_MAGIC: [u8; 4] = [0x50, 0x4b, 0x01, 0x02];
-const LOCAL_MAGIC: [u8; 4] = [0x50, 0x4b, 0x03, 0x04];
-/// EOCD is a fixed 22-byte record plus an optional comment (≤ 64 KiB).
-const EOCD_SCAN: u64 = 22 + 65_536;
-
-/// One ZIP entry, located.
-#[derive(Debug, Clone)]
-struct ZipEntry {
-    name: String,
-    compression: u16,
-    /// Absolute file offset of the entry's data.
-    data_offset: u64,
-    /// Bytes the data occupies in the file (compressed size).
-    stored_size: u64,
-}
-
-fn read_at(
-    file: &BoundedFile,
-    offset: u64,
-    len: usize,
-    budget: &Budget,
-) -> Result<Vec<u8>, NnError> {
-    let mut buf = vec![0u8; len];
-    budget.consume_metadata(len as u64)?;
-    file.read_exact_at(offset, &mut buf)?;
-    Ok(buf)
-}
-
-fn u16le(buf: &[u8], at: usize) -> u16 {
-    u16::from_le_bytes([buf[at], buf[at + 1]])
-}
-
-fn u32le(buf: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]])
-}
-
-fn u64le(buf: &[u8], at: usize) -> u64 {
-    let mut b = [0u8; 8];
-    b.copy_from_slice(&buf[at..at + 8]);
-    u64::from_le_bytes(b)
-}
-
-/// Locate the end-of-central-directory record and parse the archive.
-fn parse_zip(file: &BoundedFile, budget: &Budget) -> Result<Vec<ZipEntry>, NnError> {
-    let length = file.length();
-    if length < 22 {
-        return Err(NnError::MalformedInput {
-            detail: "torch: file shorter than a ZIP end record".to_string(),
-        });
-    }
-    let scan_start = length.saturating_sub(EOCD_SCAN);
-    let scan = read_at(file, scan_start, (length - scan_start) as usize, budget)?;
-    let eocd = scan
-        .windows(4)
-        .rev()
-        .position(|w| w == EOCD_MAGIC)
-        .map(|back| scan.len() - back - 4)
-        .ok_or_else(|| NnError::MalformedInput {
-            detail: "torch: no ZIP end-of-central-directory record".to_string(),
-        })?;
-    let total_entries = u16le(&scan, eocd + 10) as usize;
-    let cd_size = u32le(&scan, eocd + 12) as u64;
-    let cd_offset = u32le(&scan, eocd + 16) as u64;
-    if cd_offset.saturating_add(cd_size) > length {
-        return Err(NnError::MalformedInput {
-            detail: "torch: ZIP central directory beyond end of file".to_string(),
-        });
-    }
-    let cd = read_at(file, cd_offset, cd_size as usize, budget)?;
-    let mut entries = Vec::with_capacity(total_entries.min(4096));
-    let mut pos = 0usize;
-    for _ in 0..total_entries {
-        if pos + 46 > cd.len() || cd[pos..pos + 4] != CD_ENTRY_MAGIC {
-            return Err(NnError::MalformedInput {
-                detail: format!(
-                    "torch: ZIP central directory entry {} malformed",
-                    entries.len()
-                ),
-            });
-        }
-        let compression = u16le(&cd, pos + 10);
-        let compressed = u32le(&cd, pos + 20) as u64;
-        let name_len = u16le(&cd, pos + 28) as usize;
-        let extra_len = u16le(&cd, pos + 30) as usize;
-        let comment_len = u16le(&cd, pos + 32) as usize;
-        let local_offset = u32le(&cd, pos + 42) as u64;
-        if pos + 46 + name_len > cd.len() {
-            return Err(NnError::MalformedInput {
-                detail: "torch: ZIP entry name beyond central directory".to_string(),
-            });
-        }
-        let name = String::from_utf8_lossy(&cd[pos + 46..pos + 46 + name_len]).into_owned();
-        // The local header carries its own (possibly different) name/extra
-        // lengths; the data begins after them.
-        let mut lhead = [0u8; 30];
-        budget.consume_metadata(30)?;
-        file.read_exact_at(local_offset, &mut lhead)?;
-        if lhead[0..4] != LOCAL_MAGIC {
-            return Err(NnError::MalformedInput {
-                detail: format!("torch: ZIP local header missing for {name}"),
-            });
-        }
-        let l_name = u16le(&lhead, 26) as u64;
-        let l_extra = u16le(&lhead, 28) as u64;
-        entries.push(ZipEntry {
-            name,
-            compression,
-            data_offset: local_offset + 30 + l_name + l_extra,
-            stored_size: compressed,
-        });
-        pos += 46 + name_len + extra_len + comment_len;
-    }
-    Ok(entries)
-}
 
 /// A pickle value. Only what a state dictionary can contain.
 #[derive(Debug, Clone)]
@@ -395,12 +280,12 @@ impl<'a> Pickle<'a> {
                     self.push_str(String::from_utf8_lossy(raw).into_owned())?;
                 }
                 b'X' => {
-                    let len = u32le(self.take(4)?, 0) as usize;
+                    let len = u32_at(self.take(4)?, 0) as usize;
                     let raw = self.take(len)?;
                     self.push_str(String::from_utf8_lossy(raw).into_owned())?;
                 }
                 0x8d => {
-                    let len = u64le(self.take(8)?, 0) as usize;
+                    let len = u64_at(self.take(8)?, 0) as usize;
                     let raw = self.take(len)?;
                     self.push_str(String::from_utf8_lossy(raw).into_owned())?;
                 }
@@ -419,7 +304,7 @@ impl<'a> Pickle<'a> {
                 }
                 b'M' => {
                     let raw = self.take(2)?;
-                    self.push(PValue::Int(u16le(raw, 0) as i64))?;
+                    self.push(PValue::Int(u16_at(raw, 0) as i64))?;
                 }
                 b'L' | b'I' => {
                     let rest = &self.bytes[self.pos..];
@@ -447,7 +332,7 @@ impl<'a> Pickle<'a> {
                 }
                 b'r' => {
                     let raw = self.take(4)?;
-                    let id = u32le(raw, 0) as usize;
+                    let id = u32_at(raw, 0) as usize;
                     self.memo_store(id)?;
                 }
                 b'h' => {
@@ -461,7 +346,7 @@ impl<'a> Pickle<'a> {
                 }
                 b'j' => {
                     let raw = self.take(4)?;
-                    let id = u32le(raw, 0) as usize;
+                    let id = u32_at(raw, 0) as usize;
                     let value =
                         self.memo.get(id).cloned().ok_or_else(|| {
                             self.err(format!("LONG_BINGET of unknown memo id {id}"))
@@ -996,7 +881,7 @@ mod tests {
         for entry in &entries {
             let name = entry.name.as_bytes();
             offsets.push(out.len() as u32);
-            out.extend_from_slice(&LOCAL_MAGIC);
+            out.extend_from_slice(&crate::nn::format::zip::LOCAL_MAGIC);
             out.extend_from_slice(&[0, 0, 0, 0]); // version/flags
             out.extend_from_slice(&[0, 0]); // method STORE
             out.extend_from_slice(&[0, 0, 0, 0]); // time/date
@@ -1010,7 +895,7 @@ mod tests {
         }
         for (entry, offset) in entries.iter().zip(&offsets) {
             let name = entry.name.as_bytes();
-            central.extend_from_slice(&CD_ENTRY_MAGIC);
+            central.extend_from_slice(&crate::nn::format::zip::CD_ENTRY_MAGIC);
             central.extend_from_slice(&[0, 0, 0, 0, 0, 0]); // made/needed/flags
             central.extend_from_slice(&[0, 0]); // method STORE
             central.extend_from_slice(&[0, 0, 0, 0]); // time/date
@@ -1028,7 +913,7 @@ mod tests {
         }
         let cd_offset = out.len() as u32;
         out.extend_from_slice(&central);
-        out.extend_from_slice(&EOCD_MAGIC);
+        out.extend_from_slice(&crate::nn::format::zip::EOCD_MAGIC);
         out.extend_from_slice(&[0, 0, 0, 0]); // disk numbers
         out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
         out.extend_from_slice(&(entries.len() as u16).to_le_bytes());

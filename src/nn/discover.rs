@@ -178,6 +178,19 @@ impl DiscoverReport {
         let mut out = String::from("binfiddle nn discover\n\n");
         for source in &self.sources {
             out.push_str(&format!("{}: {}\n", source.path, source.outcome.as_str()));
+            let identity = source
+                .revision
+                .as_ref()
+                .map(|r| r.consistency.as_str())
+                .unwrap_or("observation");
+            out.push_str(&format!(
+                "  identity:  {identity}{}\n",
+                if identity == "content_verified" {
+                    " (payloads hashed)"
+                } else {
+                    " (descriptors observed; payload bytes not verified — use --verify-content to hash them)"
+                }
+            ));
             if let Some(inventory) = &source.inventory {
                 out.push_str(&format!(
                     "  format: {} {}\n  validity: {}\n  tensors: {}\n",
@@ -386,7 +399,15 @@ fn inventory_file(path: &Path, options: &DiscoverOptions, parent: &Budget) -> So
     let is_torch = name_lower.ends_with(".pth")
         || name_lower.ends_with(".pt")
         || name_lower.ends_with(".ckpt");
-    let parse_result = if is_torch {
+    let is_numpy = name_lower.ends_with(".npy") || name_lower.ends_with(".npz");
+    let parse_result = if is_numpy {
+        let inventory = if name_lower.ends_with(".npz") {
+            format::npy::inventory_npz(&file, &budget)
+        } else {
+            format::npy::inventory_npy(&file, &budget)
+        };
+        inventory.map(Some)
+    } else if is_torch {
         format::torch::inventory(&file, &budget).map(Some)
     } else if has_gguf_magic(&file, &budget) {
         format::gguf::inventory(&file, &budget).map(Some)
@@ -898,6 +919,8 @@ pub fn discover(
             || lower.ends_with(".pth")
             || lower.ends_with(".pt")
             || lower.ends_with(".ckpt")
+            || lower.ends_with(".npy")
+            || lower.ends_with(".npz")
         {
             let mut report = inventory_file(path, options, budget);
             annotate_shard_group(&mut report, &name);
