@@ -46,7 +46,7 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 | **Chain** | Pipe multiple binfiddle commands together without shell escaping |
 | **Process Memory** | Read/write memory from any same-user process via `/proc/<pid>/mem` (Linux) |
 | **Struct** | Parse binary data using YAML templates for structure definitions |
-| **NN Workbench** | Inspect, address, extract, edit, and compare neural-network artifacts (SafeTensors/GGUF/ONNX/PyTorch) — static, offline, no model execution |
+| **NN Workbench** | Inspect, address, extract, edit, and compare neural-network artifacts (SafeTensors/GGUF/ONNX/PyTorch/NumPy captures) — static, offline, no model execution |
 | **Progress Bars** | Opt-in throughput/ETA feedback for long-running commands |
 
 ### Key Differentiators
@@ -172,6 +172,7 @@ binfiddle nn ls --catalog m.nn.json --sort bytes --limit 20
 
 | Option | Short | Description | Default |
 |--------|-------|-------------|---------|
+| `--build-info` | — | Print machine-readable build provenance (commit, dirty flag, rustc, target, profile — embedded at build time) and exit | — |
 | `--input <FILE>` | `-i` | Input file (use `-` for stdin) | stdin |
 | `--output <FILE>` | `-o` | Output file (use `-` for stdout) | — |
 | `--in-file` | — | Modify input file in-place | false |
@@ -482,7 +483,8 @@ binfiddle --silent -i data.bin -o out.bin chain \
 #### `nn` — Neural-network artifact workbench (early access)
 
 A static workbench for neural-network artifact files — SafeTensors, GGUF,
-ONNX, and PyTorch checkpoints (`.pth`/`.pt`/`.ckpt`, read as pure data) —
+ONNX, PyTorch checkpoints (`.pth`/`.pt`/`.ckpt`, read as pure data), and
+NumPy captures (`.npy`/`.npz`) —
 and the directories that package them, including sharded releases with a
 `model.safetensors.index.json`. It inventories, addresses, extracts,
 edits, analyzes, and compares model artifacts **without executing model

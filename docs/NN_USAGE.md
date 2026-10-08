@@ -75,7 +75,7 @@ they are reported as findings with precise severities.
 | Concept | What it is |
 |---|---|
 | **Source** | One file (or a stdin capture) considered for discovery. Directories are scanned one level deep; symlinks are never followed. |
-| **Catalog** | A saved record of a discovery (`*.nn.json`). Catalogs are content-addressed: tensor and source identities are digests of what was observed, so a catalog only matches the exact bytes it was created from. |
+| **Catalog** | A saved record of a discovery (`*.nn.json`). Tensor and source identities are digests of what was **observed** — metadata and descriptors by default, the full payload only when discovered with `--verify-content`. A descriptor-only catalog binds the observed metadata and the source observation (`consistency: observation`, `content_digest: null`); it proves nothing about payload bytes you did not hash. Identity strength is explicit everywhere: `observation` versus `content_verified`. |
 | **Tensor id** | `tensor:<sha256>` — stable across re-discovery of identical content. Any unique prefix works where a command takes `--id`. |
 | **Selection** | A saved, resolvable set of tensors (`*.sel.json`), bound to the catalog it came from. Selections never silently rematch against different bytes. |
 | **Plan** | A saved, id-verified recipe (slice plan, edit plan). Applying re-verifies the catalog, the full source digest, and recorded preimage bytes — stale or tampered plans abort. |
@@ -142,11 +142,15 @@ binfiddle nn capabilities --report-format json
 ### `nn discover`
 
 Inventory supported model artifacts — descriptor-only, no payload reads.
-Recognizes SafeTensors, GGUF v2/v3, ONNX (protobuf, descriptor tier), and
+Recognizes SafeTensors, GGUF v2/v3, ONNX (protobuf, descriptor tier),
 PyTorch `.pth`/`.pt`/`.ckpt` (ZIP container + a data-only pickle opcode
 reader: tensor names, shapes, dtypes, and exact storage spans without
 executing a single opcode — the tier is read-only, and `nn edit` refuses
-`torch.*` tensors); scans package directories (unknown files stay visible,
+`torch.*` tensors), and NumPy captures `.npy`/`.npz` (member names,
+dtypes, shapes, byte order, layout; STORED members get exact payload
+spans, DEFLATE members report exact archive spans with logical
+decompressed coordinates — never a fabricated file-byte address; object
+arrays are never unpickled); scans package directories (unknown files stay visible,
 classified as assets or opaque); GGUF split-shard groups
 (`name-00001-of-00002.gguf`) get completeness and cross-shard uniqueness
 checks, and sharded-SafeTensors packages get the same discipline from

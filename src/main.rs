@@ -13,6 +13,11 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
+    /// Print machine-readable build provenance (embedded at build time)
+    /// and exit
+    #[arg(long)]
+    build_info: bool,
+
     /// Input file (use '-' for stdin)
     #[arg(short, long, group = "source")]
     input: Option<String>,
@@ -2485,6 +2490,51 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
     Ok(())
 }
 
+/// Machine-readable build provenance, embedded at build time by build.rs.
+/// The current source checkout cannot change what is printed here; a
+/// relocated or advanced repository leaves the report intact. Fields that
+/// were not captured at build time read "unknown".
+fn print_build_info() {
+    let report = binfiddle::nn::json::Json::object(vec![
+        (
+            "schema",
+            binfiddle::nn::json::Json::Str("binfiddle.build-info/v1".to_string()),
+        ),
+        (
+            "version",
+            binfiddle::nn::json::Json::Str(env!("CARGO_PKG_VERSION").to_string()),
+        ),
+        (
+            "commit",
+            binfiddle::nn::json::Json::Str(env!("BINFIDDLE_BUILD_COMMIT").to_string()),
+        ),
+        (
+            "dirty_build",
+            binfiddle::nn::json::Json::Bool(env!("BINFIDDLE_BUILD_DIRTY") == "true"),
+        ),
+        (
+            "rustc",
+            binfiddle::nn::json::Json::Str(env!("BINFIDDLE_BUILD_RUSTC").to_string()),
+        ),
+        (
+            "target",
+            binfiddle::nn::json::Json::Str(env!("BINFIDDLE_BUILD_TARGET").to_string()),
+        ),
+        (
+            "profile",
+            binfiddle::nn::json::Json::Str(env!("BINFIDDLE_BUILD_PROFILE").to_string()),
+        ),
+    ])
+    .and_then(|j| j.to_canonical());
+    match report {
+        Ok(text) => println!("{text}"),
+        Err(err) => {
+            eprintln!("build info serialization failed: {err}");
+            std::process::exit(4);
+        }
+    }
+}
+
 /// Parse a file offset for `nn locate`: decimal or 0x-prefixed hex.
 fn parse_nn_offset(text: &str) -> std::result::Result<u64, NnError> {
     let trimmed = text.trim();
@@ -2544,6 +2594,10 @@ fn nn_path_arg<'a>(
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.build_info {
+        print_build_info();
+        std::process::exit(0);
+    }
 
     // Resolve the effective process-memory target pid, if any.
     let target_pid = if cli.process_self { Some(0) } else { cli.pid };
