@@ -14,6 +14,7 @@ pub mod catalog;
 pub mod codec;
 pub mod compare;
 pub mod component_selection;
+pub mod derive;
 pub mod discover;
 pub mod edit;
 pub mod error;

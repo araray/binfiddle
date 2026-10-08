@@ -434,7 +434,9 @@ binfiddle nn split --catalog model.nn.json --pack demo.pack.yaml \
 ### `nn analyze`
 
 Numerical inspection of one tensor — or every tensor of a selection — with
-honest coverage. `metadata` reads no payload bytes; `sample` examines a
+honest coverage. NumPy capture members analyze directly, including
+DEFLATE-compressed `.npz` members (bounded whole-member decompression; the
+scan states that extents resolved to exact decompressed coordinates). `metadata` reads no payload bytes; `sample` examines a
 seeded deterministic selection; `full` scans everything within its budget.
 Statistics: Welford mean/variance (population and sample named separately),
 min/max with coordinates and tie counts, non-finite value category counts,
@@ -823,6 +825,42 @@ binfiddle nn shard-map --index model.safetensors.index.json \
 binfiddle nn shard-map --index model.safetensors.index.json \
     --catalog q.nn.json --selection experts.sel.json
 # → planned payload 3355443200 of 359999963128 declared bytes (0.9%)
+```
+
+### `nn derive`
+
+Data-only derived numerical views over catalog tensors (typically NumPy
+capture members): a closed expression language (`+ - * /`, unary `-`,
+and `log`/`exp`/`sqrt`/`abs`) evaluated in float64 over arrays decoded
+under their declared dtypes. Nothing executes; the output is a fresh
+`.npy` plus a canonical provenance sidecar recording the expression,
+every input's tensor id/encoding/shape, evaluation and output dtypes,
+the output's sha256, and domain-violation/NaN counts. Domain violations
+(log of a non-positive value, sqrt of a negative, division by zero)
+refuse by default with exact counts; `--allow-domain-violations` writes
+NaN at those positions and records the count. Derived values are
+labeled derived — never observed device values.
+
+| Option | Description |
+|---|---|
+| `--catalog` | Saved catalog naming the input tensors — required |
+| `--expression` | Expression over tensor names (identifiers must match catalog tensor names; a bare `.npy` catalogs its array as `array`) — required |
+| `--out-npy` | Fresh output .npy file — required |
+| `--out-sidecar` | Fresh provenance JSON — required |
+| `--f32-output` | Write float32 instead of float64 |
+| `--allow-domain-violations` | Write NaN at violations instead of refusing |
+| `--report-format` | `text` or `json` |
+
+```bash
+# Observed minus expected, from a capture archive
+binfiddle nn derive --catalog mhcpre.nn.json \
+    --expression 'post - expected_post' \
+    --out-npy error.npy --out-sidecar error.json
+
+# The consumer-inverse diagnostic transform (refuses outside (0, 2))
+binfiddle nn derive --catalog p.nn.json \
+    --expression 'log(p) - log(2 - p)' \
+    --out-npy logit.npy --out-sidecar logit.json
 ```
 
 ### `nn adapter`
