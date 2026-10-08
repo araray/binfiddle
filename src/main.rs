@@ -807,6 +807,43 @@ enum NnCommand {
         report_format: String,
     },
 
+    /// Per-GPU memory ledger for a partition plan (static byte estimates)
+    Ledger {
+        /// Partition plan JSON (nn partition --report-format json output)
+        #[arg(long)]
+        stages_json: String,
+
+        /// Devices file: [{name, uuid?, selected?, observations:
+        /// [{kind, bytes, source?, observed_at?, ecc?, units?}]}]
+        #[arg(long)]
+        devices: String,
+
+        /// Weight replication per hosting device (default 1)
+        #[arg(long, default_value_t = 1)]
+        replication: u64,
+
+        /// Runtime overhead line items [{device, bytes, source?}] —
+        /// supplied separately from weight bytes
+        #[arg(long)]
+        overheads: Option<String>,
+
+        /// Also evaluate the nominal-aggregate check (per-rank verdicts
+        /// stand regardless)
+        #[arg(long)]
+        reject_on_aggregate: bool,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Decode EXL3 trellis storage (qualified reference port)
+    Exl3 {
+        /// Decode one Hadamard-domain value: --trellis name --index n,k
+        #[command(subcommand)]
+        command: Exl3Command,
+    },
+
     /// Reviewed evidence sidecars: bind reviewed knowledge to artifact identity
     Evidence {
         #[command(subcommand)]
@@ -979,6 +1016,47 @@ enum PackCommand {
         /// symbols either way
         #[arg(long)]
         config: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum Exl3Command {
+    /// Decode one Hadamard-domain storage value Wq[n, k]
+    Decode {
+        /// Saved catalog containing the four EXL3 fields
+        #[arg(long)]
+        catalog: String,
+
+        /// Trellis tensor name (siblings .suh/.svh/.mcg resolved by name)
+        #[arg(long)]
+        trellis: String,
+
+        /// Element coordinate n,k (comma-separated decimal)
+        #[arg(long)]
+        index: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Summarize one logical 128x128 Hadamard block (n0, k0 multiples of 128)
+    Block {
+        /// Saved catalog containing the four EXL3 fields
+        #[arg(long)]
+        catalog: String,
+
+        /// Trellis tensor name
+        #[arg(long)]
+        trellis: String,
+
+        /// Block origin n0,k0 (comma-separated, multiples of 128)
+        #[arg(long)]
+        origin: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
     },
 }
 
@@ -2518,6 +2596,116 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 });
             }
         }
+        NnCommand::Ledger {
+            stages_json,
+            devices,
+            replication,
+            overheads,
+            reject_on_aggregate,
+            report_format,
+        } => {
+            let (stages, unlayered, unplaced) =
+                binfiddle::nn::ledger::load_plan(Path::new(stages_json))?;
+            let devs = binfiddle::nn::ledger::load_devices(Path::new(devices))?;
+            let overheads = match overheads.as_deref() {
+                Some(path) => binfiddle::nn::ledger::load_overheads(Path::new(path))?,
+                None => Vec::new(),
+            };
+            let report = binfiddle::nn::ledger::build(
+                &stages,
+                unlayered,
+                unplaced,
+                &devs,
+                *replication,
+                &overheads,
+                *reject_on_aggregate,
+            )?;
+            guard.propagate(&cancel);
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+            if report_format == "json" {
+                binfiddle::nn::ledger::envelope(&report)?.write_json(&mut out)?;
+            } else {
+                out.write_all(binfiddle::nn::ledger::text(&report).as_bytes())?;
+            }
+            out.flush()?;
+            if !report.all_fit {
+                return Err(NnError::ValidationFailed {
+                    detail: "one or more devices exceed their selected capacity".to_string(),
+                });
+            }
+        }
+        NnCommand::Exl3 { command } => match command {
+            Exl3Command::Decode {
+                catalog,
+                trellis,
+                index,
+                report_format,
+            } => {
+                let catalog_path = nn_path_arg(Some(catalog.as_str()), "exl3 decode")?;
+                let loaded = binfiddle::nn::Catalog::from_route(
+                    catalog_path,
+                    None,
+                    &DiscoverOptions::default(),
+                    &budget,
+                )?;
+                let coord = binfiddle::nn::where_cmd::parse_coordinate(index)?;
+                let (n, k) = (
+                    coord.first().copied().unwrap_or(0),
+                    coord.get(1).copied().unwrap_or(0),
+                );
+                let ex = binfiddle::nn::exl3::resolve(&loaded, trellis)?;
+                binfiddle::nn::exl3::check_mcg(&loaded, &ex, &budget)?;
+                let value = binfiddle::nn::exl3::wq_value(&loaded, &ex, n, k, &budget)?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    binfiddle::nn::exl3::decode_envelope(trellis, n, k, value)?
+                        .write_json(&mut out)?;
+                } else {
+                    out.write_all(
+                        binfiddle::nn::exl3::decode_text(
+                            trellis, n, k, value, ex.size_n, ex.size_k, ex.bits,
+                        )
+                        .as_bytes(),
+                    )?;
+                }
+                out.flush()?;
+            }
+            Exl3Command::Block {
+                catalog,
+                trellis,
+                origin,
+                report_format,
+            } => {
+                let catalog_path = nn_path_arg(Some(catalog.as_str()), "exl3 block")?;
+                let loaded = binfiddle::nn::Catalog::from_route(
+                    catalog_path,
+                    None,
+                    &DiscoverOptions::default(),
+                    &budget,
+                )?;
+                let coord = binfiddle::nn::where_cmd::parse_coordinate(origin)?;
+                let (n0, k0) = (
+                    coord.first().copied().unwrap_or(0),
+                    coord.get(1).copied().unwrap_or(0),
+                );
+                let ex = binfiddle::nn::exl3::resolve(&loaded, trellis)?;
+                binfiddle::nn::exl3::check_mcg(&loaded, &ex, &budget)?;
+                let summary =
+                    binfiddle::nn::exl3::logical_block_summary(&loaded, &ex, n0, k0, &budget)?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    binfiddle::nn::exl3::block_envelope(&summary)?.write_json(&mut out)?;
+                } else {
+                    out.write_all(binfiddle::nn::exl3::block_text(&summary).as_bytes())?;
+                }
+                out.flush()?;
+            }
+        },
         NnCommand::Evidence { command } => match command {
             EvidenceCommand::Verify {
                 sidecar,
