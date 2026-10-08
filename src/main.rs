@@ -807,6 +807,12 @@ enum NnCommand {
         report_format: String,
     },
 
+    /// Reviewed evidence sidecars: bind reviewed knowledge to artifact identity
+    Evidence {
+        #[command(subcommand)]
+        command: EvidenceCommand,
+    },
+
     /// Evaluate a data-only derived numerical view over catalog tensors
     Derive {
         /// Saved catalog naming the input tensors
@@ -973,6 +979,35 @@ enum PackCommand {
         /// symbols either way
         #[arg(long)]
         config: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum EvidenceCommand {
+    /// Verify a sidecar's identity binding against its subject artifact
+    Verify {
+        /// Sidecar JSON file (binfiddle.nn.evidence-sidecar/v1)
+        #[arg(long)]
+        sidecar: String,
+
+        /// Report format: text, json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        report_format: String,
+    },
+
+    /// Emit a draft sidecar for an artifact with the identity pre-computed
+    Init {
+        /// Subject kind: file, catalog, selection, bundle
+        #[arg(long)]
+        kind: String,
+
+        /// Subject artifact path (for bundle: its manifest file, e.g. slice.json)
+        #[arg(long)]
+        subject: String,
+
+        /// Sidecar role (e.g. operation-description, observation-timeline)
+        #[arg(long)]
+        role: String,
     },
 }
 
@@ -2483,6 +2518,49 @@ fn run_nn(command: &NnCommand, input: Option<&str>) -> std::result::Result<(), N
                 });
             }
         }
+        NnCommand::Evidence { command } => match command {
+            EvidenceCommand::Verify {
+                sidecar,
+                report_format,
+            } => {
+                let report = binfiddle::nn::evidence::verify(Path::new(sidecar))?;
+                guard.propagate(&cancel);
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                if report_format == "json" {
+                    report.envelope()?.write_json(&mut out)?;
+                } else {
+                    out.write_all(report.text().as_bytes())?;
+                }
+                out.flush()?;
+                if !report.bound {
+                    return Err(NnError::ValidationFailed {
+                        detail: "sidecar identity does not match the subject artifact".to_string(),
+                    });
+                }
+            }
+            EvidenceCommand::Init {
+                kind,
+                subject,
+                role,
+            } => {
+                if !binfiddle::nn::evidence::SUBJECT_KINDS.contains(&kind.as_str()) {
+                    return Err(NnError::InvalidRequest {
+                        message: format!(
+                            "subject kind {kind} must be one of {}",
+                            binfiddle::nn::evidence::SUBJECT_KINDS.join(", ")
+                        ),
+                    });
+                }
+                let skeleton =
+                    binfiddle::nn::evidence::init_skeleton(kind, Path::new(subject), role)?;
+                let stdout = io::stdout();
+                let mut out = stdout.lock();
+                out.write_all(skeleton.as_bytes())?;
+                out.write_all(b"\n")?;
+                out.flush()?;
+            }
+        },
         NnCommand::Derive {
             catalog,
             expression,

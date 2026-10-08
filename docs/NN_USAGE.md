@@ -863,6 +863,60 @@ binfiddle nn derive --catalog p.nn.json \
     --out-npy logit.npy --out-sidecar logit.json
 ```
 
+### `nn evidence`
+
+Reviewed evidence sidecars: bind reviewed human knowledge — an operation
+description, an observation timeline, capture notes — to a binfiddle
+artifact's content identity. The sidecar is a canonical strict-JSON
+document (`binfiddle.nn.evidence-sidecar/v1`) recording the subject
+(kind: `file`, `catalog`, `selection`, or `bundle` — for bundles, bind
+to the manifest file: `slice.json` / `split.json` / `undo.json`), its
+computed identity at review time (sha256 / catalog_id / selection_id),
+a role, the reviewer, an arbitrary reviewed payload, and a claims line.
+`nn evidence verify` recomputes the artifact's identity and reports
+agreement — exit 7 on mismatch (the artifact changed after review, or
+the sidecar names another artifact). Sidecars are data: nothing in them
+executes, and they establish no runtime behavior.
+
+#### `nn evidence verify`
+
+| Option | Description |
+|---|---|
+| `--sidecar` | Sidecar JSON file — required |
+| `--report-format` | `text` or `json` |
+
+#### `nn evidence init`
+
+| Option | Description |
+|---|---|
+| `--kind` | `file`, `catalog`, `selection`, or `bundle` — required |
+| `--subject` | Subject artifact path — required |
+| `--role` | Sidecar role (e.g. `operation-description`, `observation-timeline`) — required |
+
+```bash
+# Draft a timeline sidecar over a capture archive, identity pre-computed
+binfiddle nn evidence init --kind file --subject mhc-pre-4.npz \
+    --role observation-timeline > tl.json
+
+# Fill the payload, set reviewed_by and claims, then verify the binding
+binfiddle nn evidence verify --sidecar tl.json
+# → binding: identity matches the subject artifact
+
+# If the artifact changes after review, verification fails (exit 7)
+binfiddle nn evidence verify --sidecar tl.json
+# → binding: IDENTITY MISMATCH — the artifact changed after review…
+```
+
+**Two worked roles.** An `operation-description` sidecar carries a
+reviewed table of producer/consumer, storage dtype, arithmetic dtype,
+and cast/materialization boundaries — marking each annotation as
+observed, source-derived, modeled, or unknown, and never implying
+numerical equivalence. An `observation-timeline` sidecar carries
+ordered events (before-call snapshots, after-call copies, earlier cache
+transfers) with their evidence, keeping coordinate namespaces explicit
+(model-call indices vs replay serials are never interchangeable) and
+never presenting a saved tensor as an instruction-time observation.
+
 ### `nn adapter`
 
 #### `nn adapter inspect`
