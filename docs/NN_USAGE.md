@@ -13,7 +13,10 @@ code, and never modifies an input file — all outputs are fresh files.
 > [NN_DEEPDIVE_GEMMA.md](NN_DEEPDIVE_GEMMA.md) (16 GB SafeTensors, model packs,
 > transactional editing at scale), and
 > [NN_DEEPDIVE_QWEN.md](NN_DEEPDIVE_QWEN.md) (131-shard package, hybrid
-> attention, fused head views).
+> attention, fused head views), and
+> [NN_DEEPDIVE_GLM_EXL3.md](NN_DEEPDIVE_GLM_EXL3.md) (EXL3 quantized
+> storage on GLM-5.3-Flash — variant-profiled packs at
+> [packs/](../packs/)).
 
 **Contents**
 

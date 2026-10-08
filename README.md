@@ -1112,6 +1112,10 @@ capture — the fastest way to see the workbench in action on real weights:
   131-shard, 360 GB release dissected from a curated 9-shard subset:
   sharded-package findings, hybrid linear/full anatomy, fused head views
   carved from real tensors, and stacked MoE experts
+- [Dissecting EXL3 storage on GLM-5.3-Flash](docs/NN_DEEPDIVE_GLM_EXL3.md)
+  — quantized projections as four-field storage groups (trellis/mcg/
+  suh/svh), a variant-versioned profile pack, and a mismatched-variant
+  contradiction demo on authentic payloads
 
 ## License
 
