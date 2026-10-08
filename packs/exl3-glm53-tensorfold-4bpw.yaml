@@ -1,0 +1,77 @@
+schema: binfiddle.nn.pack/v1
+id: exl3.glm53flash.tensorfold.4bpw
+version: "0.1.0"
+description: >-
+  PROVISIONAL EXL3 storage profile for GLM-5.3-Flash EXL3 4bpw
+  (TensorFold) — step 1 only: grouping and verified physical roles.
+  Each EXL3 projection carries four storage fields grouped under one
+  component: trellis (coded storage, I16), mcg (codebook selector,
+  I32[1]), suh / svh (per-dimension head scales, F16; suh follows the
+  INPUT extent, svh the OUTPUT extent — note they swap between the
+  gate/up orientation and the transposed down orientation). Physical
+  storage shapes and dtypes are asserted from observed descriptors.
+  The LOGICAL matrix shape of each projection is deliberately NOT
+  asserted: resolve it from the model config and the checkpoint's
+  declared quantization variant (quantization_config: exl3, bits 4,
+  codebook mcg, scope routed experts only), never from tensor names.
+  Other EXL3 variants (different bits or codebooks) yield different
+  trellis inner extents — they must bind to their own profile version,
+  producing visible contradictions here rather than silent mismatches.
+config:
+  trellis_outer: 256
+  trellis_mid: 128
+  trellis_inner: 64
+  hidden_size: 4096
+  moe_intermediate: 2048
+bindings:
+  # gate / up projections: logical orientation [intermediate, hidden].
+  - pattern: "model.language_model.layers.{layer}.mlp.experts.{expert}.gate_proj.trellis"
+    component: "decoder.layers[{layer}].mlp.experts[{expert}].gate.trellis"
+    kind: dense
+    shape: ["trellis_outer", "trellis_mid", "trellis_inner"]
+  - pattern: "model.language_model.layers.{layer}.mlp.experts.{expert}.gate_proj.mcg"
+    component: "decoder.layers[{layer}].mlp.experts[{expert}].gate.mcg"
+    kind: dense
+    shape: ["1"]
+  - pattern: "model.language_model.layers.{layer}.mlp.experts.{expert}.gate_proj.suh"
+    component: "decoder.layers[{layer}].mlp.experts[{expert}].gate.suh"
+    kind: dense
+    shape: ["hidden_size"]
+  - pattern: "model.language_model.layers.{layer}.mlp.experts.{expert}.gate_proj.svh"
+    component: "decoder.layers[{layer}].mlp.experts[{expert}].gate.svh"
+    kind: dense
+    shape: ["moe_intermediate"]
+  - pattern: "model.language_model.layers.{layer}.mlp.experts.{expert}.up_proj.trellis"
+    component: "decoder.layers[{layer}].mlp.experts[{expert}].up.trellis"
+    kind: dense
+    shape: ["trellis_outer", "trellis_mid", "trellis_inner"]
+  - pattern: "model.language_model.layers.{layer}.mlp.experts.{expert}.up_proj.mcg"
+    component: "decoder.layers[{layer}].mlp.experts[{expert}].up.mcg"
+    kind: dense
+    shape: ["1"]
+  - pattern: "model.language_model.layers.{layer}.mlp.experts.{expert}.up_proj.suh"
+    component: "decoder.layers[{layer}].mlp.experts[{expert}].up.suh"
+    kind: dense
+    shape: ["hidden_size"]
+  - pattern: "model.language_model.layers.{layer}.mlp.experts.{expert}.up_proj.svh"
+    component: "decoder.layers[{layer}].mlp.experts[{expert}].up.svh"
+    kind: dense
+    shape: ["moe_intermediate"]
+  # down projection: transposed orientation — trellis mid/outer swap and
+  # suh follows the intermediate (input) extent, svh the hidden (output).
+  - pattern: "model.language_model.layers.{layer}.mlp.experts.{expert}.down_proj.trellis"
+    component: "decoder.layers[{layer}].mlp.experts[{expert}].down.trellis"
+    kind: dense
+    shape: ["trellis_mid", "trellis_outer", "trellis_inner"]
+  - pattern: "model.language_model.layers.{layer}.mlp.experts.{expert}.down_proj.mcg"
+    component: "decoder.layers[{layer}].mlp.experts[{expert}].down.mcg"
+    kind: dense
+    shape: ["1"]
+  - pattern: "model.language_model.layers.{layer}.mlp.experts.{expert}.down_proj.suh"
+    component: "decoder.layers[{layer}].mlp.experts[{expert}].down.suh"
+    kind: dense
+    shape: ["moe_intermediate"]
+  - pattern: "model.language_model.layers.{layer}.mlp.experts.{expert}.down_proj.svh"
+    component: "decoder.layers[{layer}].mlp.experts[{expert}].down.svh"
+    kind: dense
+    shape: ["hidden_size"]
