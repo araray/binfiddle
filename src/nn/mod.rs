@@ -18,6 +18,7 @@ pub mod derive;
 pub mod discover;
 pub mod edit;
 pub mod error;
+pub mod evidence;
 pub mod format;
 pub mod id;
 pub mod impact;

@@ -44,6 +44,7 @@ edit set --session ─→ staged ops ─→ apply --session (one pass) ─→ un
 | `nn partition` | Layer groups per stage (static byte estimate; `--unlayered-policy`) |
 | `nn carve` | Find embedded containers in a raw file (`--target`) |
 | `nn validate` | Per-source structural verdicts (exit 7 on defects) |
+| `nn evidence verify/init` | Reviewed sidecars bound to artifact identity (exit 7 on mismatch) |
 | `nn derive` | Data-only derived views over capture arrays (`--expression`, provenance sidecar, explicit domain policy) |
 | `nn shard-map` | Which shards hold your selection (`--index`, `--tensor`/`--selection`) — a plan, not a download |
 | `nn adapter inspect` | LoRA factor pairs (descriptor-level) |
