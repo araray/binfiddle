@@ -438,11 +438,11 @@ enum NnCommand {
         catalog: Option<String>,
 
         /// Exact original tensor name
-        #[arg(long, conflicts_with_all = ["id", "select", "rebind_selection"])]
+        #[arg(long, conflicts_with_all = ["id", "select_expr", "rebind_selection"])]
         tensor: Option<String>,
 
         /// Tensor identifier (full or unique digest prefix)
-        #[arg(long, conflicts_with_all = ["tensor", "select", "rebind_selection"])]
+        #[arg(long, conflicts_with_all = ["tensor", "select_expr", "rebind_selection"])]
         id: Option<String>,
 
         /// Component selector expression (requires a model pack to resolve)
@@ -450,7 +450,7 @@ enum NnCommand {
         select_expr: Option<String>,
 
         /// Saved selection to rebind against the catalog given by --catalog
-        #[arg(long = "rebind", id = "rebind_selection", conflicts_with_all = ["tensor", "id", "select"])]
+        #[arg(long = "rebind", id = "rebind_selection", conflicts_with_all = ["tensor", "id", "select_expr"])]
         rebind_selection: Option<String>,
 
         /// Model pack for component resolution of --select and component rebinds
@@ -2933,6 +2933,22 @@ fn nn_path_arg<'a>(
 }
 
 fn main() -> Result<()> {
+    // The Windows main thread gets a 1 MiB stack by default, and building
+    // the command tree needs more than that in debug builds (release fits,
+    // but `cargo run` must work too). An explicit thread stack also keeps
+    // the CLI working under small `ulimit -s` shells on Unix. Panics still
+    // unwind through main with the standard exit code.
+    let handle = std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(bin_main)
+        .expect("failed to spawn main thread");
+    match handle.join() {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+fn bin_main() -> Result<()> {
     let cli = Cli::parse();
     if cli.build_info {
         print_build_info();

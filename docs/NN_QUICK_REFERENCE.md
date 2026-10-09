@@ -13,7 +13,7 @@ discover ─→ catalog (.nn.json) ─→ ls / show / select ─→ selection (.
                                    │                    or split (by layer)
                                    ↓
                           shard-map (download planning)
-analyze / diff / fingerprint / partition / carve / validate / adapter / tokenizer / research
+analyze / exl3 decode / diff / fingerprint / partition / ledger / carve / validate / adapter / tokenizer / research
 edit set ─→ plan ─→ apply ─→ edited file + undo bundle ─→ undo
 edit set --session ─→ staged ops ─→ apply --session (one pass) ─→ undo (all ops)
 ```
@@ -42,10 +42,12 @@ edit set --session ─→ staged ops ─→ apply --session (one pass) ─→ un
 | `nn diff` | Layered diff (`--left`, `--right`, `--decoded`, `--policy`); `--precision` = per-tensor decoded error metrics |
 | `nn fingerprint` | Exact fingerprints (+ `--compare` evidence graph, `--threshold`) |
 | `nn partition` | Layer groups per stage (static byte estimate; `--unlayered-policy`) |
+| `nn ledger` | Per-device fit for a partition plan (`--stages-json`, `--devices` with capacity observations + provenance, `--replication`, `--overheads`; per-rank verdicts beat aggregate, exit 7 on any non-fit) |
 | `nn carve` | Find embedded containers in a raw file (`--target`) |
 | `nn validate` | Per-source structural verdicts (exit 7 on defects) |
 | `nn evidence verify/init` | Reviewed sidecars bound to artifact identity (exit 7 on mismatch) |
 | `nn derive` | Data-only derived views over capture arrays (`--expression`, provenance sidecar, explicit domain policy) |
+| `nn exl3 decode/block` | EXL3 trellis storage → Hadamard-domain values (`--trellis` + `--index`/`--origin`; mcg codebook, qualified codec) |
 | `nn shard-map` | Which shards hold your selection (`--index`, `--tensor`/`--selection`) — a plan, not a download |
 | `nn adapter inspect` | LoRA factor pairs (descriptor-level) |
 | `nn tokenizer inspect / diff` | Tokenizer assets / vocabulary diff |
@@ -72,7 +74,9 @@ binfiddle nn diff --left v1.nn.json --right v2.nn.json
 binfiddle nn diff --left fp32.nn.json --right fp16.nn.json --precision
 binfiddle nn fingerprint --catalog v1.nn.json --compare v2.nn.json
 binfiddle nn derive --catalog cap.nn.json --expression 'post - expected_post' --out-npy e.npy --out-sidecar e.json
+binfiddle nn exl3 decode --catalog k2.nn.json --trellis model.layers.12.mlp.experts.27.up_proj.trellis --index 0,0
 binfiddle nn shard-map --index model.safetensors.index.json --tensor lm_head.weight
+binfiddle nn ledger --stages-json plan.json --devices devices.json --replication 2
 ```
 
 Negative values: `--value=-0.5` (equals sign — a bare `-0.5` parses as a flag).

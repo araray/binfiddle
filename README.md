@@ -583,6 +583,25 @@ binfiddle nn analyze --catalog m.nn.json --tensor q4w --blocks 4
 binfiddle nn analyze --catalog m.nn.json --selection gates.sel.json --mode sample
 ```
 
+##### Storage codecs — `exl3 decode`, `exl3 block`
+
+Qualified decode of EXL3 trellis storage, statically: the four fields of
+an EXL3 projection (`.trellis`, `.suh`, `.svh`, `.mcg`) resolve from a
+saved catalog by trellis name, the selector must carry the mcg codebook
+magic, and each weight decodes through the 16-bit window ending at its
+last code bit inside its 16×16 tile. `decode` reports one
+Hadamard-domain value `Wq[n, k]`; `block` summarizes a logical 128×128
+block after the reconstruction `W = H·diag(svh)·Wq·diag(suh)·H`. The
+codec is a transcription of the reference CUDA decode, qualified
+bit-for-bit against an independent implementation on authentic samples —
+and it claims dequantized storage values, never model quality.
+
+```bash
+binfiddle nn exl3 decode --catalog k2.nn.json --trellis model.layers.12.mlp.experts.27.up_proj.trellis --index 0,0
+# → value: -1.2127686
+binfiddle nn exl3 block --catalog k2.nn.json --trellis model.layers.12.mlp.experts.27.up_proj.trellis --origin 0,0
+```
+
 ##### Mutation — `edit set`, `edit apply`, `edit undo`, `edit prune`
 
 Transactional fixed-size edits: the plan records the write unit, the observed
@@ -636,7 +655,7 @@ binfiddle nn tokenizer inspect --package model-dir/
 binfiddle nn tokenizer diff --left v1/tokenizer.json --right v2/tokenizer.json
 ```
 
-##### Packages — `pack verify/lint/scaffold`, `partition`
+##### Packages — `pack verify/lint/scaffold`, `partition`, `ledger`
 
 Model packs are pure-data YAML manifests mapping tensor-name patterns to
 named components with shape expressions over configuration parameters — no
@@ -645,13 +664,19 @@ scaffolding derives heuristic-labeled drafts from an observed catalog.
 `nn partition` plans contiguous layer groups per stage balanced by encoded
 weight bytes — a static estimate that states exactly what it excludes
 (activations, workspace, runtime behavior); unlayered tensors are reported,
-never silently distributed.
+never silently distributed. `nn ledger` then accounts that plan against
+supplied per-device capacity observations (with provenance: source,
+timestamp, ECC state), placing stage *i* on device *i % N*: replication
+multiplies encoded bytes, overheads are tracked separately, and the
+per-rank verdict stands even when the nominal aggregate would fit —
+exit 7 on any device over its selected capacity.
 
 ```bash
 binfiddle nn pack verify --pack my-model/pack.yaml
 binfiddle nn pack lint --pack my-model/pack.yaml
 binfiddle nn pack scaffold --catalog m.nn.json > draft.pack.yaml
 binfiddle nn partition --catalog m.nn.json --pack my-model/pack.yaml --stages 2
+binfiddle nn ledger --stages-json plan.json --devices devices.json --replication 2
 ```
 
 ##### Validation & research — `validate`, `carve`, `research align`
@@ -1114,8 +1139,9 @@ capture — the fastest way to see the workbench in action on real weights:
   carved from real tensors, and stacked MoE experts
 - [Dissecting EXL3 storage on GLM-5.3-Flash](docs/NN_DEEPDIVE_GLM_EXL3.md)
   — quantized projections as four-field storage groups (trellis/mcg/
-  suh/svh), a variant-versioned profile pack, and a mismatched-variant
-  contradiction demo on authentic payloads
+  suh/svh), a variant-versioned profile pack, a mismatched-variant
+  contradiction demo on authentic payloads, and the qualified trellis
+  codec decoding them to Hadamard-domain values
 
 ## License
 

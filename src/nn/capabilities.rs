@@ -79,7 +79,7 @@ pub fn capabilities() -> Vec<Capability> {
         ),
         Capability::implemented(
             "nn.discover",
-            "descriptor-only inventory of SafeTensors, GGUF, ONNX, and PyTorch (.pth/.pt/.ckpt, data-only opcode reading) files and directories; GGUF split-shard and sharded-SafeTensors index checks (missing-shard findings, cross-shard uniqueness); stdin discovery via a bounded private spool; optional --out-catalog persistence",
+            "descriptor-only inventory of SafeTensors, GGUF, ONNX, NumPy captures (.npy/.npz; STORED members at exact spans, DEFLATE members at archive spans with bounded decompression), and PyTorch (.pth/.pt/.ckpt, data-only opcode reading) files and directories; GGUF split-shard and sharded-SafeTensors index checks (missing-shard findings, cross-shard uniqueness); stdin discovery via a bounded private spool; optional --out-catalog persistence",
         ),
         Capability::implemented(
             "nn.ls",
@@ -112,6 +112,10 @@ pub fn capabilities() -> Vec<Capability> {
         Capability::implemented(
             "nn.analyze",
             "bounded numerical inspection: metadata/sample/full scans with coverage records, Welford statistics, non-finite categories, overflow-safe L2 norms, declared-edge histograms, reference-error metrics with zero-denominator policies, Q4_0 block views, and batch analysis over selections with robust cross-tensor outlier flags (statistical observation, not a defect verdict)",
+        ),
+        Capability::implemented(
+            "nn.exl3",
+            "qualified decode of EXL3 trellis storage: four-field projections (trellis/suh/svh/mcg) resolved from a catalog, mcg selector magic verified, 16-bit-window decode inside 16x16 tiles, single Hadamard-domain values and logical 128x128 block summaries under W = H·diag(svh)·Wq·diag(suh)·H; transcribed from the reference decode and qualified bit-for-bit against an independent implementation on authentic samples — dequantized storage values, never model quality or behavior claims",
         ),
         Capability::implemented(
             "nn.impact",
@@ -151,6 +155,10 @@ pub fn capabilities() -> Vec<Capability> {
             "static execution partition planning: contiguous layer groups balanced by encoded weight bytes (optimal max-stage DP), unlayered tensors reported or explicitly placed (report/first/last/manual policies), estimates state exactly what they include and exclude — no runtime, transfer, or speedup claims",
         ),
         Capability::implemented(
+            "nn.ledger",
+            "per-device memory accounting for a partition plan: stage-to-device placement with weight replication, capacity from SUPPLIED observations with provenance (nominal/nvml_total/cuda_visible/free_snapshot; the selected observation decides, an unresolved selection fails), overhead line items tracked separately from weight bytes, unlayered tensors visible, per-rank fit verdicts that stand even when the nominal aggregate would fit (exit 7 on any non-fit) — static byte accounting only, no throughput, concurrency, or runtime-behavior claims",
+        ),
+        Capability::implemented(
             "nn.carve",
             "artifact carving: scan raw files for embedded SafeTensors/GGUF containers, validate candidates structurally on exact subviews, and report spans with verified/candidate confidence labels — no model validity or recoverability claims",
         ),
@@ -171,6 +179,14 @@ pub fn capabilities() -> Vec<Capability> {
         Capability::implemented(
             "nn.validate",
             "structural artifact validation with precise per-source verdicts (structurally_valid_for_reader / unsupported_feature / invalid / incomplete), error-severity findings surfaced, behavior_not_evaluated stated; exit 7 when anything fails",
+        ),
+        Capability::implemented(
+            "nn.derive",
+            "data-only derived views over catalog arrays: closed expression language (+ - * /, unary minus, log/exp/sqrt/abs) evaluated in float64 under declared dtypes, .npy output with a canonical provenance sidecar (expression, input tensor ids/encodings/shapes, output digest), domain violations refuse by default with exact counts (--allow-domain-violations writes NaN and records it); derived values are labeled derived — never observed device values",
+        ),
+        Capability::implemented(
+            "nn.evidence",
+            "reviewed evidence sidecars (binfiddle.nn.evidence-sidecar/v1): bind operation descriptions, observation timelines, or capture notes to a file/catalog/selection/bundle content identity (sha256/catalog_id/selection_id); init drafts the sidecar with the computed identity, verify recomputes and reports agreement — exit 7 on mismatch; sidecars are data, nothing in them executes and they establish no runtime behavior",
         ),
     ]
 }
