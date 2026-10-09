@@ -4,7 +4,7 @@
 //! and stay quiet otherwise (or when `--silent` is set).
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use std::io::{self, Read};
+use std::io::{self, IsTerminal, Read};
 
 /// A thin wrapper around an `indicatif` progress bar.
 pub struct Progress {
@@ -22,7 +22,7 @@ impl Progress {
         // Progress bars are opt-in only. Even when enabled, only draw them on
         // an interactive stderr so pipes and scripts (including command
         // chaining, which captures stderr) never get progress artifacts.
-        let hidden = !enabled || !atty::is(atty::Stream::Stderr);
+        let hidden = !enabled || !std::io::stderr().is_terminal();
         let bar = if hidden {
             ProgressBar::hidden()
         } else {

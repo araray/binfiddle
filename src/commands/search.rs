@@ -20,7 +20,7 @@ use crate::{BinaryData, ColorMode};
 use memchr::memmem;
 use rayon::prelude::*;
 use regex::bytes::Regex;
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 
 /// Minimum file size (in bytes) to trigger parallel search.
 /// Below this threshold, sequential search is typically faster due to parallelization overhead.
@@ -620,7 +620,7 @@ impl SearchCommand {
         let use_color = match self.config.color {
             ColorMode::Always => true,
             ColorMode::Never => false,
-            ColorMode::Auto => atty::is(atty::Stream::Stdout),
+            ColorMode::Auto => std::io::stdout().is_terminal(),
         };
 
         let mut output = String::new();
