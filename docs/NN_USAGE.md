@@ -56,9 +56,14 @@ The workbench answers static questions about model files:
   write one fresh output file; keep a verified undo.
 - **Analysis** — statistics, distributions, quantization blocks, and comparison
   against reference values.
+- **Storage codecs** — qualified decode of exotic quantization storage: EXL3
+  trellis fields into Hadamard-domain values.
 - **Comparison** — layered diffs, content fingerprints, evidence graphs,
   adapter inspection, tokenizer comparison.
 - **Research** — exact, reproducible experiments (row-permutation alignment).
+- **Planning** — static plans with byte accounting: which shards to download,
+  how layers group into stages, and whether stages fit supplied per-device
+  capacity observations.
 
 It deliberately never does three things:
 
@@ -765,6 +770,41 @@ binfiddle nn partition --catalog model.nn.json --pack demo.pack.yaml \
     --stages 4 --unlayered-policy manual --placement-file places.json
 ```
 
+### `nn ledger`
+
+Per-device memory accounting for a partition plan: takes the JSON report
+of an `nn partition` run plus a supplied devices file, places stage *i*
+on device *i % N*, and reports per-device fit verdicts. Capacity is
+never assumed — each device carries supplied observations
+(`nominal` / `nvml_total` / `cuda_visible` / `free_snapshot`) with
+provenance (source, timestamp, ECC state, units; unknowns preserved),
+and the verdict uses the **selected** observation only; a device with no
+selected observation fails rather than guessing. Weight replication
+multiplies encoded bytes, overhead line items are accounted separately
+from weight bytes, and unlayered tensors stay visible. The per-rank rule
+stands on its own: one device that does not fit is a failure even when
+the nominal aggregate would; `--reject-on-aggregate` adds the aggregate
+check on top. Any device that does not fit exits 7.
+
+| Option | Description |
+|---|---|
+| `--stages-json` | `nn partition --report-format json` output — required |
+| `--devices` | Devices file: `[{name, uuid?, selected?, observations: [{kind, bytes, source?, observed_at?, ecc?, units?}]}]` — required |
+| `--replication` | Weight replication per hosting device (default 1) |
+| `--overheads` | Runtime overhead line items `[{device, bytes, source?}]` — supplied separately from weight bytes |
+| `--reject-on-aggregate` | Also evaluate the nominal-aggregate check (per-rank verdicts stand regardless) |
+| `--report-format` | `text` or `json` |
+
+```bash
+binfiddle nn ledger --stages-json plan.json --devices devices.json --replication 2
+# → gpu-0: stages [0] encoded 640000000000 x2 replication, overheads 0,
+#   selected nvml_total (48305799168) — DOES NOT FIT
+#   reason: total 640000000000 exceeds selected nvml_total capacity 48305799168
+# → gpu-1: stages [1] encoded 480000000000 x2 replication, …
+# → unplaced: 4 tensors, 16000000000 bytes (never silently distributed)
+# exit 7: one or more devices exceed their selected capacity
+```
+
 ### `nn carve`
 
 Scan a raw file for embedded model containers (SafeTensors/GGUF), validate
@@ -861,6 +901,59 @@ binfiddle nn derive --catalog mhcpre.nn.json \
 binfiddle nn derive --catalog p.nn.json \
     --expression 'log(p) - log(2 - p)' \
     --out-npy logit.npy --out-sidecar logit.json
+```
+
+### `nn exl3`
+
+Decode EXL3 trellis storage — the quantization scheme behind EXL3 model
+releases — into Hadamard-domain values, statically and exactly. The four
+fields of an EXL3 projection (`.trellis`, `.suh`, `.svh`, `.mcg`) are
+resolved from a saved catalog by trellis name; the selector must carry
+the mcg codebook magic or the variant is refused as not decodable by
+this codec. Each weight's code is the 16-bit window ending at its last
+code bit inside the 16×16 tile (wrapping within the 512-bit tile);
+values decode through the mcg codebook. The logical reconstruction is
+`W = H·diag(svh)·Wq·diag(suh)·H` with the 128-point Sylvester
+Hadamard. The codec is a transcription of the reference CUDA decode,
+qualified bit-for-bit against an independent implementation on
+authentic samples. Claims stay storage-level: dequantized values, never
+model quality or behavior.
+
+#### `nn exl3 decode`
+
+One Hadamard-domain storage value `Wq[n, k]`, with its decode
+dependency stated (the 16-bit window inside its tile).
+
+| Option | Description |
+|---|---|
+| `--catalog` | Saved catalog containing the four EXL3 fields — required |
+| `--trellis` | Trellis tensor name (siblings `.suh`/`.svh`/`.mcg` resolved by name) — required |
+| `--index` | Element coordinate `n,k` (comma-separated decimal) — required |
+| `--report-format` | `text` or `json` |
+
+#### `nn exl3 block`
+
+Summary statistics over one logical 128×128 block of `W` (origin
+coordinates must be multiples of 128).
+
+| Option | Description |
+|---|---|
+| `--catalog` | Saved catalog containing the four EXL3 fields — required |
+| `--trellis` | Trellis tensor name — required |
+| `--origin` | Block origin `n0,k0` (comma-separated, multiples of 128) — required |
+| `--report-format` | `text` or `json` |
+
+```bash
+binfiddle nn exl3 decode --catalog k2.nn.json \
+    --trellis model.layers.12.mlp.experts.27.up_proj.trellis --index 0,0
+# → logical: Wq[0, 0] (Hadamard domain, projection [2048, 4096], 2 bpw)
+#   value:   -1.2127686
+#   decode dependencies: the 16-bit window ending at the weight's code, inside its 16x16 tile
+
+binfiddle nn exl3 block --catalog k2.nn.json \
+    --trellis model.layers.12.mlp.experts.27.up_proj.trellis --origin 0,0
+# → mean: -0.000028   variance: 0.00034529   abs max: 0.077100
+#   claims: logical weights under H . diag(svh) . Wq . diag(suh) . H; …
 ```
 
 ### `nn evidence`

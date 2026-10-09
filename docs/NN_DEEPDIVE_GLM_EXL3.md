@@ -106,10 +106,10 @@ binfiddle nn where --catalog tf20.nn.json \
 #   file span: [1148580022, 1148580024)
 ```
 
-What that element *decodes to* as a weight value is a matter for a
-qualified EXL3 codec (not part of this profile step); the storage view is
-preserved and addressable, and `nn analyze` reports the raw I16
-population.
+What that element *decodes to* as a weight value is a separate step from
+the storage profile: `nn exl3 decode` is the qualified codec that answers
+it (see Part 5). The storage view stays preserved and addressable, and
+`nn analyze` reports the raw I16 population.
 
 **suh — head scales, decodable today.** The F16 fields decode through
 the existing codec:
@@ -148,6 +148,45 @@ The three fields whose geometry coincides bind; the one that proves a
 different variant refuses — exactly the discipline: a name match is not
 a contract.
 
+## Part 5 — Decoding the trellis
+
+The qualified codec lives in the workbench as `nn exl3 decode` /
+`nn exl3 block`. On the K2 sample's catalog (the same fixture as
+Part 4):
+
+```bash
+binfiddle nn exl3 decode --catalog k2sample.nn.json \
+    --trellis model.language_model.layers.12.mlp.experts.27.up_proj.trellis \
+    --index 0,0
+# → logical:   Wq[0, 0] (Hadamard domain, projection [2048, 4096], 2 bpw)
+#   value:     -1.2127686
+#   decode dependencies: the 16-bit window ending at the weight's code, inside its 16x16 tile
+#   claims: dequantized storage value under the mcg codebook; model quality and behavior are NOT implied
+```
+
+Each weight's code is the 16-bit window ending at its last code bit
+inside its 16×16 tile (wrapping within the 512-bit tile); the mcg
+codebook — its selector verified against the magic constant — turns the
+window into the stored Hadamard-domain value. `nn exl3 block` then
+summarizes one logical 128×128 block after the reconstruction
+`W = H·diag(svh)·Wq·diag(suh)·H`:
+
+```bash
+binfiddle nn exl3 block --catalog k2sample.nn.json \
+    --trellis model.language_model.layers.12.mlp.experts.27.up_proj.trellis \
+    --origin 0,0
+# → mean:      -0.000028
+#   variance:  0.00034529
+#   abs max:   0.077100
+```
+
+The codec is a transcription of the reference CUDA decode, qualified
+bit-for-bit against an independently written implementation on this
+exact sample (`Wq[0,0] = -1.2127686`, `Wq[3,5] = -1.4238281`). The
+cross-check ran both ways — it exposed a normalization bug in the
+independent reference itself — so the two implementations qualified
+each other rather than one rubber-stamping the other.
+
 ## Engine features this walkthrough exercises
 
 1. **Multi-capture packs**: `{layer}` and `{expert}` numeric captures in
@@ -159,6 +198,9 @@ a contract.
 3. **Static shard planning** (`nn shard-map`) over a 150k-tensor index.
 4. The **generic scalar views** (I16/F16 addressing, statistics) that
    stay exact regardless of the storage scheme layered above them.
+5. The **qualified EXL3 codec** (`nn exl3 decode`/`nn exl3 block`):
+   trellis decode with suh/svh rescaling, bit-for-bit against an
+   independent reference.
 
 ## Reproducing
 
@@ -167,6 +209,5 @@ shard 20). The variant-mismatch fixture is the independently acquired
 K2 sample of `layers.12.mlp.experts.27.up_proj` (four payload files +
 manifest, 2,109,444 bytes) wrapped in a constructed SafeTensors container
 — the payloads are authentic and sha-verified; only the container is
-constructed. Writing a qualified EXL3 codec (trellis decode with suh/svh
-rescaling) remains future work, gated on an independently qualified
-reference implementation.
+constructed. The qualified codec of Part 5 decodes that same sample
+through `nn exl3 decode` / `nn exl3 block`.

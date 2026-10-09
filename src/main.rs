@@ -438,11 +438,11 @@ enum NnCommand {
         catalog: Option<String>,
 
         /// Exact original tensor name
-        #[arg(long, conflicts_with_all = ["id", "select", "rebind_selection"])]
+        #[arg(long, conflicts_with_all = ["id", "select_expr", "rebind_selection"])]
         tensor: Option<String>,
 
         /// Tensor identifier (full or unique digest prefix)
-        #[arg(long, conflicts_with_all = ["tensor", "select", "rebind_selection"])]
+        #[arg(long, conflicts_with_all = ["tensor", "select_expr", "rebind_selection"])]
         id: Option<String>,
 
         /// Component selector expression (requires a model pack to resolve)
@@ -450,7 +450,7 @@ enum NnCommand {
         select_expr: Option<String>,
 
         /// Saved selection to rebind against the catalog given by --catalog
-        #[arg(long = "rebind", id = "rebind_selection", conflicts_with_all = ["tensor", "id", "select"])]
+        #[arg(long = "rebind", id = "rebind_selection", conflicts_with_all = ["tensor", "id", "select_expr"])]
         rebind_selection: Option<String>,
 
         /// Model pack for component resolution of --select and component rebinds

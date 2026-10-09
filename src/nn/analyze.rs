@@ -223,7 +223,7 @@ impl StreamingStats {
             neg_zero: self.neg_zero,
             mean: (self.count > 0).then_some(self.mean),
             population_variance: (self.count > 0).then_some(self.m2 / self.count as f64),
-            sample_variance: (self.count > 1).then_some(self.m2 / (self.count - 1) as f64),
+            sample_variance: (self.count > 1).then(|| self.m2 / (self.count - 1) as f64),
             abs_sum: (self.count > 0).then_some(self.abs_sum),
             l2_norm: self.l2_norm(),
             min: self.min.clone(),
