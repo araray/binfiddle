@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.90%2B-orange.svg)](https://www.rust-lang.org/)
 
-*Version 0.29.0 | Cross-platform (Windows/Linux/macOS) | x86_64 / Arm64 Support | Linux process-memory features*
+*Version 0.30.0 | Cross-platform (Windows/Linux/macOS) | x86_64 / Arm64 Support | Linux process-memory features*
 
 Binfiddle is a **developer-focused binary manipulation toolkit** designed for flexibility, modularity, and clarity. It enables inspection, patching, differential analysis, statistical analysis, hashing, checksum verification, and custom exploration of binary data across a variety of formats.
 
@@ -1097,7 +1097,8 @@ cargo check --target aarch64-unknown-linux-gnu
 | 8 | Large files, hashing, streaming, progress | ✅ Complete |
 | 9 | NN artifact workbench (`nn`) | ✅ Complete (early access; runtime replay intentionally out of scope) |
 | 10 | NN hardening: PyTorch tier, edit sessions, MoE expert views, shard planning, precision audit | ✅ Complete (v0.29.0) |
-| 11 | Advanced analysis & intelligence | 🔲 Planned |
+| 11 | NN pipeline program: NumPy captures, build provenance, EXL3 profile + qualified codec, evidence sidecars, derived views, per-GPU ledger | ✅ Complete (v0.30.0) |
+| 12 | Advanced analysis & intelligence | 🔲 Planned |
 
 ## Documentation & references
 
