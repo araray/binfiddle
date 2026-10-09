@@ -29,7 +29,6 @@ base64 = "0.22"
 regex = "1.12.2"
 memchr = "2.7"
 termcolor = "1.4"
-atty = "0.2"
 rayon = "1.11.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"

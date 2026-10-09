@@ -25,6 +25,7 @@
 
 use crate::error::{BinfiddleError, Result};
 use crate::ColorMode;
+use std::io::IsTerminal;
 
 // ANSI color codes for terminal output
 const ANSI_RESET: &str = "\x1b[0m";
@@ -263,7 +264,7 @@ impl DiffCommand {
         match self.config.color {
             ColorMode::Always => true,
             ColorMode::Never => false,
-            ColorMode::Auto => atty::is(atty::Stream::Stdout),
+            ColorMode::Auto => std::io::stdout().is_terminal(),
         }
     }
 
