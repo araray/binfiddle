@@ -1,5 +1,11 @@
 # Binfiddle
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/binfiddle-banner-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/brand/binfiddle-banner-light.svg">
+  <img src="assets/brand/binfiddle-banner-light.svg" alt="Binfiddle — a curious crab inspecting a byte" width="1200" height="440">
+</picture>
+
 **Binary utilities for developers and hackers**
 
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)

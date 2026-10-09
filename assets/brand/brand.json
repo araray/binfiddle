@@ -1,0 +1,49 @@
+{
+  "name": "Binfiddle \u2014 Curious Crab",
+  "selected_concept": "H",
+  "palettes": {
+    "light": {
+      "name": "Carbon / Ember",
+      "ink": "#22252B",
+      "accent": "#EF5C45",
+      "background": "#F7F7F2"
+    },
+    "dark": {
+      "name": "Plum / Peach",
+      "ink": "#F8F4F0",
+      "accent": "#F2B995",
+      "background": "#39283D"
+    }
+  },
+  "assets": {
+    "mark": {
+      "size": [
+        512,
+        512
+      ],
+      "background": "transparent"
+    },
+    "logo": {
+      "size": [
+        1200,
+        320
+      ],
+      "background": "transparent"
+    },
+    "banner": {
+      "size": [
+        1200,
+        440
+      ],
+      "background": "palette background"
+    }
+  },
+  "provenance": {
+    "concept": "OpenAI image generation, selected concept H",
+    "vector_authoring": "Krita 6.0.3 via av-krita-mcp 0.4.0",
+    "method": "Selected silhouette and lettering traced with Potrace inside Krita, imported as editable vector shapes, then serialized from the Krita vector layer.",
+    "wordmark": "Outlined paths from the selected concept; no external font dependency.",
+    "source": "source/concept-h.png",
+    "editable_master": "source/binfiddle-brand-master.kra"
+  }
+}
