@@ -2933,6 +2933,22 @@ fn nn_path_arg<'a>(
 }
 
 fn main() -> Result<()> {
+    // The Windows main thread gets a 1 MiB stack by default, and building
+    // the command tree needs more than that in debug builds (release fits,
+    // but `cargo run` must work too). An explicit thread stack also keeps
+    // the CLI working under small `ulimit -s` shells on Unix. Panics still
+    // unwind through main with the standard exit code.
+    let handle = std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(bin_main)
+        .expect("failed to spawn main thread");
+    match handle.join() {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+fn bin_main() -> Result<()> {
     let cli = Cli::parse();
     if cli.build_info {
         print_build_info();
