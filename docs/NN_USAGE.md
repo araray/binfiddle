@@ -11,12 +11,14 @@ code, and never modifies an input file — all outputs are fresh files.
 > walkthroughs, see the deep dives:
 > [NN_DEEPDIVE_KOKORO.md](NN_DEEPDIVE_KOKORO.md) (ONNX export, pickle boundary),
 > [NN_DEEPDIVE_GEMMA.md](NN_DEEPDIVE_GEMMA.md) (16 GB SafeTensors, model packs,
-> transactional editing at scale), and
+> transactional editing at scale),
 > [NN_DEEPDIVE_QWEN.md](NN_DEEPDIVE_QWEN.md) (131-shard package, hybrid
-> attention, fused head views), and
+> attention, fused head views),
 > [NN_DEEPDIVE_GLM_EXL3.md](NN_DEEPDIVE_GLM_EXL3.md) (EXL3 quantized
 > storage on GLM-5.3-Flash — variant-profiled packs at
-> [packs/](../packs/)).
+> [packs/](../packs/)), and
+> [NN_DEEPDIVE_GLM_LAB.md](NN_DEEPDIVE_GLM_LAB.md) (a small, reproducible
+> GLM expert specimen, independent decoding, and a two-byte intervention).
 
 **Contents**
 
@@ -911,13 +913,19 @@ fields of an EXL3 projection (`.trellis`, `.suh`, `.svh`, `.mcg`) are
 resolved from a saved catalog by trellis name; the selector must carry
 the mcg codebook magic or the variant is refused as not decodable by
 this codec. Each weight's code is the 16-bit window ending at its last
-code bit inside the 16×16 tile (wrapping within the 512-bit tile);
-values decode through the mcg codebook. The logical reconstruction is
-`W = H·diag(svh)·Wq·diag(suh)·H` with the 128-point Sylvester
-Hadamard. The codec is a transcription of the reference CUDA decode,
-qualified bit-for-bit against an independent implementation on
-authentic samples. Claims stay storage-level: dequantized values, never
-model quality or behavior.
+code bit inside the 16×16 tile (256 times the bitrate in bits). Codes
+are packed MSB-first in little-endian u32 words and use a tensor-core
+lane permutation. Supported variants use the mcg codebook at integer
+bitrates 1–8; codebook addition rounds to fp16. In `[output,input]`
+coordinates, logical reconstruction is
+`W = diag(svh)·H·Wq·H·diag(suh)` with normalized 128-point Sylvester
+Hadamard blocks. Reconstruction uses f32 arithmetic and does not claim
+GPU intermediate-rounding parity. An independent CPU reference and
+real-weight checks are included in the [GLM lab](NN_DEEPDIVE_GLM_LAB.md).
+Claims stay storage-level: dequantized values, never model quality or behavior.
+JSON report values and statistics are decimal strings, consistent with
+the number-free wire format. Current queries load the whole projection's
+trellis field even when returning one value or block.
 
 #### `nn exl3 decode`
 
@@ -944,16 +952,16 @@ coordinates must be multiples of 128).
 | `--report-format` | `text` or `json` |
 
 ```bash
-binfiddle nn exl3 decode --catalog k2.nn.json \
-    --trellis model.layers.12.mlp.experts.27.up_proj.trellis --index 0,0
-# → logical: Wq[0, 0] (Hadamard domain, projection [2048, 4096], 2 bpw)
-#   value:   -1.2127686
+binfiddle nn exl3 decode --catalog expert.nn.json \
+    --trellis model.language_model.layers.12.mlp.experts.27.up_proj.trellis --index 3,5
+# → logical: Wq[3, 5] (Hadamard domain, projection [2048, 4096], 4 bpw)
+#   value:   0.54052734
 #   decode dependencies: the 16-bit window ending at the weight's code, inside its 16x16 tile
 
-binfiddle nn exl3 block --catalog k2.nn.json \
-    --trellis model.layers.12.mlp.experts.27.up_proj.trellis --origin 0,0
-# → mean: -0.000028   variance: 0.00034529   abs max: 0.077100
-#   claims: logical weights under H . diag(svh) . Wq . diag(suh) . H; …
+binfiddle nn exl3 block --catalog expert.nn.json \
+    --trellis model.language_model.layers.12.mlp.experts.27.up_proj.trellis --origin 0,0
+# → mean: -0.000069   variance: 0.00035795   abs max: 0.080924
+#   claims: f32 logical weights under diag(svh) . H . Wq . H . diag(suh); …
 ```
 
 ### `nn evidence`

@@ -10,6 +10,13 @@ tensor names is exactly the wrong move.
 
 Every output below is a real capture from the actual artifacts.
 
+> **Companion lab and codec correction (2026-10-09):**
+> [The GLM expert lab](NN_DEEPDIVE_GLM_LAB.md) supplies a pinned acquisition
+> helper, a complete expert specimen, independent decode checks, and a
+> reversible two-byte experiment. It exposed errors in the earlier numerical
+> decoder. The storage observations below remain useful; Part 5 now points to
+> the corrected, reproducible numerical results.
+
 ## The subject
 
 | Artifact | Role | Size |
@@ -122,8 +129,9 @@ analyze …up_proj.suh (safetensors.F16)
 ```
 
 **mcg — the codebook selector.** A single I32; the config declares it as
-the codebook (`quantization_config.codebook: mcg`). Descriptor-level
-only — no codebook contents are interpreted.
+the codebook (`quantization_config.codebook: mcg`). The generic scalar view
+reports the stored integer; the specialized EXL3 decoder verifies the selector
+magic before interpreting the trellis.
 
 ## Part 4 — Variant mismatch stays visible
 
@@ -150,42 +158,23 @@ a contract.
 
 ## Part 5 — Decoding the trellis
 
-The qualified codec lives in the workbench as `nn exl3 decode` /
-`nn exl3 block`. On the K2 sample's catalog (the same fixture as
-Part 4):
+The codec lives in the workbench as `nn exl3 decode` / `nn exl3 block`.
+The original version of this article presented K2 numerical captures whose
+qualification was insufficient: the decoder used incorrect bit ordering and
+matrix-to-lane mapping, missed fp16 codebook rounding, repeated tiles across
+block columns, and applied scales in the wrong transform order. Those numerical
+captures are withdrawn; they are not reference values for current builds.
 
-```bash
-binfiddle nn exl3 decode --catalog k2sample.nn.json \
-    --trellis model.language_model.layers.12.mlp.experts.27.up_proj.trellis \
-    --index 0,0
-# → logical:   Wq[0, 0] (Hadamard domain, projection [2048, 4096], 2 bpw)
-#   value:     -1.2127686
-#   decode dependencies: the 16-bit window ending at the weight's code, inside its 16x16 tile
-#   claims: dequantized storage value under the mcg codebook; model quality and behavior are NOT implied
-```
+The corrected reconstruction, in `[output,input]` coordinates, is
+`W = diag(svh)·H·Wq·H·diag(suh)`. The scales belong outside the normalized
+128-point Hadamard transforms. Block calculations use f32 and do not claim
+the intermediate rounding of an inference kernel.
 
-Each weight's code is the 16-bit window ending at its last code bit
-inside its 16×16 tile (wrapping within the 512-bit tile); the mcg
-codebook — its selector verified against the magic constant — turns the
-window into the stored Hadamard-domain value. `nn exl3 block` then
-summarizes one logical 128×128 block after the reconstruction
-`W = H·diag(svh)·Wq·diag(suh)·H`:
-
-```bash
-binfiddle nn exl3 block --catalog k2sample.nn.json \
-    --trellis model.language_model.layers.12.mlp.experts.27.up_proj.trellis \
-    --origin 0,0
-# → mean:      -0.000028
-#   variance:  0.00034529
-#   abs max:   0.077100
-```
-
-The codec is a transcription of the reference CUDA decode, qualified
-bit-for-bit against an independently written implementation on this
-exact sample (`Wq[0,0] = -1.2127686`, `Wq[3,5] = -1.4238281`). The
-cross-check ran both ways — it exposed a normalization bug in the
-independent reference itself — so the two implementations qualified
-each other rather than one rubber-stamping the other.
+Use [Part 6 of the companion lab](NN_DEEPDIVE_GLM_LAB.md#6-cross-the-boundary-from-bytes-to-weights)
+for pinned four-bpw captures, an independent bit-stream/butterfly reference,
+and boundary probes. It supplies a downloadable specimen instead of depending
+on the historical local K2 fixture. The profile mismatch in Part 4 remains a
+descriptor-level observation, independent of the numerical decoder.
 
 ## Engine features this walkthrough exercises
 
@@ -199,8 +188,8 @@ each other rather than one rubber-stamping the other.
 4. The **generic scalar views** (I16/F16 addressing, statistics) that
    stay exact regardless of the storage scheme layered above them.
 5. The **qualified EXL3 codec** (`nn exl3 decode`/`nn exl3 block`):
-   trellis decode with suh/svh rescaling, bit-for-bit against an
-   independent reference.
+   trellis decode with lane mapping and suh/svh rescaling, now checked
+   against the independent reference in the companion lab.
 
 ## Reproducing
 
@@ -209,5 +198,6 @@ shard 20). The variant-mismatch fixture is the independently acquired
 K2 sample of `layers.12.mlp.experts.27.up_proj` (four payload files +
 manifest, 2,109,444 bytes) wrapped in a constructed SafeTensors container
 — the payloads are authentic and sha-verified; only the container is
-constructed. The qualified codec of Part 5 decodes that same sample
-through `nn exl3 decode` / `nn exl3 block`.
+constructed. For a self-contained reproduction using a pinned public
+four-bpw release and current numerical results, use the
+[GLM expert lab](NN_DEEPDIVE_GLM_LAB.md).

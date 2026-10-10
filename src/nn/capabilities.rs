@@ -115,7 +115,7 @@ pub fn capabilities() -> Vec<Capability> {
         ),
         Capability::implemented(
             "nn.exl3",
-            "qualified decode of EXL3 trellis storage: four-field projections (trellis/suh/svh/mcg) resolved from a catalog, mcg selector magic verified, 16-bit-window decode inside 16x16 tiles, single Hadamard-domain values and logical 128x128 block summaries under W = H·diag(svh)·Wq·diag(suh)·H; transcribed from the reference decode and qualified bit-for-bit against an independent implementation on authentic samples — dequantized storage values, never model quality or behavior claims",
+            "qualified decode of integer-bitrate EXL3 mcg storage: four-field projections (trellis/suh/svh/mcg), verified selector magic, MSB-first 16-bit windows and tensor-core lane permutation inside 16x16 tiles; single Hadamard-domain values and f32 logical 128x128 block summaries under W = diag(svh)·H·Wq·H·diag(suh); independently checked on authentic GLM samples, without GPU-rounding parity, model-quality or behavioral claims",
         ),
         Capability::implemented(
             "nn.impact",

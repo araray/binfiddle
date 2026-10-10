@@ -27,7 +27,6 @@ Whether you're reverse-engineering firmware, debugging binary protocols, analyzi
 - [Examples](#examples)
 - [Architecture](#architecture)
 - [Contributing](#contributing)
-- [Roadmap](#roadmap)
 - [Documentation & references](#documentation--references)
 - [License](#license)
 
@@ -597,15 +596,15 @@ saved catalog by trellis name, the selector must carry the mcg codebook
 magic, and each weight decodes through the 16-bit window ending at its
 last code bit inside its 16×16 tile. `decode` reports one
 Hadamard-domain value `Wq[n, k]`; `block` summarizes a logical 128×128
-block after the reconstruction `W = H·diag(svh)·Wq·diag(suh)·H`. The
-codec is a transcription of the reference CUDA decode, qualified
-bit-for-bit against an independent implementation on authentic samples —
-and it claims dequantized storage values, never model quality.
+block after the reconstruction `W = diag(svh)·H·Wq·H·diag(suh)`. An
+independent CPU reference checks the codec on authentic samples in the
+[GLM expert lab](docs/NN_DEEPDIVE_GLM_LAB.md). Block arithmetic uses f32;
+it does not claim GPU-rounding parity or model quality.
 
 ```bash
-binfiddle nn exl3 decode --catalog k2.nn.json --trellis model.layers.12.mlp.experts.27.up_proj.trellis --index 0,0
-# → value: -1.2127686
-binfiddle nn exl3 block --catalog k2.nn.json --trellis model.layers.12.mlp.experts.27.up_proj.trellis --origin 0,0
+binfiddle nn exl3 decode --catalog expert.nn.json --trellis model.language_model.layers.12.mlp.experts.27.up_proj.trellis --index 3,5
+# → value: 0.54052734
+binfiddle nn exl3 block --catalog expert.nn.json --trellis model.language_model.layers.12.mlp.experts.27.up_proj.trellis --origin 0,0
 ```
 
 ##### Mutation — `edit set`, `edit apply`, `edit undo`, `edit prune`
@@ -1089,23 +1088,6 @@ cargo check --target aarch64-unknown-linux-gnu
 - Add tests for new functionality
 - Document public APIs with doc comments
 
-## Roadmap
-
-| Phase | Theme | Status |
-|-------|-------|--------|
-| 1 | Core read/write/edit | ✅ Complete |
-| 2 | Search, analyze, diff | ✅ Complete |
-| 3 | Convert, patch, struct | ✅ Complete |
-| 4 | Template system evolution | ✅ Complete |
-| 5 | Bit-level precision | ✅ Complete |
-| 6 | Command chaining & pipelines | ✅ Complete |
-| 7 | Live process memory | ✅ Complete |
-| 8 | Large files, hashing, streaming, progress | ✅ Complete |
-| 9 | NN artifact workbench (`nn`) | ✅ Complete (early access; runtime replay intentionally out of scope) |
-| 10 | NN hardening: PyTorch tier, edit sessions, MoE expert views, shard planning, precision audit | ✅ Complete (v0.29.0) |
-| 11 | NN pipeline program: NumPy captures, build provenance, EXL3 profile + qualified codec, evidence sidecars, derived views, per-GPU ledger | ✅ Complete (v0.30.0) |
-| 12 | Advanced analysis & intelligence | 🔲 Planned |
-
 ## Documentation & references
 
 ### Classic toolkit
@@ -1149,6 +1131,10 @@ capture — the fastest way to see the workbench in action on real weights:
   suh/svh), a variant-versioned profile pack, a mismatched-variant
   contradiction demo on authentic payloads, and the qualified trellis
   codec decoding them to Hadamard-domain values
+- [GLM-5.3-Flash: a 175 GB model, a 13 MB specimen, and a two-byte experiment](docs/NN_DEEPDIVE_GLM_LAB.md)
+  — a reproducible CPU lab: acquire one authentic expert with bounded downloads,
+  untangle MoE parameter counts and packed weights, independently check EXL3
+  reconstruction, and trace a reversible scale edit into a logical weight column
 
 ## License
 

@@ -1,15 +1,16 @@
 //! EXL3 trellis decode (BF-001 codec tier).
 //!
 //! Transcribed from turboderp-org/exllamav3 (exllamav3_ext/quant/
-//! exl3_dq.cuh + codebook.cuh + reconstruct.cu) and qualified against a
-//! Python reference on the authentic k2-layer12-expert27-up sample.
-//! Layout facts (from exl3_gemv_kernel.cuh / modules/quant/exl3.py):
-//! trellis[k_group][n_group][16*bits u16]; each 16x16 tile is row-major
-//! t = n_local*16 + k_local; a weight's codebook input is the 16-bit
-//! window ENDING at its last code bit (wrap-around inside the tile).
+//! exl3_dq.cuh + codebook.cuh + reconstruct.cu), pinned at
+//! 151539c77abc7ab7425d30da7a4e8e3c5c154e7b. See the GLM lab and its
+//! independent Python reference for reproducible qualification.
+//! trellis[k_group][n_group][16*bits u16]; each 16x16 tile uses the
+//! tensor-core lane permutation in exl3_lib/quantize.py. Codes are packed
+//! MSB-first into little-endian u32 words. A codebook input is the 16-bit
+//! window ENDING at its last code bit, wrapping inside the tile.
 //! Logical weights live in 128-point Hadamard blocks:
-//! W = H · diag(svh) · Wq · diag(suh) · H (suh over the input extent,
-//! svh over the output extent, blocks of 128).
+//! W[N,K] = diag(svh) · H · Wq · H · diag(suh). Block arithmetic uses
+//! f32, not the intermediate fp16 rounding of a particular GPU kernel.
 
 use super::budget::Budget;
 use super::catalog::{Catalog, CatalogTensor};
@@ -31,7 +32,9 @@ fn f16_bits(bits: u16) -> f32 {
 pub fn decode_mcg(window: u16) -> f32 {
     let mut x = (window as u32).wrapping_mul(MCG_MAGIC);
     x = (x & 0x8fff_8fff) ^ 0x3b60_3b60;
-    f16_bits((x >> 16) as u16) + f16_bits(x as u16)
+    let sum = f16_bits((x >> 16) as u16) + f16_bits(x as u16);
+    // CUDA __hadd rounds the codebook sum to binary16 before promotion.
+    f16_bits(super::edit::f64_to_f16_bits(sum as f64))
 }
 
 /// One trellis tile (16×16 weights, `16*bits` u16 words, wrapped).
@@ -42,6 +45,11 @@ pub struct Tile<'a> {
 
 impl<'a> Tile<'a> {
     pub fn new(words: &'a [u16], bits: u32) -> Result<Tile<'a>, NnError> {
+        if !(1..=8).contains(&bits) {
+            return Err(NnError::InvalidRequest {
+                message: "EXL3 mcg supports integer bitrates 1..8".to_string(),
+            });
+        }
         if words.len() != (16 * bits) as usize {
             return Err(NnError::MalformedInput {
                 detail: format!(
@@ -54,21 +62,27 @@ impl<'a> Tile<'a> {
         Ok(Tile { words, bits })
     }
 
-    fn bit(&self, i: u32) -> u32 {
-        let i = i % (256 * self.bits);
-        (self.words[(i / 16) as usize] >> (i % 16) & 1) as u32
-    }
-
-    /// Decoded Hadamard-domain value for tile-linear weight t (0..255,
-    /// row-major n_local*16 + k_local).
+    /// Decoded value for encoded lane index t (0..255), NOT a row-major index.
     pub fn value(&self, t: u32) -> f32 {
-        let e = (t + 1) * self.bits;
-        let mut window = 0u32;
-        for j in 0..16 {
-            window |= self.bit(e.wrapping_sub(16).wrapping_add(j)) << j;
-        }
+        let end = (t + 1 + 256) * self.bits;
+        let first = (end - 16) / 32;
+        let last = (end - 1) / 32;
+        let shift = (last + 1) * 32 - end;
+        let word = |i: u32| {
+            let i = (i % (self.bits * 8)) as usize * 2;
+            self.words[i] as u32 | ((self.words[i + 1] as u32) << 16)
+        };
+        let pair = ((word(first) as u64) << 32) | word(last) as u64;
+        let window = (pair >> shift) & 0xffff;
         decode_mcg(window as u16)
     }
+}
+
+/// Inverse of upstream tensor_core_perm: [k_local, n_local] -> lane index.
+fn lane_index(n: u64, k: u64) -> u32 {
+    let (n, k) = (n % 16, k % 16);
+    let lane = (n % 8) * 4 + (k % 8) / 2;
+    (lane * 8 + (n / 8) * 4 + (k / 8) * 2 + k % 2) as u32
 }
 
 /// The 128-point Sylvester Hadamard row i, col j: (-1)^popcount(i & j)/√128.
@@ -228,11 +242,11 @@ pub fn wq_value(
         i += 2;
     }
     let tile = Tile::new(&tile_bytes, ex.bits)?;
-    let t = ((n % 16) * 16 + (k % 16)) as u32;
+    let t = lane_index(n, k);
     Ok(tile.value(t))
 }
 
-/// Logical 128×128 block W = H·diag(svh)·Wq·diag(suh)·H for block
+/// Logical 128×128 block W = diag(svh)·H·Wq·H·diag(suh) for block
 /// coordinates (n0, k0) that are multiples of 128.
 pub fn logical_block_summary(
     catalog: &Catalog,
@@ -280,27 +294,21 @@ pub fn logical_block_summary(
     let mut wq = vec![0f32; 128 * 128];
     for ni in 0..128u64 {
         let n = n0 + ni;
-        let (kg, ng) = ((k0 / 16) as usize, (n / 16) as usize);
-        let tile_words: Vec<u16> = {
-            let flat = (kg * ex.trellis.shape[1] as usize + ng) * words_per_tile;
-            words[flat..flat + words_per_tile].to_vec()
-        };
-        let tile = Tile::new(&tile_words, ex.bits)?;
         for ki in 0..128u64 {
-            let t = ((n % 16) * 16 + ((k0 + ki) % 16)) as u32;
-            wq[(ni * 128 + ki) as usize] = tile.value(t);
+            let k = k0 + ki;
+            let flat = ((k / 16) * ex.trellis.shape[1] + n / 16) as usize * words_per_tile;
+            let tile = Tile::new(&words[flat..flat + words_per_tile], ex.bits)?;
+            wq[(ni * 128 + ki) as usize] = tile.value(lane_index(n, k));
         }
     }
-    // W = H · diag(svh) · Wq · diag(suh) · H, computed as explicit
-    // left/right applications of the block Hadamard.
-    // Step 1: W1 = Wq · diag(suh) (scale columns), then W1 · H (columns mix).
-    // Step 2: diag(svh) rows scale, then H · (that).
-    let mut w2 = vec![0f32; 128 * 128]; // Wq · diag(suh) · H
+    // Upstream reconstructs [K,N]; our public coordinates are [N,K].
+    // W = diag(svh) · H · Wq · H · diag(suh): the scales are outside H.
+    let mut w2 = vec![0f32; 128 * 128]; // Wq · H
     for i in 0..128 {
         for j in 0..128 {
             let mut acc = 0f32;
             for m in 0..128 {
-                acc += wq[i * 128 + m] * f16_at(&suh_bytes, k0 + m as u64) * had(m, j);
+                acc += wq[i * 128 + m] * had(m, j);
             }
             w2[i * 128 + j] = acc;
         }
@@ -315,8 +323,9 @@ pub fn logical_block_summary(
         for j in 0..128 {
             let mut acc = 0f32;
             for m in 0..128 {
-                acc += had(i, m) * s * w2[m * 128 + j];
+                acc += had(i, m) * w2[m * 128 + j];
             }
+            acc *= s * f16_at(&suh_bytes, k0 + j as u64);
             mean += acc;
             m2 += acc * acc;
             absmax = absmax.max(acc.abs());
@@ -369,7 +378,7 @@ pub fn decode_envelope(
         ("field", Json::Str(trellis_name.to_string())),
         ("n", Json::Str(n.to_string())),
         ("k", Json::Str(k.to_string())),
-        ("value", Json::Float(value as f64)),
+        ("value", Json::Str((value as f64).to_string())),
         (
             "claims",
             Json::Str(
@@ -382,7 +391,7 @@ pub fn decode_envelope(
 
 pub fn block_text(summary: &BlockSummary) -> String {
     format!(
-        "exl3 logical block\n  origin:    ({}, {})\n  mean:      {:.6}\n  variance:  {:.8}\n  abs max:   {:.6}\n  claims: logical weights under H . diag(svh) . Wq . diag(suh) . H; model quality and behavior are NOT implied\n",
+        "exl3 logical block\n  origin:    ({}, {})\n  mean:      {:.6}\n  variance:  {:.8}\n  abs max:   {:.6}\n  claims: f32 logical weights under diag(svh) . H . Wq . H . diag(suh); no GPU-rounding parity, model-quality or behavioral claim\n",
         summary.n0, summary.k0, summary.mean, summary.var, summary.absmax
     )
 }
@@ -391,13 +400,13 @@ pub fn block_envelope(summary: &BlockSummary) -> Result<ResultEnvelope, NnError>
     let semantic = Json::object(vec![
         ("n0", Json::Str(summary.n0.to_string())),
         ("k0", Json::Str(summary.k0.to_string())),
-        ("mean", Json::Float(summary.mean as f64)),
-        ("variance", Json::Float(summary.var as f64)),
-        ("absmax", Json::Float(summary.absmax as f64)),
+        ("mean", Json::Str((summary.mean as f64).to_string())),
+        ("variance", Json::Str((summary.var as f64).to_string())),
+        ("absmax", Json::Str((summary.absmax as f64).to_string())),
         (
             "claims",
             Json::Str(
-                "logical weights under the Hadamard transform; no behavioral claim".to_string(),
+                "f32 logical weights under diag(svh) . H . Wq . H . diag(suh); no GPU-rounding parity or behavioral claim".to_string(),
             ),
         ),
     ])?;
@@ -409,10 +418,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reports_serialize_floats_as_number_free_wire_values() {
+        let decode = decode_envelope("p.trellis", 3, 5, 0.540_527_34)
+            .unwrap()
+            .to_json_string()
+            .unwrap();
+        assert!(decode.contains("\"value\":\"0.54052734375\""));
+        let block = block_envelope(&BlockSummary {
+            n0: 0,
+            k0: 0,
+            mean: 0.5,
+            var: 0.25,
+            absmax: 1.0,
+            w: vec![],
+        })
+        .unwrap()
+        .to_json_string()
+        .unwrap();
+        assert!(block.contains("\"variance\":\"0.25\""));
+    }
+
+    #[test]
     fn mcg_codebook_matches_reference_values() {
         // Reference table computed independently (Python transcription of
         // codebook.cuh 3INST cb=1) on codes 0..3.
-        let table: [f32; 4] = [1.843_75, 0.134_521_5, -0.759_277_3, 0.839_599_6];
+        let table: [f32; 4] = [1.843_75, 0.134_521_5, -0.759_277_3, 0.839_843_75];
         for (code, expected) in table.iter().enumerate() {
             let got = decode_mcg(code as u16);
             assert!(
@@ -424,11 +454,8 @@ mod tests {
 
     #[test]
     fn tile_window_decode_matches_reference() {
-        // End-to-end decode path on a synthetic 2bpw tile: fill the tile
-        // with a known bit pattern and check the window arithmetic. The
-        // authentic-sample values (Wq[0,0] = -1.2127686, Wq[3,5] =
-        // -1.4238281 on the k2 sample) are exercised through the real
-        // binary in the GLM deep-dive walkthrough.
+        // Uniform tiles are useful corners, but cannot detect reversed
+        // bit order or an incorrect tensor-core permutation (tested below).
         let words = vec![0xFFFFu16; 32]; // every tile bit set
         let tile = Tile::new(&words, 2).unwrap();
         let v = tile.value(0); // any 16-bit window = all ones
@@ -438,6 +465,170 @@ mod tests {
         assert_eq!(tile.value(137), decode_mcg(0));
         // Tile-size mismatch is a visible error.
         assert!(Tile::new(&[0u16; 31], 2).is_err());
+        assert!(Tile::new(&[], 0).is_err());
+        assert!(Tile::new(&[0u16; 144], 9).is_err());
+    }
+
+    #[test]
+    fn packed_windows_follow_msb_stream_including_wrap_for_all_integer_bitrates() {
+        for bits in 1..=8 {
+            // Independent encoder: append each code MSB-first, then store
+            // groups of 32 stream bits as little-endian u32s (pack.cu).
+            let mut stream = Vec::new();
+            for t in 0..256u32 {
+                let code = (t * 17 + (t / 7) * 11 + 3) & ((1 << bits) - 1);
+                for bit in (0..bits).rev() {
+                    stream.push((code >> bit) & 1);
+                }
+            }
+            let words: Vec<u16> = stream
+                .as_chunks::<32>()
+                .0
+                .iter()
+                .flat_map(|chunk| {
+                    let word = chunk.iter().fold(0u32, |v, b| (v << 1) | b);
+                    [word as u16, (word >> 16) as u16]
+                })
+                .collect();
+            let tile = Tile::new(&words, bits).unwrap();
+            for t in 0..256 {
+                let end = (t + 1) * bits as usize;
+                let mut window = 0u16;
+                for j in 0..16 {
+                    let index = (end + stream.len() - 16 + j) % stream.len();
+                    window = (window << 1) | stream[index] as u16;
+                }
+                assert_eq!(tile.value(t as u32), decode_mcg(window), "K={bits}, t={t}");
+            }
+        }
+    }
+
+    #[test]
+    fn lane_index_inverts_upstream_tensor_core_permutation() {
+        let mut seen = [false; 256];
+        for lane in 0..32u64 {
+            let r = (lane % 4) * 2;
+            let c = lane / 4;
+            let coords = [
+                (r, c),
+                (r + 1, c),
+                (r + 8, c),
+                (r + 9, c),
+                (r, c + 8),
+                (r + 1, c + 8),
+                (r + 8, c + 8),
+                (r + 9, c + 8),
+            ];
+            for (i, (k, n)) in coords.into_iter().enumerate() {
+                let index = lane_index(n, k) as usize;
+                assert_eq!(index, lane as usize * 8 + i);
+                assert!(!seen[index]);
+                seen[index] = true;
+            }
+        }
+        assert!(seen.iter().all(|v| *v));
+    }
+
+    #[test]
+    fn logical_block_crosses_all_tiles_and_scales_outside_the_hadamards() {
+        use crate::nn::discover::{discover, DiscoverOptions};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("exl3.safetensors");
+        let mut bytes = Vec::new();
+        let mut entries = Vec::new();
+        let mut append = |suffix: &str, dtype: &str, shape: &str, payload: &[u8]| {
+            let start = bytes.len();
+            bytes.extend_from_slice(payload);
+            entries.push(format!(
+                "\"p.{suffix}\":{{\"dtype\":\"{dtype}\",\"shape\":{shape},\"data_offsets\":[{start},{}]}}",
+                bytes.len()
+            ));
+        };
+        let mut trellis = Vec::new();
+        for kg in 0..16 {
+            for ng in 0..16 {
+                let byte = if (kg + 3 * ng) % 5 < 2 { 0 } else { 255 };
+                trellis.extend(std::iter::repeat_n(byte, 128));
+            }
+        }
+        let su: Vec<u16> = (0..256).map(|i| [0x3800, 0xb400, 0x3c00][i % 3]).collect();
+        let sv: Vec<u16> = (0..256)
+            .map(|i| [0x3400, 0xbc00, 0x3800, 0xb800][i % 4])
+            .collect();
+        append("trellis", "I16", "[16,16,64]", &trellis);
+        append(
+            "suh",
+            "F16",
+            "[256]",
+            &su.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(),
+        );
+        append(
+            "svh",
+            "F16",
+            "[256]",
+            &sv.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(),
+        );
+        append("mcg", "I32", "[1]", &MCG_MAGIC.to_le_bytes());
+        let header = format!("{{{}}}", entries.join(","));
+        let mut file = (header.len() as u64).to_le_bytes().to_vec();
+        file.extend_from_slice(header.as_bytes());
+        file.extend(bytes);
+        std::fs::write(&path, file).unwrap();
+        let budget = Budget::with_default_caps();
+        let report = discover(&path, &DiscoverOptions::default(), &budget).unwrap();
+        let catalog = Catalog::from_discovery(&report).unwrap();
+        let ex = resolve(&catalog, "p.trellis").unwrap();
+
+        // An independent f64 butterfly transform, compared element by
+        // element against the production f32 matrix multiplication.
+        fn fwht(values: &mut [f64]) {
+            let mut step = 1;
+            while step < values.len() {
+                for base in (0..values.len()).step_by(2 * step) {
+                    for j in 0..step {
+                        let (a, b) = (values[base + j], values[base + j + step]);
+                        values[base + j] = a + b;
+                        values[base + j + step] = a - b;
+                    }
+                }
+                step *= 2;
+            }
+            let norm = (values.len() as f64).sqrt();
+            for v in values {
+                *v /= norm;
+            }
+        }
+        for (n0, k0) in [(0, 0), (128, 128)] {
+            let mut expected = vec![0.0f64; 128 * 128];
+            for n in 0..128 {
+                for k in 0..128 {
+                    let window = if ((k0 + k) / 16 + 3 * ((n0 + n) / 16)) % 5 < 2 {
+                        0
+                    } else {
+                        0xffff
+                    };
+                    expected[n * 128 + k] = decode_mcg(window) as f64;
+                }
+                fwht(&mut expected[n * 128..(n + 1) * 128]);
+            }
+            for k in 0..128 {
+                let mut column: Vec<f64> = (0..128).map(|n| expected[n * 128 + k]).collect();
+                fwht(&mut column);
+                for n in 0..128 {
+                    expected[n * 128 + k] =
+                        column[n] * f16_bits(sv[n0 + n]) as f64 * f16_bits(su[k0 + k]) as f64;
+                }
+            }
+            let actual =
+                logical_block_summary(&catalog, &ex, n0 as u64, k0 as u64, &budget).unwrap();
+            for (i, (a, e)) in actual.w.iter().zip(&expected).enumerate() {
+                assert!(
+                    (*a as f64 - e).abs() < 2e-4,
+                    "origin {n0},{k0}; element {i}: {a} != {e}"
+                );
+            }
+        }
     }
 
     #[test]
